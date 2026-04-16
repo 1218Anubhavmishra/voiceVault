@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>voiceVault</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div>
+          <div class="brand">voiceVault</div>
+          <div class="subtle">Record • Store • Search across all notes</div>
+        </div>
+        <div class="status" id="status"></div>
+      </header>
+
+      <main class="grid">
+        <section class="card">
+          <h2>New note (audio)</h2>
+
+          <div class="row">
+            <button id="btnRecordNote" class="btn primary">Record note</button>
+            <button id="btnStopNote" class="btn" disabled>Stop</button>
+            <button id="btnSaveNote" class="btn" disabled>Save + transcribe</button>
+          </div>
+
+          <div class="row">
+            <audio id="previewNote" controls class="audio" hidden></audio>
+          </div>
+
+          <label class="label">
+            Title
+            <input id="title" class="input" placeholder="Optional (otherwise auto from transcript)" />
+          </label>
+
+          <div class="hint" id="noteTranscriptHint">
+            When you save, voiceVault will <strong>transcribe offline</strong> and use the transcript for cross-note search.
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Search</h2>
+          <div class="row">
+            <button id="btnRecordQuery" class="btn primary">Record search</button>
+            <button id="btnStopQuery" class="btn" disabled>Stop</button>
+            <button id="btnSearch" class="btn" disabled>Search</button>
+          </div>
+          <div class="row">
+            <audio id="previewQuery" controls class="audio" hidden></audio>
+          </div>
+          <div class="row">
+            <input id="q" class="input" placeholder="Transcript of your search audio will appear here…" />
+          </div>
+          <div id="results" class="results"></div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
+
