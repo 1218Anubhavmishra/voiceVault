@@ -10,14 +10,15 @@ if (-not (Test-Path ".venv")) {
   python -m venv .venv
 }
 
-if ($IsWindows) {
-  .\.venv\Scripts\Activate.ps1
-} else {
-  throw "This script is Windows-only. Use your OS equivalent to activate the venv."
+# Avoid relying on shell activation (which varies by PowerShell version/host).
+# Always install into the project venv explicitly.
+$py = ".\.venv\Scripts\python.exe"
+if (-not (Test-Path $py)) {
+  throw "Virtualenv python not found at $py. Delete .venv and re-run."
 }
 
-python -m pip install --upgrade pip
-pip install -r server\requirements.txt
+& $py -m pip install --upgrade pip
+& $py -m pip install -r server\requirements.txt
 
 Write-Host "Done. Ensure ffmpeg is installed and on PATH." -ForegroundColor Green
 

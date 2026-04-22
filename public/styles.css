@@ -9,6 +9,7 @@
   --primary: #7c3aed;
   --primary2: #a855f7;
   --danger: #ef4444;
+  --success: #22c55e;
 }
 
 * {
@@ -23,6 +24,15 @@ body {
     radial-gradient(900px 600px at 70% 15%, rgba(168, 85, 247, 0.18), transparent 55%),
     var(--bg);
   color: var(--text);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Hide native file input visuals; we use a custom button + filename pill. */
+input[type='file'] {
+  display: none;
 }
 
 .app {
@@ -60,6 +70,10 @@ body {
   color: var(--muted);
   text-align: right;
   max-width: 45ch;
+}
+
+.status.ok {
+  color: var(--success);
 }
 
 .grid {
@@ -108,7 +122,21 @@ body {
 }
 
 .btn:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: linear-gradient(
+    180deg,
+    rgba(168, 85, 247, 0.95),
+    rgba(124, 58, 237, 0.7)
+  );
+  border-color: rgba(124, 58, 237, 0.65);
+}
+
+.btn:active {
+  background: linear-gradient(
+    180deg,
+    rgba(168, 85, 247, 0.98),
+    rgba(124, 58, 237, 0.78)
+  );
+  border-color: rgba(124, 58, 237, 0.7);
 }
 
 .btn:disabled {
@@ -136,6 +164,29 @@ body {
   outline: none;
 }
 
+#noteLanguage {
+  background: rgba(255, 255, 255, 0.95);
+  color: rgba(0, 0, 0, 0.92);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  #noteLanguage:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(168, 85, 247, 0.95),
+      rgba(124, 58, 237, 0.7)
+    );
+    color: rgba(255, 255, 255, 0.98);
+    border-color: rgba(124, 58, 237, 0.65);
+  }
+}
+
+#noteLanguage:focus {
+  border-color: rgba(168, 85, 247, 0.85);
+  box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.15);
+}
+
 .input:focus,
 .textarea:focus {
   border-color: rgba(168, 85, 247, 0.85);
@@ -154,8 +205,32 @@ body {
   margin-top: 6px;
 }
 
+.label .textarea#liveTranscript {
+  max-height: 220px;
+  overflow: auto;
+  scrollbar-width: none; /* Firefox */
+}
+
+.label .textarea#liveTranscript::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .audio {
   width: 100%;
+}
+
+.card .audio {
+  width: 95%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.note .audio {
+  width: 75%;
+  margin-top: 10px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .hint {
@@ -176,6 +251,46 @@ body {
   border-radius: 14px;
   padding: 12px;
   background: rgba(0, 0, 0, 0.18);
+}
+
+.noteSummary {
+  cursor: pointer;
+}
+
+.note.noteCollapsed:hover {
+  background: rgba(0, 0, 0, 0.24);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.note.noteExpanded {
+  padding: 14px 14px 12px;
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.noteDetails {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+  max-height: 420px;
+  overflow: hidden;
+}
+
+.noteTranscript {
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 6px;
+  scrollbar-width: none; /* Firefox */
+}
+
+.noteTranscript::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.noteScrollHint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .noteTitleRow {
@@ -209,12 +324,46 @@ body {
   align-items: center;
 }
 
+.noteStatus {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+  margin-right: 10px;
+}
+
+.noteStatus.ready {
+  color: var(--success);
+}
+
 .pill {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
   padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.timerPill {
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(0, 0, 0, 0.92);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+
+.noteLength {
+  margin-right: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(0, 0, 0, 0.92);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+
+.editBox {
+  margin-top: 12px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+  padding-top: 12px;
 }
 
 .err {

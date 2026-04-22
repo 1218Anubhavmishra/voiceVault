@@ -21,8 +21,12 @@ if (Has winget) {
   Write-Host "Using winget..." -ForegroundColor Cyan
   winget install --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements
   Ensure-RefreshHint
-  if (Has ffmpeg) {
-    ffmpeg -version | Select-Object -First 1
+  # winget modifies PATH, but the current shell session may not see it yet.
+  # Treat a successful winget install as success and avoid falling through to choco/scoop.
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host ""
+    Write-Host "ffmpeg installed via winget." -ForegroundColor Green
+    Write-Host "Restart your terminal, then verify with: ffmpeg -version" -ForegroundColor Yellow
     exit 0
   }
 }

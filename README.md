@@ -6,12 +6,12 @@ Local audio recording + storage app with cross-note search (audio-only).
 
 - Record audio in your browser (MediaRecorder)
 - Upload and store audio files locally
-- Auto-transcribe audio offline (faster-whisper) and store transcript in SQLite
+- Auto-transcribe audio offline (faster-whisper) and store transcript in SQLite (notes show as **processing** until ready)
 - Search across all notes by recording a short audio query (also transcribed offline)
 
 ## Run locally
 
-Prereqs: Node.js 18+, Python 3.10+, ffmpeg (on PATH)
+Prereqs: **Node.js 22 LTS (recommended)**, Python 3.10+, ffmpeg (on PATH)
 
 1) Install transcription dependencies:
 
@@ -41,3 +41,11 @@ From the project folder in PowerShell:
 - SQLite DB: `data/voicevault.sqlite`
 
 Both are ignored by git.
+
+## Troubleshooting
+
+- If notes get stuck on **processing**, check the server console output.
+- If transcription fails:
+  - Ensure `ffmpeg` is on PATH (`ffmpeg -version`)
+  - Ensure Python 3.10+ is on PATH (`python --version`)
+  - Re-run `.\scripts\setup-transcription.ps1` (creates `.venv` and installs `faster-whisper`)

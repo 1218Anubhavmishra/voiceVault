@@ -11,7 +11,7 @@
       <header class="topbar">
         <div>
           <div class="brand">voiceVault</div>
-          <div class="subtle">Record • Store • Search across all notes</div>
+          <div class="subtle">Record • Replay • Store • Search across all notes</div>
         </div>
         <div class="status" id="status"></div>
       </header>
@@ -20,20 +20,75 @@
         <section class="card">
           <h2>New note (audio)</h2>
 
+          <label class="label">
+            Title
+            <input id="title" class="input" placeholder="Optional (otherwise auto from transcript)" />
+          </label>
+
           <div class="row">
             <button id="btnRecordNote" class="btn primary">Record note</button>
-            <button id="btnStopNote" class="btn" disabled>Stop</button>
-            <button id="btnSaveNote" class="btn" disabled>Save + transcribe</button>
+            <button id="btnRecordNoteFast" class="btn primary">Record with fast mode</button>
+            <button id="btnStopNote" class="btn" disabled hidden>Stop</button>
+            <span class="pill timerPill" id="noteTimer" hidden>00:00</span>
+            <span class="pill timerPill" id="noteDetectedLang" hidden>Lang: —</span>
+          </div>
+
+          <label class="label" id="liveTranscriptWrap" hidden>
+            Transcript preview (editable)
+            <span id="liveTxStatus" class="pill" style="margin-left:10px" hidden>Processing…</span>
+            <div class="row" style="margin-top:8px">
+              <button id="liveTxUp" class="btn">Scroll up</button>
+              <button id="liveTxDown" class="btn">Scroll down</button>
+            </div>
+            <textarea id="liveTranscript" class="textarea" rows="6"></textarea>
+          </label>
+
+          <label class="label">
+            Upload audio (optional)
+            <input id="uploadNote" class="input" type="file" accept="audio/*" hidden />
+            <div class="row" style="margin-top:8px">
+              <button id="uploadNoteBtn" class="btn">Choose file</button>
+              <span id="uploadNoteName" class="pill" style="max-width:65ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+                No file selected
+              </span>
+            </div>
+          </label>
+
+          <label class="label">
+            Language (Auto-detect by default)
+            <select
+              id="noteLanguage"
+              class="input"
+              style="background: rgba(255, 255, 255, 0.95); color: rgba(0, 0, 0, 0.92); border-color: rgba(255, 255, 255, 0.75)"
+            >
+              <option value="">Auto-detect</option>
+              <option value="en">English (en)</option>
+              <option value="hi">Hindi (hi)</option>
+              <option value="es">Spanish (es)</option>
+              <option value="fr">French (fr)</option>
+              <option value="de">German (de)</option>
+              <option value="it">Italian (it)</option>
+              <option value="pt">Portuguese (pt)</option>
+              <option value="ja">Japanese (ja)</option>
+              <option value="ko">Korean (ko)</option>
+              <option value="zh">Chinese (zh)</option>
+            </select>
+          </label>
+
+          <label class="label">
+            <span style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+              <input id="fastMode" type="checkbox" checked />
+              <span>Fast mode (faster transcription, slightly lower accuracy)</span>
+            </span>
+          </label>
+
+          <div class="row">
+            <button id="btnSaveNote" class="btn" disabled hidden>Save</button>
           </div>
 
           <div class="row">
             <audio id="previewNote" controls class="audio" hidden></audio>
           </div>
-
-          <label class="label">
-            Title
-            <input id="title" class="input" placeholder="Optional (otherwise auto from transcript)" />
-          </label>
 
           <div class="hint" id="noteTranscriptHint">
             When you save, voiceVault will <strong>transcribe offline</strong> and use the transcript for cross-note search.
@@ -44,8 +99,9 @@
           <h2>Search</h2>
           <div class="row">
             <button id="btnRecordQuery" class="btn primary">Record search</button>
-            <button id="btnStopQuery" class="btn" disabled>Stop</button>
-            <button id="btnSearch" class="btn" disabled>Search</button>
+            <button id="btnStopQuery" class="btn" disabled hidden>Stop</button>
+            <button id="btnSearch" class="btn" disabled hidden>Search</button>
+            <span class="pill timerPill" id="queryTimer" hidden>00:00</span>
           </div>
           <div class="row">
             <audio id="previewQuery" controls class="audio" hidden></audio>

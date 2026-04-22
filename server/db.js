@@ -31,7 +31,12 @@ function migrate(db) {
       audio_filename TEXT NOT NULL,
       audio_mime TEXT NOT NULL,
       audio_bytes INTEGER NOT NULL,
-      created_at TEXT NOT NULL
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      language TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT NOT NULL DEFAULT ''
     );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -55,5 +60,32 @@ function migrate(db) {
       INSERT INTO notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
     END;
   `);
+
+  // Lightweight migrations for existing local DBs.
+  // (SQLite doesn't support IF NOT EXISTS on ADD COLUMN reliably across tooling.)
+  const cols = new Set(
+    db
+      .prepare(`PRAGMA table_info(notes)`)
+      .all()
+      .map((r) => (r?.name ?? '').toString())
+  );
+
+  if (!cols.has('updated_at')) {
+    db.exec(
+      `ALTER TABLE notes ADD COLUMN updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
+    );
+  }
+  if (!cols.has('status')) {
+    db.exec(`ALTER TABLE notes ADD COLUMN status TEXT NOT NULL DEFAULT 'processing'`);
+  }
+  if (!cols.has('error')) {
+    db.exec(`ALTER TABLE notes ADD COLUMN error TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('duration_ms')) {
+    db.exec(`ALTER TABLE notes ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.has('language')) {
+    db.exec(`ALTER TABLE notes ADD COLUMN language TEXT NOT NULL DEFAULT ''`);
+  }
 }
 
