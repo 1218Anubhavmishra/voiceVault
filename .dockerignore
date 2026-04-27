@@ -1,0 +1,10 @@
+node_modules
+.venv
+data
+.git
+.claude
+*.docx
+report-assets
+agent-transcripts
+terminals
+

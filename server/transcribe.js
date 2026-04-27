@@ -8,13 +8,14 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
   const pythonCmd =
     process.platform === 'win32' && fs.existsSync(venvPythonWin) ? venvPythonWin : 'python';
 
+  const dataDir = process.env.VV_DATA_DIR ? path.resolve(process.env.VV_DATA_DIR) : path.resolve(process.cwd(), 'data');
+
   // Preprocess audio via ffmpeg for better STT robustness (16kHz mono WAV).
   // Optional extra robustness: denoise + loudness normalization.
   const wantDenoise = (process.env.VOICEVAULT_DENOISE ?? '').toString().trim() === '1';
   const wantLoudnorm = (process.env.VOICEVAULT_LOUDNORM ?? '').toString().trim() !== '0';
   const preprocessedPath = path.resolve(
-    process.cwd(),
-    'data',
+    dataDir,
     'audio',
     `__pre_${Date.now()}_${Math.random().toString(16).slice(2)}.wav`
   );

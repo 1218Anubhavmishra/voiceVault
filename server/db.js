@@ -9,7 +9,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const dataDir = path.resolve(repoRoot, 'data');
+const dataDir = process.env.VV_DATA_DIR
+  ? path.resolve(process.env.VV_DATA_DIR)
+  : path.resolve(repoRoot, 'data');
 const audioDir = path.join(dataDir, 'audio');
 const blobsDir = path.join(dataDir, 'blobs');
 const dbPath = path.join(dataDir, 'voicevault.sqlite');
