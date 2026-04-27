@@ -7,7 +7,15 @@
 - **In-browser recording**: Uses the browser `MediaRecorder` API to capture audio.
 - **Local storage**: Uploads and stores audio files on disk.
 - **Offline transcription**: Uses **faster-whisper** (Python) to generate transcripts offline and stores them in SQLite.
+- **Timestamped segments**: Saved notes include segment timestamps for clip-style playback.
 - **Audio-based search**: Records a short audio query, transcribes it offline, then searches across stored note transcripts.
+- **Natural-language + time-filter search (offline)**: Supports queries like “find the note about X yesterday” or `between 2026-04-20 and 2026-04-22`.
+- **Semantic search (local embeddings)**: Optional embeddings-based retrieval over timestamped segments.
+- **Advanced search (UI)**: Semantic mode is enabled via the **Advanced search** panel (Show/Hide).
+- **Quick answer (offline)**: Top matching clips are shown only when the user presses **Quick answer**.
+- **LLM answering (optional)**: Optional Ask flow can use OpenAI or Ollama if configured.
+- **UI windows**: The left column includes **New note**, **Processes**, and **Help** windows, each with Show/Hide. Showing restores a 50/50 split; hiding makes Search wider.
+- **Mutual exclusivity**: Only one of the three windows can be open at a time (opening one closes the other two). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens.
 
 ## Tech Stack
 - **Backend**: Node.js (Express)
@@ -68,4 +76,6 @@ This project is designed for **local execution**. For sharing:
 - **Offline transcription** requires a working Python environment and `ffmpeg`.
 - Transcription performance depends on hardware and audio length.
 - Browser recording requires microphone permissions.
+- Segment playback for MP3 relies on browser seeking support; the server supports HTTP byte ranges for accurate seeking.
+- Semantic search may take longer on first use (embeddings computed lazily and then cached in SQLite).
 

@@ -1,0 +1,25 @@
+{
+  "notes_search": [
+    {
+      "name": "example keyword query",
+      "q": "recording",
+      "expect_any_note_title_includes": ["Recording_", "Upload_"],
+      "k": 10
+    },
+    { "name": "example date filter (adjust if needed)", "q": "today recording", "k": 10, "optional": true }
+  ],
+  "semantic_search": [
+    {
+      "name": "example semantic query",
+      "q": "what did I say about recording",
+      "k": 10
+    },
+    {
+      "name": "example semantic query with expected ids (fill in to enable metrics)",
+      "q": "find the upload note",
+      "expect_any_note_ids": [],
+      "k": 10
+    }
+  ]
+}
+

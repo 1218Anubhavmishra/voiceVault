@@ -16,12 +16,16 @@ This prototype focuses on delivering the core “voice in → searchable knowled
 
 ## 1.1) Screenshots
 
-![voiceVault home screen (web prototype)](report-assets/01-home.png)
+![voiceVault home screen (web prototype)](01-home.png)
+
+![Left column controls (all panes collapsed)](02-left-collapsed.png)
+
+![voiceVault home screen (all panes collapsed)](03-home-all-collapsed.png)
 
 ## 2) Scope of this prototype (what it is / isn’t)
 
 - **Is**: A working local web app that records audio, stores it on disk, transcribes offline, and supports transcript search + audio playback/download.
-- **Is not**: A mobile app, cloud service, or multi-user product; does not include authentication, embeddings/vector DB, or LLM-based Q&A synthesis.
+- **Is not**: A mobile app, cloud service, or multi-user product; does not include authentication or cloud infrastructure (but now includes local embeddings + optional LLM answering).
 
 ## 3) Product goals aligned to `VoiceVault.md`
 
@@ -49,6 +53,9 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
   - Upload an existing audio file and save it as a note.
 - **Background transcription**
   - On save, notes enter **`processing`** state and later become **`ready`** (or **`error`** on failure).
+- **Timestamped segments (implemented)**
+  - Saved notes store **timestamped segments** (start/end seconds + text) alongside the transcript.
+  - UI can play **only a selected segment** (not just full-audio playback).
 - **Playback & export**
   - Play note audio in the UI.
   - Download note audio.
@@ -62,6 +69,24 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 - **Full-text search (SQLite FTS5)** across title + body.
 - **Voice query search** (record a short “search” audio query → transcribe offline → search).
+- **Semantic search (local embeddings)**
+  - Optional embeddings-based retrieval over timestamped segments (local-first; embeddings computed lazily).
+- **Advanced search (UI)**
+  - Semantic mode is enabled via the **Advanced search** panel (Show/Hide).
+- **Quick answer (extractive, offline)**
+  - The UI shows top matching timestamped segments **only when the user presses the Quick answer button**.
+- **LLM Q&A (optional)**
+  - Optional LLM answering is available via Ask mode (OpenAI or Ollama if configured); otherwise the UI stays in offline/extractive mode.
+- **Natural-language query rewrite (offline)**
+  - Queries like “find me the note where I talked about recording” are rewritten into keyword-style queries.
+- **Date/time filters in search (offline)**
+  - Supports filters like `today`, `yesterday`, `last 3 days`, `2026-04-22`, and `between 2026-04-20 and 2026-04-22`.
+- **Best-match segment highlighting**
+  - Search results can highlight the best matching segment in a note (for quick jump/play).
+- **Multi-clip results (implemented)**
+  - Search can return multiple top-matching timestamped segments per note (clip-style retrieval).
+- **Quick answer (extractive, implemented)**
+  - UI shows a “Quick answer” box composed from top matching timestamped segments (offline, extractive — not LLM-generated).
 - **Robustness improvements**:
   - FTS query normalization to avoid punctuation/operator errors.
   - Fallback to safe substring search when FTS throws.
@@ -73,6 +98,15 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
   - “Fast mode” uses `tiny` by default.
   - “Quality mode” uses `medium` by default.
   - Both are configurable via env vars (see below).
+- **UI toggles**
+  - Fast mode and Semantic search are exposed as simple **dot toggles** (green = on).
+
+### UI layout (current)
+
+- The left column is organized into three windows: **New note**, **Processes**, and **Help** (App hint + UI steps).
+- Each window has a **Show/Hide** control.
+- Pressing **Show/+** restores a **50/50** split with the Search window; pressing **Hide** widens Search.
+- The three windows are **mutually exclusive** (opening one closes the other two). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens.
 
 ## 5) Architecture and data flow
 
@@ -85,7 +119,7 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 ### Storage (local-first)
 
-- **Audio files**: `data/audio/<noteId>.<ext>`
+- **Audio**: stored in SQLite as a **BLOB** for new notes, with backward compatibility for older notes that used `data/audio/`
 - **Database**: `data/voicevault.sqlite`
 
 These are intentionally local runtime artifacts (not meant to be committed).
@@ -93,7 +127,7 @@ These are intentionally local runtime artifacts (not meant to be committed).
 ### Note creation flow (simplified)
 
 1. Browser records or uploads audio.
-2. Backend `POST /api/notes` stores audio on disk and inserts a DB row as `processing`.
+2. Backend `POST /api/notes` stores audio in SQLite (BLOB) and inserts a DB row as `processing`.
 3. Backend runs offline transcription asynchronously (Python).
 4. Backend updates DB row with transcript, detected/selected language, and final status.
 
@@ -160,8 +194,8 @@ Open `http://localhost:5177`.
 
 ## 9) Known constraints (current prototype)
 
-- **No semantic/vector search** (only FTS text search).
-- **No timestamped clip retrieval** (search returns notes, not time offsets inside audio).
+- Embeddings-based semantic retrieval is implemented locally, but is **segment-level** (not word-level alignment).
+- LLM answers are **optional** and require an OpenAI key; the offline fallback is extractive.
 - **Single-user local app** (no auth, no cloud sync).
 - **CPU-only transcription** by default; long notes can take time and can be hardware dependent.
 - **No diarization / speaker labels**.
@@ -172,15 +206,15 @@ This section cross-checks the current prototype against the “semantic search /
 
 ### Missing relative to `VoiceVault.md` (blueprint)
 
-- **Semantic retrieval**:
-  - No embeddings, no vector DB (pgvector/Pinecone/Weaviate), no ANN search.
-  - No reranking pipeline (top‑k retrieval + rerank).
-- **Grounded Q&A**:
-  - No LLM answer synthesis (“when is X’s birthday?” style direct answers).
-  - No citations into retrieved chunks.
-- **Timestamp-level results**:
-  - No chunk index with `timestamp` metadata.
-  - No “jump to exact timestamp” playback.
+- **Semantic retrieval (partially addressed)**:
+  - Local embeddings-based retrieval exists for segments.
+  - Missing: vector DB, ANN indexing for large scale, and a richer reranking pipeline.
+- **Grounded Q&A (partially addressed)**:
+  - Optional LLM answering exists and is grounded in retrieved clips with citations.
+  - Missing: stronger safety/guardrails, evals, and long-context scaling.
+- **Timestamp-level results (partially addressed)**:
+  - Prototype now stores **timestamped segments** and supports **segment-level** “jump and play”.
+  - Still missing: word-level alignment, semantic chunks, and returning multiple precise clips per query with robust ranking.
 - **Chunking pipeline**:
   - No semantic chunking (100–200 token chunks) or pause/topic segmentation stored as searchable units.
 - **Mobile-first product**:
@@ -196,6 +230,7 @@ This section cross-checks the current prototype against the “semantic search /
 - Local storage (`data/`)
 - Offline transcription + SQLite persistence
 - Audio query search
+- Segment-level playback from transcript timestamps
 
 ### `VoiceVault.docx`
 

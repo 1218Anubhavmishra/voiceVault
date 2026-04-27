@@ -30,6 +30,42 @@ body {
   display: none !important;
 }
 
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 1000;
+}
+
+.dialog {
+  width: min(860px, 96vw);
+  max-height: 86vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  /* Fully opaque dialog so text is easy to read; backdrop opacity stays on .overlay */
+  background: #121a2e;
+  box-shadow: var(--shadow);
+  padding: 14px 14px 12px;
+}
+
+.preBox {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  margin: 12px 0 10px;
+}
+
 /* Hide native file input visuals; we use a custom button + filename pill. */
 input[type='file'] {
   display: none;
@@ -83,11 +119,28 @@ input[type='file'] {
   margin-top: 16px;
 }
 
-@media (min-width: 980px) {
+@media (min-width: 820px) {
   .grid {
     grid-template-columns: 1fr 1fr;
     align-items: start;
   }
+
+  /* When ANY left window is collapsed, give Search more room. */
+  .grid.noteCollapsed,
+  .grid.procCollapsed,
+  .grid.helpCollapsed,
+  .grid.noteCollapsed.procCollapsed,
+  .grid.noteCollapsed.helpCollapsed,
+  .grid.procCollapsed.helpCollapsed,
+  .grid.noteCollapsed.procCollapsed.helpCollapsed {
+    grid-template-columns: 0.35fr 1.65fr;
+  }
+}
+
+.leftCol {
+  display: grid;
+  gap: 12px;
+  align-items: start;
 }
 
 .card {
@@ -98,9 +151,40 @@ input[type='file'] {
   padding: 16px 16px 14px;
 }
 
+.miniCard {
+  padding: 14px 14px 12px;
+}
+
+.sideWindows {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+@media (min-width: 820px) {
+  .sideWindows {
+    grid-template-columns: 1fr;
+  }
+}
+
 .card h2 {
   margin: 0 0 12px;
   font-size: 16px;
+}
+
+.cardHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cardHeaderRow .btn {
+  padding: 8px 10px;
+  border-radius: 12px;
+  min-width: 42px;
 }
 
 .row {
@@ -151,6 +235,47 @@ input[type='file'] {
 
 .btn.primary:hover {
   background: linear-gradient(180deg, rgba(168, 85, 247, 0.95), rgba(124, 58, 237, 0.7));
+}
+
+.btn.err:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.btn.err:active {
+  background: rgba(239, 68, 68, 0.28);
+  border-color: rgba(239, 68, 68, 0.65);
+}
+
+.dotToggle {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.dotToggle:hover {
+  background: rgba(124, 58, 237, 0.55);
+  border-color: rgba(124, 58, 237, 0.8);
+}
+
+.dotToggle.isOn {
+  background: rgba(34, 197, 94, 0.8);
+  border-color: rgba(34, 197, 94, 0.9);
+}
+
+.dotToggle.isOn:hover {
+  background: rgba(34, 197, 94, 0.85);
+  border-color: rgba(34, 197, 94, 0.95);
+}
+
+.toggleText {
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 700;
 }
 
 .input,
@@ -246,6 +371,44 @@ input[type='file'] {
   margin-top: 12px;
 }
 
+.answerWrap {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.86);
+  white-space: pre-wrap;
+}
+
+.answerTitle {
+  font-weight: 750;
+  margin-bottom: 6px;
+}
+
+.answerMeta {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.answerItem {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dotted rgba(255, 255, 255, 0.16);
+}
+
+.cite {
+  color: rgba(168, 85, 247, 0.95);
+  text-decoration: underline;
+}
+
+.cite:hover {
+  color: rgba(124, 58, 237, 0.95);
+}
+
 .note {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
@@ -317,6 +480,69 @@ input[type='file'] {
   overflow-wrap: anywhere;
 }
 
+.segRow {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 10px;
+  align-items: center;
+  margin: 0;
+  padding: 6px 2px;
+  border: 0;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.18);
+  background: transparent;
+}
+
+.segRow.match {
+  border-bottom-color: rgba(34, 197, 94, 0.55);
+  background: rgba(34, 197, 94, 0.08);
+  border-left: 3px solid rgba(34, 197, 94, 0.75);
+  padding-left: 10px;
+}
+
+.segPlay {
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+
+.segTime {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.68);
+  white-space: nowrap;
+}
+
+.segText {
+  color: rgba(255, 255, 255, 0.9);
+  overflow-wrap: anywhere;
+}
+
+.word {
+  display: inline;
+  padding: 1px 2px;
+  border-radius: 6px;
+}
+
+.word.on {
+  background: rgba(168, 85, 247, 0.25);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.segHeader {
+  grid-template-columns: auto 1fr;
+  padding: 6px 2px;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.18);
+}
+
+.segHeaderLabel {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.68);
+  white-space: nowrap;
+}
+
+.segHeaderText {
+  color: rgba(255, 255, 255, 0.9);
+  overflow-wrap: anywhere;
+}
+
 .noteActions {
   display: flex;
   gap: 10px;
@@ -364,6 +590,94 @@ input[type='file'] {
   margin-top: 12px;
   border-top: 1px dashed rgba(255, 255, 255, 0.18);
   padding-top: 12px;
+}
+
+.jobsPanel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+  margin-bottom: 14px;
+}
+
+.jobsRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.jobsTitle {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.jobsList {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 10px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.jobItem {
+  padding: 6px 2px;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.14);
+}
+
+.jobItem:last-child {
+  border-bottom: 0;
+}
+
+.jobMeta {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.jobsSummary {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.jobsKpi {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.jobsKpi strong {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.jobsFilters {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.jobsSelect {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 8px 10px;
+  border-radius: 12px;
+  outline: none;
+}
+
+/* Ask mode dropdown: default (non-hover) colors only */
+#askMode {
+  background: #ffffff;
+  color: #000000;
 }
 
 .err {

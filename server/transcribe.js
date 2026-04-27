@@ -8,10 +8,51 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
   const pythonCmd =
     process.platform === 'win32' && fs.existsSync(venvPythonWin) ? venvPythonWin : 'python';
 
+  // Preprocess audio via ffmpeg for better STT robustness (16kHz mono WAV).
+  // Optional extra robustness: denoise + loudness normalization.
+  const wantDenoise = (process.env.VOICEVAULT_DENOISE ?? '').toString().trim() === '1';
+  const wantLoudnorm = (process.env.VOICEVAULT_LOUDNORM ?? '').toString().trim() !== '0';
+  const preprocessedPath = path.resolve(
+    process.cwd(),
+    'data',
+    'audio',
+    `__pre_${Date.now()}_${Math.random().toString(16).slice(2)}.wav`
+  );
+  try {
+    const af = [];
+    if (wantDenoise) {
+      // Light denoise tuned for speech (kept conservative to avoid artifacts).
+      af.push('afftdn=nf=-25');
+    }
+    if (wantLoudnorm) {
+      // Gentle broadcast-style normalization.
+      af.push('loudnorm=I=-16:LRA=11:TP=-1.5');
+    }
+    const args = [
+      '-y',
+      '-i',
+      audioPath,
+      '-vn',
+      '-ar',
+      '16000',
+      '-ac',
+      '1',
+      ...(af.length ? ['-af', af.join(',')] : []),
+      '-c:a',
+      'pcm_s16le',
+      preprocessedPath
+    ];
+    await run('ffmpeg', args, {
+      env: process.env
+    });
+  } catch {
+    // If ffmpeg preprocessing fails, fall back to original path.
+  }
+
   const args = [
     scriptPath,
     '--audio',
-    audioPath,
+    fs.existsSync(preprocessedPath) ? preprocessedPath : audioPath,
     '--model',
     model,
     '--json'
@@ -41,11 +82,18 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
     const parsed = JSON.parse(raw);
     return {
       transcript: (parsed?.transcript ?? '').toString().trim(),
-      language: (parsed?.language ?? '').toString().trim()
+      language: (parsed?.language ?? '').toString().trim(),
+      segments: Array.isArray(parsed?.segments) ? parsed.segments : []
     };
   } catch {
     // Backward compatibility if python script is old / prints plain text
-    return { transcript: raw, language: '' };
+    return { transcript: raw, language: '', segments: [] };
+  } finally {
+    try {
+      if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);
+    } catch {
+      // ignore
+    }
   }
 }
 

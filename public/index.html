@@ -16,9 +16,15 @@
         <div class="status" id="status"></div>
       </header>
 
-      <main class="grid">
-        <section class="card">
-          <h2>New note (audio)</h2>
+      <main class="grid" id="mainGrid">
+        <div class="leftCol" id="leftCol">
+          <section class="card" id="newNoteCard">
+            <div class="cardHeaderRow">
+              <h2 style="margin:0">New note</h2>
+              <button id="btnNewNoteToggle" class="btn" type="button">x</button>
+            </div>
+
+            <div id="newNoteBody">
 
           <label class="label">
             Title
@@ -77,8 +83,9 @@
 
           <label class="label">
             <span style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
-              <input id="fastMode" type="checkbox" checked />
-              <span>Fast mode (faster transcription, slightly lower accuracy)</span>
+              <button id="fastModeDot" class="dotToggle isOn" type="button" aria-pressed="true" aria-label="Toggle fast mode"></button>
+              <span class="toggleText">Fast mode</span>
+              <span style="color: rgba(255, 255, 255, 0.72)">Faster transcription (slightly lower accuracy)</span>
             </span>
           </label>
 
@@ -90,28 +97,197 @@
             <audio id="previewNote" controls class="audio" hidden></audio>
           </div>
 
-          <div class="hint" id="noteTranscriptHint">
-            When you save, voiceVault will <strong>transcribe offline</strong> and use the transcript for cross-note search.
-          </div>
-        </section>
+            </div>
+          </section>
 
-        <section class="card">
+          <div class="sideWindows" id="sideWindows">
+            <section class="card miniCard" id="processCard">
+              <div class="cardHeaderRow">
+                <h2 style="margin:0; font-size:14px">Processes</h2>
+                <button id="btnProcToggle" class="btn" type="button">Hide</button>
+              </div>
+              <div id="procBody">
+                <div class="jobsRow">
+                  <span class="pill" id="jobsPausedPill" hidden>Paused</span>
+                  <button id="btnIngestPause" class="btn err" type="button">Pause</button>
+                  <button id="btnIngestResume" class="btn" type="button" hidden>Resume</button>
+                </div>
+                <div class="jobsSummary" id="jobsSummary" hidden></div>
+                <div class="jobsFilters" id="jobsFilters" hidden>
+                  <select id="jobsStatusFilter" class="jobsSelect">
+                    <option value="">All statuses</option>
+                    <option value="queued">Queued</option>
+                    <option value="running">Running</option>
+                    <option value="done">Done</option>
+                    <option value="error">Error</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
+                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Backoff base (sec)</span>
+                    <input
+                      id="jobsBackoffBaseSec"
+                      class="input"
+                      style="width:96px; padding:8px 10px"
+                      type="number"
+                      min="1"
+                      max="60"
+                      value="5"
+                    />
+                  </label>
+                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
+                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Backoff max (sec)</span>
+                    <input
+                      id="jobsBackoffMaxSec"
+                      class="input"
+                      style="width:110px; padding:8px 10px"
+                      type="number"
+                      min="5"
+                      max="3600"
+                      value="300"
+                    />
+                  </label>
+                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
+                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Max parallel</span>
+                    <input
+                      id="jobsMaxParallel"
+                      class="input"
+                      style="width:90px; padding:8px 10px"
+                      type="number"
+                      min="1"
+                      max="6"
+                      value="1"
+                    />
+                  </label>
+                  <button id="btnJobsApply" class="btn" type="button">Apply</button>
+                  <button id="btnJobsRetryAll" class="btn" type="button">Retry all errors</button>
+                  <button id="btnJobsUnlockNow" class="btn err" type="button">Unlock stale</button>
+                </div>
+                <div class="jobsList" id="jobsList" hidden></div>
+              </div>
+            </section>
+
+            <section class="card miniCard" id="helpCard">
+              <div class="cardHeaderRow">
+                <h2 style="margin:0; font-size:14px">Help</h2>
+                <button id="btnHelpToggle" class="btn" type="button">Hide</button>
+              </div>
+              <div id="helpBody">
+                <div class="row" style="margin-bottom:0">
+                  <button class="btn" id="aboutToggle" type="button">App hint</button>
+                  <button class="btn" id="uiStepsToggle" type="button">UI steps</button>
+                </div>
+                <div id="aboutBox" style="margin-top:10px" hidden></div>
+                <div id="uiStepsBox" style="margin-top:10px" hidden></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <section class="card" id="searchCard">
           <h2>Search</h2>
+          <div class="row">
+            <input id="q" class="input" placeholder="Transcript of your search audio will appear here…" />
+          </div>
           <div class="row">
             <button id="btnRecordQuery" class="btn primary">Record search</button>
             <button id="btnStopQuery" class="btn" disabled hidden>Stop</button>
             <button id="btnSearch" class="btn" disabled hidden>Search</button>
+            <button id="btnAsk" class="btn" type="button" hidden>Quick answer</button>
             <span class="pill timerPill" id="queryTimer" hidden>00:00</span>
           </div>
+          <section class="card miniCard" id="advancedSearchCard" style="margin-top:10px">
+            <div class="cardHeaderRow">
+              <h2 style="margin:0; font-size:14px">Advanced search</h2>
+              <button id="btnAdvancedSearchToggle" class="btn" type="button">Show</button>
+            </div>
+            <div id="advancedSearchBody" hidden>
+              <div class="row" style="margin-top:-2px">
+                <select id="askMode" class="jobsSelect" style="min-width:140px">
+                  <option value="auto">Ask: Auto</option>
+                  <option value="openai">Ask: OpenAI</option>
+                  <option value="ollama">Ask: Ollama</option>
+                </select>
+              </div>
+              <div class="row" style="margin-top:4px; gap:10px; flex-wrap:wrap">
+                <select id="savedSearchSelect" class="jobsSelect" style="min-width:200px">
+                  <option value="">Saved searches…</option>
+                </select>
+                <button id="btnSaveSearch" class="btn" type="button" title="Save current query">Save</button>
+                <select id="libFolderFilter" class="jobsSelect" style="min-width:160px">
+                  <option value="">All folders</option>
+                </select>
+                <select id="libTagFilter" class="jobsSelect" style="min-width:160px">
+                  <option value="">All tags</option>
+                </select>
+                <select id="libStatusFilter" class="jobsSelect" style="min-width:140px">
+                  <option value="">All statuses</option>
+                  <option value="ready">Ready</option>
+                  <option value="processing">Processing</option>
+                  <option value="error">Error</option>
+                </select>
+                <button id="libFavOnly" class="btn" type="button" aria-pressed="false" title="Show favorites only">★</button>
+                <button id="libManageMeta" class="btn" type="button" title="Manage folders/tags">Manage</button>
+              </div>
+              <div id="answerWrap" class="answerWrap" hidden></div>
+            </div>
+          </section>
           <div class="row">
             <audio id="previewQuery" controls class="audio" hidden></audio>
-          </div>
-          <div class="row">
-            <input id="q" class="input" placeholder="Transcript of your search audio will appear here…" />
           </div>
           <div id="results" class="results"></div>
         </section>
       </main>
+    </div>
+
+    <div id="jobDetailsOverlay" class="overlay" hidden>
+      <div class="dialog">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
+          <div style="font-weight:850">Job details</div>
+          <button id="btnJobDetailsClose" class="btn" type="button">Close</button>
+        </div>
+        <pre id="jobDetailsPre" class="preBox"></pre>
+        <div style="display:flex; gap:10px; justify-content:flex-end">
+          <button id="btnJobDetailsCopy" class="btn" type="button">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="metaManageOverlay" class="overlay" hidden>
+      <div class="dialog">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
+          <div style="font-weight:850">Manage folders & tags</div>
+          <button id="btnMetaManageClose" class="btn" type="button">Close</button>
+        </div>
+        <div style="margin-top:10px; display:grid; gap:10px">
+          <div>
+            <div style="font-size:12px; color:rgba(255,255,255,0.75); font-weight:800; margin-bottom:6px">Folders</div>
+            <div class="row" style="margin-bottom:6px">
+              <input id="metaNewFolderName" class="input" placeholder="New folder name" />
+              <button id="btnMetaAddFolder" class="btn" type="button">Add</button>
+            </div>
+            <div id="metaFoldersList" class="preBox" style="margin:0"></div>
+          </div>
+          <div>
+            <div style="font-size:12px; color:rgba(255,255,255,0.75); font-weight:800; margin-bottom:6px">Tags</div>
+            <div class="row" style="margin-bottom:6px">
+              <input id="metaNewTagName" class="input" placeholder="New tag name" />
+              <button id="btnMetaAddTag" class="btn" type="button">Add</button>
+            </div>
+            <div id="metaTagsList" class="preBox" style="margin:0"></div>
+          </div>
+          <div>
+            <div style="font-size:12px; color:rgba(255,255,255,0.75); font-weight:800; margin-bottom:6px">Backup</div>
+            <div class="row" style="margin-bottom:6px; flex-wrap:wrap">
+              <a class="btn" href="/api/export.zip" download>Download export.zip</a>
+              <input id="importZip" class="input" type="file" accept=".zip,application/zip" hidden />
+              <button id="btnChooseImportZip" class="btn" type="button">Choose import.zip</button>
+              <span id="importZipName" class="pill" style="max-width:50ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">No file</span>
+              <button id="btnImportZip" class="btn err" type="button">Import</button>
+            </div>
+            <div style="font-size:12px; opacity:0.8">Import will replace your local DB and blobs. A timestamped backup is kept under <code>data/</code>.</div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script type="module" src="/main.js"></script>
