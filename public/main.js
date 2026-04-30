@@ -970,6 +970,8 @@ async function saveNote() {
 
 async function refreshResults(q = '') {
   const prevScroll = resultsEl.scrollTop;
+  // Any "Search" refresh should show the results list (Quick answer may hide it separately).
+  resultsEl.hidden = false;
   resultsEl.innerHTML = '';
   const isSearch = !!(q && q.trim());
   // IMPORTANT: default view (empty query) should always show saved notes.
@@ -1506,6 +1508,7 @@ function renderAnswerBox(queryText, items) {
   if (!q) {
     answerWrapEl.hidden = true;
     answerWrapEl.innerHTML = '';
+    if (resultsEl) resultsEl.hidden = false;
     return;
   }
 
@@ -1528,6 +1531,7 @@ function renderAnswerBox(queryText, items) {
   if (clips.length === 0) {
     answerWrapEl.hidden = true;
     answerWrapEl.innerHTML = '';
+    if (resultsEl) resultsEl.hidden = false;
     return;
   }
 
@@ -1552,8 +1556,10 @@ function renderAnswerBox(queryText, items) {
       </div>
     `.trim()
       )
-      .join('\n')}
-  `;
+      .join('')}
+  `.trim();
+  // Hide the saved-notes/results list under Quick answer.
+  if (resultsEl) resultsEl.hidden = true;
 
   answerWrapEl.querySelectorAll('button[data-answer-play]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -2774,6 +2780,9 @@ function renderBitrateHint() {
       <div style="margin-top:6px">
         Use <strong>Quick answer</strong> to see the top matching clips from your current results (offline).
       </div>
+      <div style="margin-top:6px">
+        While <strong>Quick answer</strong> is shown, the saved-notes list under Search is temporarily hidden. Press <strong>Search</strong> again to bring results back.
+      </div>
     `.trim();
   }
 
@@ -2802,6 +2811,9 @@ function renderBitrateHint() {
       </div>
       <div style="margin-top:4px">
         8) (Optional) Enable <strong>Semantic search</strong> for meaning-based matching, then press <strong>Quick answer</strong> to see the best clips.
+      </div>
+      <div style="margin-top:4px">
+        Tip: When <strong>Quick answer</strong> is open, results are hidden — press <strong>Search</strong> again to show them.
       </div>
       <div style="margin-top:4px">
         9) In results: use <strong>Expand</strong> to see full transcript + actions
