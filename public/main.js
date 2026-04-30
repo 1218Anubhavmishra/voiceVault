@@ -31,6 +31,7 @@ const helpBodyEl = document.getElementById('helpBody');
 const answerWrapEl = document.getElementById('answerWrap');
 const semanticModeDotEl = document.getElementById('semanticModeDot');
 const btnAskEl = document.getElementById('btnAsk');
+const btnSemanticToggleEl = document.getElementById('btnSemanticToggle');
 const askModeEl = document.getElementById('askMode');
 const btnAdvancedSearchToggleEl = document.getElementById('btnAdvancedSearchToggle');
 const advancedSearchBodyEl = document.getElementById('advancedSearchBody');
@@ -59,27 +60,26 @@ const jobDetailsPreEl = document.getElementById('jobDetailsPre');
 const btnJobDetailsCloseEl = document.getElementById('btnJobDetailsClose');
 const btnJobDetailsCopyEl = document.getElementById('btnJobDetailsCopy');
 
-const libFolderFilterEl = document.getElementById('libFolderFilter');
-const libTagFilterEl = document.getElementById('libTagFilter');
-const libStatusFilterEl = document.getElementById('libStatusFilter');
-const libFavOnlyEl = document.getElementById('libFavOnly');
-const libManageMetaEl = document.getElementById('libManageMeta');
-const savedSearchSelectEl = document.getElementById('savedSearchSelect');
-const btnSaveSearchEl = document.getElementById('btnSaveSearch');
-
-const metaManageOverlayEl = document.getElementById('metaManageOverlay');
-const btnMetaManageCloseEl = document.getElementById('btnMetaManageClose');
-const metaNewFolderNameEl = document.getElementById('metaNewFolderName');
-const btnMetaAddFolderEl = document.getElementById('btnMetaAddFolder');
-const metaFoldersListEl = document.getElementById('metaFoldersList');
-const metaNewTagNameEl = document.getElementById('metaNewTagName');
-const btnMetaAddTagEl = document.getElementById('btnMetaAddTag');
-const metaTagsListEl = document.getElementById('metaTagsList');
-
-const importZipEl = document.getElementById('importZip');
-const btnChooseImportZipEl = document.getElementById('btnChooseImportZip');
-const importZipNameEl = document.getElementById('importZipName');
-const btnImportZipEl = document.getElementById('btnImportZip');
+// Advanced search UI elements removed from index.html:
+const libFolderFilterEl = null;
+const libTagFilterEl = null;
+const libStatusFilterEl = null;
+const libFavOnlyEl = null;
+const libManageMetaEl = null;
+const savedSearchSelectEl = null;
+const btnSaveSearchEl = null;
+const metaManageOverlayEl = null;
+const btnMetaManageCloseEl = null;
+const metaNewFolderNameEl = null;
+const btnMetaAddFolderEl = null;
+const metaFoldersListEl = null;
+const metaNewTagNameEl = null;
+const btnMetaAddTagEl = null;
+const metaTagsListEl = null;
+const importZipEl = null;
+const btnChooseImportZipEl = null;
+const importZipNameEl = null;
+const btnImportZipEl = null;
 
 const AUDIO_BITS_PER_SECOND = 64_000; // 64 kbps Opus (WebM); adjust if you want higher quality
 const MEDIARECORDER_TIMESLICE_MS = 100; // 0.1s chunks (recording only)
@@ -247,9 +247,7 @@ setFastMode(true);
 
 setStatus('Ready');
 wire();
-refreshSavedSearches().catch(() => {
-  // ignore
-});
+setSemanticMode(semanticMode);
 await refreshResults();
 refreshIngestionUi().catch(() => {
   // ignore
@@ -258,102 +256,7 @@ syncVisibility();
 startProcessingTimers();
 
 function wire() {
-  savedSearchSelectEl?.addEventListener('change', async () => {
-    const id = (savedSearchSelectEl.value ?? '').toString().trim();
-    if (id.startsWith('recent:')) {
-      const idx = Number.parseInt(id.slice('recent:'.length), 10);
-      const recent = loadRecentSearches();
-      const q = recent[idx] || '';
-      if (!q) return;
-      if (qEl) qEl.value = q;
-      recordRecentSearch(q);
-      await refreshResults(q);
-      return;
-    }
-    if (!id) return;
-    const ss = (savedSearchesCache ?? []).find((x) => (x?.id ?? '').toString() === id);
-    if (!ss) return;
-    const q = (ss?.query ?? '').toString();
-    if (qEl) qEl.value = q;
-    recordRecentSearch(q);
-    await refreshResults(q);
-  });
-  btnSaveSearchEl?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const q = (qEl?.value ?? '').toString().trim();
-    if (!q) return setStatus('Enter a query to save', true);
-    const name = prompt('Saved search name:', q.length > 36 ? q.slice(0, 36) + '…' : q);
-    if (name === null) return;
-    const safeName = name.toString().trim();
-    if (!safeName) return;
-    btnSaveSearchEl.disabled = true;
-    try {
-      const r = await fetch('/api/saved-searches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: safeName, query: q })
-      });
-      const j = await safeJson(r);
-      if (!r.ok) throw new Error(j?.error || `Save failed (${r.status})`);
-      setStatus('Saved search added');
-      await refreshSavedSearches();
-    } catch (err) {
-      setStatus(`Save search error: ${err?.message ?? err}`, true);
-    } finally {
-      btnSaveSearchEl.disabled = false;
-    }
-  });
-
-  libFolderFilterEl?.addEventListener('change', async () => refreshResults(qEl.value));
-  libTagFilterEl?.addEventListener('change', async () => refreshResults(qEl.value));
-  libStatusFilterEl?.addEventListener('change', async () => refreshResults(qEl.value));
-  libFavOnlyEl?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    libFavOnly = !libFavOnly;
-    libFavOnlyEl.setAttribute('aria-pressed', libFavOnly ? 'true' : 'false');
-    libFavOnlyEl.classList.toggle('primary', libFavOnly);
-    await refreshResults(qEl.value);
-  });
-  libManageMetaEl?.addEventListener('click', (e) => {
-    e.preventDefault();
-    openMetaManage();
-  });
-
-  btnMetaManageCloseEl?.addEventListener('click', (e) => {
-    e.preventDefault();
-    closeMetaManage();
-  });
-  metaManageOverlayEl?.addEventListener('click', (e) => {
-    if (e.target === metaManageOverlayEl) closeMetaManage();
-  });
-  btnMetaAddFolderEl?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const name = (metaNewFolderNameEl?.value ?? '').toString().trim();
-    if (!name) return;
-    btnMetaAddFolderEl.disabled = true;
-    try {
-      const r = await fetch('/api/folders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
-      await safeJson(r);
-      if (metaNewFolderNameEl) metaNewFolderNameEl.value = '';
-      await refreshLibraryMeta();
-    } finally {
-      btnMetaAddFolderEl.disabled = false;
-    }
-  });
-  btnMetaAddTagEl?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const name = (metaNewTagNameEl?.value ?? '').toString().trim();
-    if (!name) return;
-    btnMetaAddTagEl.disabled = true;
-    try {
-      const r = await fetch('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
-      await safeJson(r);
-      if (metaNewTagNameEl) metaNewTagNameEl.value = '';
-      await refreshLibraryMeta();
-    } finally {
-      btnMetaAddTagEl.disabled = false;
-    }
-  });
+  // Saved searches + folder/tag filtering removed.
 
   btnChooseImportZipEl?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -577,33 +480,14 @@ function wire() {
   );
   btnSearch.addEventListener('click', runAudioSearch);
   btnAskEl?.addEventListener('click', runAsk);
-  if (askModeEl) {
-    askModeEl.value = askMode;
-    askModeEl.addEventListener('change', () => {
-      askMode = ((askModeEl.value ?? 'auto').toString() || 'auto').toLowerCase();
-      if (!['auto', 'openai', 'ollama'].includes(askMode)) askMode = 'auto';
-      try {
-        localStorage.setItem('vv_ask_mode', askMode);
-      } catch {
-        // ignore
-      }
+  btnSemanticToggleEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setSemanticMode(!isSemanticMode());
+    syncVisibility();
+    refreshResults(qEl.value).catch(() => {
+      // ignore
     });
-  }
-  if (btnAdvancedSearchToggleEl) {
-    btnAdvancedSearchToggleEl.addEventListener('click', (e) => {
-      e.preventDefault();
-      const next = !advancedSearchOpen;
-      // Showing Advanced search enables semantic mode; hiding disables it.
-      setSemanticMode(next);
-      setAdvancedSearchOpen(next);
-      syncVisibility();
-      refreshResults(qEl.value).catch(() => {
-        // ignore
-      });
-    });
-  }
-  setAdvancedSearchOpen(advancedSearchOpen);
-  // Semantic mode is controlled by Advanced search Show/Hide only.
+  });
 
   fastModeDotEl?.addEventListener('click', () => {
     setFastMode(!isFastMode());
@@ -1087,17 +971,13 @@ async function saveNote() {
 async function refreshResults(q = '') {
   const prevScroll = resultsEl.scrollTop;
   resultsEl.innerHTML = '';
-  const useSemantic = isSemanticMode();
+  const isSearch = !!(q && q.trim());
+  // IMPORTANT: default view (empty query) should always show saved notes.
+  // Semantic search is only used for actual searches (non-empty query).
+  const useSemantic = isSemanticMode() && isSearch;
   const url = new URL(useSemantic ? '/api/semantic' : '/api/notes', window.location.origin);
-  if (q && q.trim()) url.searchParams.set('q', q.trim());
-  if (q && q.trim()) recordRecentSearch(q.trim());
-  const folderId = (libFolderFilterEl?.value ?? '').toString().trim();
-  const tag = (libTagFilterEl?.value ?? '').toString().trim();
-  const st = (libStatusFilterEl?.value ?? '').toString().trim();
-  if (folderId) url.searchParams.set('folder_id', folderId);
-  if (tag) url.searchParams.set('tag', tag);
-  if (st) url.searchParams.set('status', st);
-  if (libFavOnly) url.searchParams.set('favorite', '1');
+  if (isSearch) url.searchParams.set('q', q.trim());
+  if (isSearch) recordRecentSearch(q.trim());
 
   const resp = await fetch(url.toString());
   if (!resp.ok) {
@@ -1106,7 +986,6 @@ async function refreshResults(q = '') {
   }
   const data = await resp.json();
   const items = data.items ?? [];
-  const isSearch = !!(q && q.trim());
   lastSearchItems = Array.isArray(items) ? items : [];
   lastSearchQuery = isSearch ? (q ?? '').toString().trim() : '';
   // Don't auto-render Quick answer. It should only appear when Quick answer is pressed.
@@ -1118,23 +997,7 @@ async function refreshResults(q = '') {
     // Quick answer button is controlled by syncVisibility() now (semantic mode + non-empty query).
     // Leave it alone here to avoid conflicting UI updates.
   }
-  if (askModeEl) {
-    // Ask mode lives in Advanced search; only show it when Advanced search is expanded and semantic mode is enabled.
-    const show = advancedSearchOpen && useSemantic;
-    askModeEl.hidden = !show;
-    askModeEl.disabled = !show || !isSearch;
-  }
-  if (btnAdvancedSearchToggleEl) {
-    btnAdvancedSearchToggleEl.hidden = false;
-  }
-  if (advancedSearchBodyEl && !advancedSearchOpen) {
-    // When collapsed, keep advanced internals hidden regardless of semantic mode.
-    try {
-      if (askModeEl) askModeEl.hidden = true;
-    } catch {
-      // ignore
-    }
-  }
+  // Advanced search UI removed.
 
   if (items.length === 0) {
     resultsEl.innerHTML = `<div class="note"><div class="pill">No results</div></div>`;
@@ -1159,7 +1022,6 @@ async function refreshResults(q = '') {
     const errText = (item.error ?? '').toString().trim();
     const durationMs = Number(item.duration_ms ?? 0) || 0;
     const lang = (item.language ?? '').toString().trim();
-    const folderId2 = (item.folder_id ?? '').toString().trim();
     const fav = Number(item.is_favorite ?? 0) ? true : false;
     const procPaused = Number(item.processing_paused ?? 0) ? true : false;
     const title = escapeHtml(item.title || 'Untitled');
@@ -1173,9 +1035,6 @@ async function refreshResults(q = '') {
         </div>
         <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
           <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
-          <select class="jobsSelect" data-folder="${item.id}" style="min-width:140px">
-            <option value="">No folder</option>
-          </select>
           ${
             status
               ? status === 'ready'
@@ -1218,10 +1077,6 @@ async function refreshResults(q = '') {
       </div>
 
       <div class="noteDetails" hidden>
-        <div class="row" style="margin-top:0; margin-bottom:8px; gap:10px; flex-wrap:wrap">
-          <button class="btn" data-tags-edit="${item.id}" type="button">Edit tags</button>
-          <span class="pill" data-tags-pill="${item.id}">Tags: —</span>
-        </div>
         <div class="noteTranscript">
           <div class="noteBody">${
             status === 'processing'
@@ -1357,22 +1212,7 @@ async function refreshResults(q = '') {
     }
 
     // Folder dropdown is intentionally not rendered when there are no folders.
-    const folderSel = note.querySelector('select[data-folder]');
-    if (folderSel) {
-      folderSel.addEventListener('change', async () => {
-        const v = (folderSel.value ?? '').toString().trim();
-        try {
-          await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder_id: v })
-          });
-          await refreshResults(qEl.value);
-        } catch {
-          // ignore
-        }
-      });
-    }
+    // (Removed) folder assignment UI.
 
     // Favorite toggle.
     note.querySelectorAll('button[data-fav]').forEach((b) => {
@@ -1426,56 +1266,7 @@ async function refreshResults(q = '') {
       });
     }
 
-    // Tags (lazy load + edit).
-    const tagsPill = note.querySelector(`[data-tags-pill="${CSS.escape(String(item.id))}"]`);
-    const btnEditTags = note.querySelector('button[data-tags-edit]');
-    const loadTags = async () => {
-      try {
-        const r = await fetch(`/api/notes/${encodeURIComponent(item.id)}/tags`);
-        const j = await safeJson(r);
-        const arr = Array.isArray(j?.items) ? j.items : [];
-        const names = arr.map((t) => (t?.name ?? '').toString()).filter(Boolean);
-        if (tagsPill) {
-          tagsPill.textContent = `Tags: ${names.length ? names.join(', ') : '—'}`;
-          tagsPill.hidden = names.length === 0;
-        }
-        if (btnEditTags) btnEditTags.textContent = names.length ? 'Edit tags' : 'Add tags';
-      } catch {
-        if (tagsPill) {
-          tagsPill.textContent = 'Tags: —';
-          tagsPill.hidden = true;
-        }
-        if (btnEditTags) btnEditTags.textContent = 'Add tags';
-      }
-    };
-    loadTags().catch(() => {
-      // ignore
-    });
-
-    if (btnEditTags) {
-      btnEditTags.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const current = (tagsPill?.textContent ?? '').replace(/^Tags:\\s*/i, '').trim();
-        const nextRaw = prompt('Enter tags (comma-separated):', current === '—' ? '' : current);
-        if (nextRaw === null) return;
-        const tags = nextRaw
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .slice(0, 30);
-        try {
-          await fetch(`/api/notes/${encodeURIComponent(item.id)}/tags`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tags })
-          });
-          await refreshLibraryMeta();
-          await loadTags();
-        } catch {
-          // ignore
-        }
-      });
-    }
+    // Tags removed.
 
     const btn = note.querySelector('button[data-play]');
     const audio = note.querySelector('audio');
@@ -1662,51 +1453,14 @@ async function refreshResults(q = '') {
 async function runAsk() {
   const q = (qEl?.value ?? '').toString().trim();
   if (!q) return;
-  if (!isSemanticMode()) return;
   if (!answerWrapEl) return;
 
   btnAskEl.disabled = true;
-  setStatus('Asking…');
+  setStatus('Quick answer…');
   try {
-    // First: offline quick answer from current results (no keys needed).
+    // Offline-only: show top clips from current results.
     renderAnswerBox(q, lastSearchItems);
     setStatus('Quick answer ready');
-
-    // Optional: If user explicitly wants OpenAI/Ollama, try server answer; otherwise stay offline.
-    if (askMode === 'auto') return;
-
-    const resp = await fetch('/api/answer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q, k: 10, mode: askMode })
-    });
-    const data = await safeJson(resp);
-    if (!resp.ok) {
-      const detail = (data?.details ?? '').toString().trim();
-      const m = (data?.mode ?? '').toString().trim();
-      throw new Error(
-        [data?.error || `Ask failed (${resp.status})`, detail ? `(${detail})` : '', m ? `mode=${m}` : '']
-          .filter(Boolean)
-          .join(' ')
-      );
-    }
-    const answer = (data?.answer ?? '').toString().trim();
-    const clips = Array.isArray(data?.clips) ? data.clips : [];
-    if (!answer) {
-      const m = (data?.mode ?? '').toString();
-      if (m === 'extractive') {
-        const hint = (data?.hint ?? '').toString().trim();
-        setStatus(hint ? `No Quick answer: ${hint}` : 'No Quick answer provider available', true);
-      } else {
-        setStatus(m ? `No LLM answer (${m})` : 'No LLM answer', true);
-      }
-      return;
-    }
-    // Replace answer box with the model answer (clips still playable via its Play buttons).
-    answerWrapEl.hidden = false;
-    answerWrapEl.innerHTML = renderAnswerHtmlWithCitations(answer, clips);
-    wireCitationClicks(answerWrapEl, clips);
-    setStatus('Answer ready');
   } catch (e) {
     setStatus(`Ask error: ${e?.message ?? e}`, true);
   } finally {
@@ -3011,8 +2765,14 @@ function renderBitrateHint() {
         <strong>last 3 days</strong>, or <strong>2026-04-22</strong>.
       </div>
       <div style="margin-top:6px">
-        Use <strong>Advanced search</strong> → <strong>Show</strong> to enable embeddings-based retrieval (semantic mode).
-        Use <strong>Quick answer</strong> to see top matching clips (offline). Optional LLM answering is available via the Ask mode dropdown.
+        Use <strong>Semantic search</strong> to switch between:
+        <div style="margin-top:6px; opacity:0.9">
+          • <strong>Off</strong>: keyword search (fast; matches exact words)<br/>
+          • <strong>On</strong>: semantic retrieval (meaning-based) over transcript segments
+        </div>
+      </div>
+      <div style="margin-top:6px">
+        Use <strong>Quick answer</strong> to see the top matching clips from your current results (offline).
       </div>
     `.trim();
   }
@@ -3041,16 +2801,19 @@ function renderBitrateHint() {
         7) To find a note: type in Search and press <strong>Enter</strong>, or use <strong>Record search</strong> → <strong>Stop</strong> → <strong>Search</strong>
       </div>
       <div style="margin-top:4px">
-        8) In results: use <strong>Expand</strong> to see full transcript + actions
+        8) (Optional) Enable <strong>Semantic search</strong> for meaning-based matching, then press <strong>Quick answer</strong> to see the best clips.
       </div>
       <div style="margin-top:4px">
-        9) In expanded notes: use per-segment <strong>Play</strong> for clipped playback; use <strong>Play Audio</strong> for full audio.
+        9) In results: use <strong>Expand</strong> to see full transcript + actions
       </div>
       <div style="margin-top:4px">
-        10) If a note gets stuck on <strong>Processing</strong>, use <strong>Remove</strong> to delete it.
+        10) In expanded notes: use per-segment <strong>Play</strong> for clipped playback; use <strong>Play Audio</strong> for full audio.
       </div>
       <div style="margin-top:4px">
-        Tip: Use <strong>Advanced search</strong> → <strong>Show</strong> to enable semantic retrieval (meaning-based results). Hide it to return to keyword search.
+        11) If a note gets stuck on <strong>Processing</strong>, use <strong>Remove</strong> to delete it.
+      </div>
+      <div style="margin-top:4px">
+        Tip: Toggle <strong>Semantic search</strong> on for “meaning-based” matches (useful when wording differs), and off for exact keyword matches.
       </div>
       <div style="margin-top:4px">
         Tip: You can ask time-filtered queries like <strong>"recording yesterday"</strong> or <strong>"between 2026-04-20 and 2026-04-22 upload"</strong>.
@@ -3113,39 +2876,11 @@ function syncVisibility() {
   btnSearch.disabled = hideSearch;
 
   const hasTextQ = qEl.value.trim().length > 0;
-  const quickAnswerHidden = query.isRecording || !isSemanticMode();
+  const askHidden = query.isRecording;
   if (btnAskEl) {
-    btnAskEl.hidden = quickAnswerHidden;
-    btnAskEl.disabled = quickAnswerHidden || !hasTextQ;
-    btnAskEl.title = quickAnswerHidden
-      ? 'Enable Semantic search to use Quick answer'
-      : !hasTextQ
-        ? 'Type a query first'
-        : 'Answer from top semantic clips';
-  }
-
-  // Advanced search panel controls semantic on/off; keep the card visible always.
-  if (advancedSearchCardEl) advancedSearchCardEl.hidden = false;
-  if (!isSemanticMode()) {
-    // If semantic mode turns off, collapse Advanced search and hide any answer.
-    if (answerWrapEl) {
-      answerWrapEl.hidden = true;
-      answerWrapEl.innerHTML = '';
-    }
-    if (advancedSearchOpen) setAdvancedSearchOpen(false);
-    if (btnAdvancedSearchToggleEl) btnAdvancedSearchToggleEl.textContent = 'Show';
-  } else {
-    // If semantic is ON, keep Ask mode dropdown visibility aligned with panel state.
-    try {
-      if (askModeEl) {
-        const show = advancedSearchOpen;
-        askModeEl.hidden = !show;
-        askModeEl.disabled = !show || !hasTextQ;
-      }
-      if (btnAdvancedSearchToggleEl) btnAdvancedSearchToggleEl.hidden = false;
-    } catch {
-      // ignore
-    }
+    btnAskEl.hidden = askHidden;
+    btnAskEl.disabled = askHidden || !hasTextQ;
+    btnAskEl.title = !hasTextQ ? 'Type a query first' : 'AskOpenAi';
   }
 }
 
@@ -3174,6 +2909,11 @@ function setSemanticMode(on) {
   if (semanticModeDotEl) {
     semanticModeDotEl.classList.toggle('isOn', semanticMode);
     semanticModeDotEl.setAttribute('aria-pressed', semanticMode ? 'true' : 'false');
+  }
+  if (btnSemanticToggleEl) {
+    btnSemanticToggleEl.classList.toggle('primary', semanticMode);
+    btnSemanticToggleEl.textContent = semanticMode ? 'Semantic search: On' : 'Semantic search: Off';
+    btnSemanticToggleEl.setAttribute('aria-pressed', semanticMode ? 'true' : 'false');
   }
 }
 

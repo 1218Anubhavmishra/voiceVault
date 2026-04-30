@@ -192,45 +192,11 @@
             <button id="btnRecordQuery" class="btn primary">Record search</button>
             <button id="btnStopQuery" class="btn" disabled hidden>Stop</button>
             <button id="btnSearch" class="btn" disabled hidden>Search</button>
-            <button id="btnAsk" class="btn" type="button" hidden>Quick answer</button>
+            <button id="btnAsk" class="btn primary" type="button" hidden>Quick answer</button>
+            <button id="btnSemanticToggle" class="btn" type="button">Semantic search</button>
             <span class="pill timerPill" id="queryTimer" hidden>00:00</span>
           </div>
-          <section class="card miniCard" id="advancedSearchCard" style="margin-top:10px">
-            <div class="cardHeaderRow">
-              <h2 style="margin:0; font-size:14px">Advanced search</h2>
-              <button id="btnAdvancedSearchToggle" class="btn" type="button">Show</button>
-            </div>
-            <div id="advancedSearchBody" hidden>
-              <div class="row" style="margin-top:-2px">
-                <select id="askMode" class="jobsSelect" style="min-width:140px">
-                  <option value="auto">Ask: Auto</option>
-                  <option value="openai">Ask: OpenAI</option>
-                  <option value="ollama">Ask: Ollama</option>
-                </select>
-              </div>
-              <div class="row" style="margin-top:4px; gap:10px; flex-wrap:wrap">
-                <select id="savedSearchSelect" class="jobsSelect" style="min-width:200px">
-                  <option value="">Saved searches…</option>
-                </select>
-                <button id="btnSaveSearch" class="btn" type="button" title="Save current query">Save</button>
-                <select id="libFolderFilter" class="jobsSelect" style="min-width:160px">
-                  <option value="">All folders</option>
-                </select>
-                <select id="libTagFilter" class="jobsSelect" style="min-width:160px">
-                  <option value="">All tags</option>
-                </select>
-                <select id="libStatusFilter" class="jobsSelect" style="min-width:140px">
-                  <option value="">All statuses</option>
-                  <option value="ready">Ready</option>
-                  <option value="processing">Processing</option>
-                  <option value="error">Error</option>
-                </select>
-                <button id="libFavOnly" class="btn" type="button" aria-pressed="false" title="Show favorites only">★</button>
-                <button id="libManageMeta" class="btn" type="button" title="Manage folders/tags">Manage</button>
-              </div>
-              <div id="answerWrap" class="answerWrap" hidden></div>
-            </div>
-          </section>
+          <div id="answerWrap" class="answerWrap" hidden></div>
           <div class="row">
             <audio id="previewQuery" controls class="audio" hidden></audio>
           </div>
@@ -252,43 +218,7 @@
       </div>
     </div>
 
-    <div id="metaManageOverlay" class="overlay" hidden>
-      <div class="dialog">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
-          <div style="font-weight:850">Manage folders & tags</div>
-          <button id="btnMetaManageClose" class="btn" type="button">Close</button>
-        </div>
-        <div style="margin-top:10px; display:grid; gap:10px">
-          <div>
-            <div style="font-size:12px; color:rgba(255,255,255,0.75); font-weight:800; margin-bottom:6px">Folders</div>
-            <div class="row" style="margin-bottom:6px">
-              <input id="metaNewFolderName" class="input" placeholder="New folder name" />
-              <button id="btnMetaAddFolder" class="btn" type="button">Add</button>
-            </div>
-            <div id="metaFoldersList" class="preBox" style="margin:0"></div>
-          </div>
-          <div>
-            <div style="font-size:12px; color:rgba(255,255,255,0.75); font-weight:800; margin-bottom:6px">Tags</div>
-            <div class="row" style="margin-bottom:6px">
-              <input id="metaNewTagName" class="input" placeholder="New tag name" />
-              <button id="btnMetaAddTag" class="btn" type="button">Add</button>
-            </div>
-            <div id="metaTagsList" class="preBox" style="margin:0"></div>
-          </div>
-          <div>
-            <div style="font-size:12px; color:rgba(255,255,255,0.75); font-weight:800; margin-bottom:6px">Backup</div>
-            <div class="row" style="margin-bottom:6px; flex-wrap:wrap">
-              <a class="btn" href="/api/export.zip" download>Download export.zip</a>
-              <input id="importZip" class="input" type="file" accept=".zip,application/zip" hidden />
-              <button id="btnChooseImportZip" class="btn" type="button">Choose import.zip</button>
-              <span id="importZipName" class="pill" style="max-width:50ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">No file</span>
-              <button id="btnImportZip" class="btn err" type="button">Import</button>
-            </div>
-            <div style="font-size:12px; opacity:0.8">Import will replace your local DB and blobs. A timestamped backup is kept under <code>data/</code>.</div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Removed: advanced library meta (folders/tags) management UI -->
 
     <script type="module" src="/main.js"></script>
   </body>
