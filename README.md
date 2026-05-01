@@ -10,9 +10,9 @@ Local audio recording + storage app with cross-note search (audio-only).
 - Search across all notes by recording a short audio query (also transcribed offline)
 - Jump + play **timestamped segments** from saved transcripts (clip-style playback)
 - Search supports **natural language** + **time filters** (e.g. `yesterday`, `last 3 days`, `2026-04-22`)
-- The left column is organized into **New note**, **Processes**, and **Help** windows (Show/Hide). Showing restores a 50/50 split; hiding makes Search wider. Only one window can be open at a time (mutually exclusive). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens.
-- **Advanced search**: a collapsible panel that enables **semantic search** (local embeddings). When Advanced search is hidden, results use keyword search.
-- **Quick answer**: press the Quick answer button to show top-matching clips (offline/extractive) from the current search.
+- Search is **hybrid by default**: keyword matching + local semantic retrieval over transcript segments.
+- The left column is organized into **New note**, **Processes**, and **Help**. Opening any left window restores a **50/50** split; collapsing makes Search wider. Only one window can be open at a time (mutually exclusive). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens (and the Processes card otherwise stays hidden unless there are failures).
+- In **Help**, opening **App hint** or **UI steps** triggers the **50/50** split (no extra Help Show/Hide button).
 
 ## Run locally
 

@@ -11,10 +11,9 @@
 - **Audio-based search**: Records a short audio query, transcribes it offline, then searches across stored note transcripts.
 - **Natural-language + time-filter search (offline)**: Supports queries like “find the note about X yesterday” or `between 2026-04-20 and 2026-04-22`.
 - **Semantic search (local embeddings)**: Optional embeddings-based retrieval over timestamped segments.
-- **Advanced search (UI)**: Semantic mode is enabled via the **Advanced search** panel (Show/Hide).
-- **Quick answer (offline)**: Top matching clips are shown only when the user presses **Quick answer**.
-- **LLM answering (optional)**: Optional Ask flow can use OpenAI or Ollama if configured.
-- **UI windows**: The left column includes **New note**, **Processes**, and **Help** windows, each with Show/Hide. Showing restores a 50/50 split; hiding makes Search wider.
+- **Hybrid search (default)**: Keyword matching blended with local embeddings retrieval over timestamped segments.
+- **UI windows**: The left column includes **New note**, **Processes**, and **Help**. Opening any left window restores a 50/50 split; collapsing makes Search wider. Processes stays hidden unless there are failures (auto-opens on error).
+- **Help controls layout**: Opening **App hint** / **UI steps** triggers the 50/50 split (no separate Help Show/Hide button).
 - **Mutual exclusivity**: Only one of the three windows can be open at a time (opening one closes the other two). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens.
 
 ## Tech Stack

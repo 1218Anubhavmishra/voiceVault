@@ -133,7 +133,8 @@ input[type='file'] {
   .grid.noteCollapsed.helpCollapsed,
   .grid.procCollapsed.helpCollapsed,
   .grid.noteCollapsed.procCollapsed.helpCollapsed {
-    grid-template-columns: 0.35fr 1.65fr;
+    /* Slightly wider left column so Help buttons fit one line */
+    grid-template-columns: 1fr 2fr;
   }
 }
 
@@ -226,6 +227,16 @@ input[type='file'] {
 .btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.btn:focus {
+  outline: none;
+}
+
+.btn:focus-visible {
+  outline: none;
+  border-color: rgba(168, 85, 247, 0.85);
+  box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.22);
 }
 
 .btn.primary {
@@ -438,6 +449,31 @@ input[type='file'] {
   overflow: hidden;
 }
 
+.note.isEditing .noteDetails {
+  max-height: 520px;
+  overflow: auto;
+  scrollbar-width: none; /* Firefox */
+}
+
+.note.isEditing .noteDetails::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Hide scrollbars inside the edit transcript textarea (keep scrolling) */
+.note .editBox .textarea {
+  scrollbar-width: none; /* Firefox */
+}
+
+.note .editBox .textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.note.isEditing .notePlaybackRow {
+  display: none !important;
+}
+
 .noteTranscript {
   max-height: 240px;
   overflow: auto;
@@ -586,6 +622,14 @@ input[type='file'] {
   border-color: rgba(255, 255, 255, 0.75);
 }
 
+/* Saved notes: make Length + Lang pills transparent */
+.note .noteLength,
+.note .timerPill {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
 .editBox {
   margin-top: 12px;
   border-top: 1px dashed rgba(255, 255, 255, 0.18);
@@ -611,6 +655,17 @@ input[type='file'] {
   color: rgba(255, 255, 255, 0.72);
   font-weight: 800;
   letter-spacing: 0.2px;
+}
+
+/* Help: keep App hint + UI steps on one line */
+.helpButtonsRow {
+  flex-wrap: nowrap;
+}
+
+.helpButtonsRow .btn {
+  padding: 8px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
 }
 
 .jobsList {
@@ -684,5 +739,70 @@ input[type='file'] {
   color: rgba(255, 255, 255, 0.95);
   border-color: rgba(239, 68, 68, 0.45);
   background: rgba(239, 68, 68, 0.12);
+}
+
+/* Note header + actions dropdown */
+.noteTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.noteTitleRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.noteActionsChevron {
+  padding: 8px 10px;
+  min-width: 42px;
+}
+
+.noteActionsWrap {
+  position: relative;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.noteActionsWrap .noteActionsChevron {
+  border: none;
+  background: transparent;
+}
+
+.noteActions {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  top: calc(100% );
+  background: #121a2e;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+}
+
+.noteActionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+}
+
+.noteActionsList .btn {
+  text-align: left;
+  justify-content: flex-start;
+  padding: 9px 10px;
+}
+
+.noteSummary {
+  position: relative;
 }
 

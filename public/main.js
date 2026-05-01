@@ -29,13 +29,13 @@ const sideWindowsEl = document.getElementById('sideWindows');
 const btnHelpToggleEl = document.getElementById('btnHelpToggle');
 const helpBodyEl = document.getElementById('helpBody');
 const answerWrapEl = document.getElementById('answerWrap');
-const semanticModeDotEl = document.getElementById('semanticModeDot');
-const btnAskEl = document.getElementById('btnAsk');
-const btnSemanticToggleEl = document.getElementById('btnSemanticToggle');
-const askModeEl = document.getElementById('askMode');
-const btnAdvancedSearchToggleEl = document.getElementById('btnAdvancedSearchToggle');
-const advancedSearchBodyEl = document.getElementById('advancedSearchBody');
-const advancedSearchCardEl = document.getElementById('advancedSearchCard');
+const semanticModeDotEl = document.getElementById('semanticModeDot'); // legacy; may be null
+const btnAskEl = document.getElementById('btnAsk'); // removed from UI
+const btnSemanticToggleEl = document.getElementById('btnSemanticToggle'); // removed from UI
+const askModeEl = document.getElementById('askMode'); // removed from UI
+const btnAdvancedSearchToggleEl = document.getElementById('btnAdvancedSearchToggle'); // removed from UI
+const advancedSearchBodyEl = document.getElementById('advancedSearchBody'); // removed from UI
+const advancedSearchCardEl = document.getElementById('advancedSearchCard'); // removed from UI
 const btnNewNoteToggleEl = document.getElementById('btnNewNoteToggle');
 const newNoteBodyEl = document.getElementById('newNoteBody');
 const mainGridEl = document.getElementById('mainGrid');
@@ -43,6 +43,7 @@ const btnIngestPauseEl = document.getElementById('btnIngestPause');
 const btnIngestResumeEl = document.getElementById('btnIngestResume');
 const btnProcToggleEl = document.getElementById('btnProcToggle');
 const procBodyEl = document.getElementById('procBody');
+const processCardEl = document.getElementById('processCard');
 const jobsListEl = document.getElementById('jobsList');
 const jobsPausedPillEl = document.getElementById('jobsPausedPill');
 const jobsSummaryEl = document.getElementById('jobsSummary');
@@ -106,13 +107,72 @@ let loopSegments = loadBoolSetting('vv_loop_segments', false);
 let askMode = ((localStorage.getItem('vv_ask_mode') ?? 'auto').toString() || 'auto').toLowerCase();
 if (!['auto', 'openai', 'ollama'].includes(askMode)) askMode = 'auto';
 
-let semanticMode = ((localStorage.getItem('vv_semantic_mode') ?? '0').toString().trim() === '1');
+// Semantic is always-on (hybrid blended with keyword search).
+let semanticMode = true;
 
-// Keep last results so Quick answer can be on-demand.
+// (Removed) Quick answer feature.
 let lastSearchItems = [];
 let lastSearchQuery = '';
 
 let advancedSearchOpen = ((localStorage.getItem('vv_adv_search_open') ?? '0').toString().trim() === '1');
+
+function ensureElementFullyVisible(el, pad = 8) {
+  if (!el) return;
+  try {
+    const r = el.getBoundingClientRect();
+    const overflowBottom = r.bottom - (window.innerHeight - pad);
+    const overflowTop = pad - r.top;
+    if (overflowBottom > 0) window.scrollBy({ top: overflowBottom, left: 0, behavior: 'smooth' });
+    else if (overflowTop > 0) window.scrollBy({ top: -overflowTop, left: 0, behavior: 'smooth' });
+  } catch {
+    // ignore
+  }
+}
+
+function closeAllActionMenus(exceptEl = null) {
+  try {
+    const openMenus = Array.from(document.querySelectorAll('.noteActions:not([hidden])'));
+    for (const m of openMenus) {
+      if (exceptEl && m === exceptEl) continue;
+      m.hidden = true;
+    }
+    const toggles = Array.from(document.querySelectorAll('button[data-actions-toggle]'));
+    for (const t of toggles) t.textContent = '▼';
+
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches?.('button[data-actions-toggle]')) {
+      active.blur();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function installActionMenuGlobalHandlersOnce() {
+  if (window.__vvActionMenuHandlersInstalled) return;
+  window.__vvActionMenuHandlersInstalled = true;
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest('.noteActionsWrap') || t.closest('.noteActions')) return;
+      closeAllActionMenus();
+    },
+    true
+  );
+
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if ((e?.key ?? '') === 'Escape') closeAllActionMenus();
+    },
+    true
+  );
+
+  window.addEventListener('resize', () => closeAllActionMenus(), true);
+}
 
 function applyMainGridColumns(mode) {
   if (!mainGridEl) return;
@@ -136,7 +196,13 @@ function updateMainGridLayout({ prefer = 'auto' } = {}) {
   if (!mainGridEl) return;
   const noteCollapsed = !!newNoteBodyEl?.hidden;
   const procCollapsed = !!procBodyEl?.hidden;
-  const helpCollapsed = !!helpBodyEl?.hidden;
+  // Help is considered "open" if either App hint or UI steps is expanded.
+  const aboutBoxEl = document.getElementById('aboutBox');
+  const uiStepsBoxEl = document.getElementById('uiStepsBox');
+  const helpCollapsed =
+    aboutBoxEl && uiStepsBoxEl
+      ? !!aboutBoxEl.hidden && !!uiStepsBoxEl.hidden
+      : !!helpBodyEl?.hidden;
 
   // Explicit set/clear (more reliable than toggle chains if multiple calls happen).
   mainGridEl.classList.remove('noteCollapsed', 'procCollapsed', 'helpCollapsed');
@@ -193,8 +259,14 @@ async function openExclusivePane(which) {
     if (procBodyEl) procBodyEl.hidden = true;
     if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
 
-    if (helpBodyEl) helpBodyEl.hidden = true;
-    if (btnHelpToggleEl) btnHelpToggleEl.textContent = 'Show';
+    const aboutBoxEl = document.getElementById('aboutBox');
+    const uiStepsBoxEl = document.getElementById('uiStepsBox');
+    const aboutToggleEl = document.getElementById('aboutToggle');
+    const uiStepsToggleEl = document.getElementById('uiStepsToggle');
+    if (aboutBoxEl) aboutBoxEl.hidden = true;
+    if (uiStepsBoxEl) uiStepsBoxEl.hidden = true;
+    if (aboutToggleEl) aboutToggleEl.textContent = 'App hint';
+    if (uiStepsToggleEl) uiStepsToggleEl.textContent = 'UI steps';
 
     // Opening any pane should restore 50/50.
     updateMainGridLayout({ prefer: 'equal' });
@@ -208,8 +280,14 @@ async function openExclusivePane(which) {
     if (newNoteBodyEl) newNoteBodyEl.hidden = true;
     if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = '+';
 
-    if (helpBodyEl) helpBodyEl.hidden = true;
-    if (btnHelpToggleEl) btnHelpToggleEl.textContent = 'Show';
+    const aboutBoxEl = document.getElementById('aboutBox');
+    const uiStepsBoxEl = document.getElementById('uiStepsBox');
+    const aboutToggleEl = document.getElementById('aboutToggle');
+    const uiStepsToggleEl = document.getElementById('uiStepsToggle');
+    if (aboutBoxEl) aboutBoxEl.hidden = true;
+    if (uiStepsBoxEl) uiStepsBoxEl.hidden = true;
+    if (aboutToggleEl) aboutToggleEl.textContent = 'App hint';
+    if (uiStepsToggleEl) uiStepsToggleEl.textContent = 'UI steps';
 
     // When opening Processes, refresh its contents.
     try {
@@ -223,9 +301,6 @@ async function openExclusivePane(which) {
   }
 
   if (which === 'help') {
-    if (helpBodyEl) helpBodyEl.hidden = false;
-    if (btnHelpToggleEl) btnHelpToggleEl.textContent = 'Hide';
-
     if (newNoteBodyEl) newNoteBodyEl.hidden = true;
     if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = '+';
 
@@ -296,16 +371,6 @@ function wire() {
     // x when expanded, + when collapsed
     btnNewNoteToggleEl.textContent = nextHidden ? '+' : 'x';
     if (!nextHidden) openExclusivePane('note');
-    else updateMainGridLayout({ prefer: 'searchWide' });
-  });
-
-  btnHelpToggleEl?.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (!helpBodyEl) return;
-    const willShow = helpBodyEl.hidden;
-    helpBodyEl.hidden = !willShow;
-    btnHelpToggleEl.textContent = willShow ? 'Hide' : 'Show';
-    if (willShow) openExclusivePane('help');
     else updateMainGridLayout({ prefer: 'searchWide' });
   });
 
@@ -479,7 +544,6 @@ function wire() {
     })
   );
   btnSearch.addEventListener('click', runAudioSearch);
-  btnAskEl?.addEventListener('click', runAsk);
   btnSemanticToggleEl?.addEventListener('click', (e) => {
     e.preventDefault();
     setSemanticMode(!isSemanticMode());
@@ -620,8 +684,15 @@ function wire() {
     if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = '+';
     if (procBodyEl) procBodyEl.hidden = true;
     if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
-    if (helpBodyEl) helpBodyEl.hidden = true;
-    if (btnHelpToggleEl) btnHelpToggleEl.textContent = 'Show';
+    // Help buttons stay visible; collapse means both sections are hidden.
+    const aboutBoxEl = document.getElementById('aboutBox');
+    const uiStepsBoxEl = document.getElementById('uiStepsBox');
+    const aboutToggleEl = document.getElementById('aboutToggle');
+    const uiStepsToggleEl = document.getElementById('uiStepsToggle');
+    if (aboutBoxEl) aboutBoxEl.hidden = true;
+    if (uiStepsBoxEl) uiStepsBoxEl.hidden = true;
+    if (aboutToggleEl) aboutToggleEl.textContent = 'App hint';
+    if (uiStepsToggleEl) uiStepsToggleEl.textContent = 'UI steps';
     updateMainGridLayout({ prefer: 'searchWide' });
   } catch {
     // ignore
@@ -974,22 +1045,67 @@ async function refreshResults(q = '') {
   resultsEl.hidden = false;
   resultsEl.innerHTML = '';
   const isSearch = !!(q && q.trim());
-  // IMPORTANT: default view (empty query) should always show saved notes.
-  // Semantic search is only used for actual searches (non-empty query).
-  const useSemantic = isSemanticMode() && isSearch;
-  const url = new URL(useSemantic ? '/api/semantic' : '/api/notes', window.location.origin);
-  if (isSearch) url.searchParams.set('q', q.trim());
-  if (isSearch) recordRecentSearch(q.trim());
+  const queryText = (q ?? '').toString().trim();
+  if (isSearch) recordRecentSearch(queryText);
 
-  const resp = await fetch(url.toString());
-  if (!resp.ok) {
-    resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
-    return;
+  let items = [];
+  if (!isSearch) {
+    // Empty query: show saved notes (keyword path).
+    const url = new URL('/api/notes', window.location.origin);
+    const resp = await fetch(url.toString());
+    if (!resp.ok) {
+      resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
+      return;
+    }
+    const data = await resp.json();
+    items = Array.isArray(data?.items) ? data.items : [];
+  } else {
+    // Hybrid blend: semantic + keyword (FTS).
+    const urlSem = new URL('/api/semantic', window.location.origin);
+    urlSem.searchParams.set('q', queryText);
+    urlSem.searchParams.set('k', '15');
+    const urlFts = new URL('/api/notes', window.location.origin);
+    urlFts.searchParams.set('q', queryText);
+    urlFts.searchParams.set('limit', '50');
+
+    const [semResp, ftsResp] = await Promise.all([fetch(urlSem.toString()), fetch(urlFts.toString())]);
+    if (!semResp.ok && !ftsResp.ok) {
+      resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
+      return;
+    }
+    const semJson = await safeJson(semResp);
+    const ftsJson = await safeJson(ftsResp);
+    const semItems = Array.isArray(semJson?.items) ? semJson.items : [];
+    const ftsItems = Array.isArray(ftsJson?.items) ? ftsJson.items : [];
+
+    const byId = new Map();
+    for (const it of semItems) {
+      const id = (it?.id ?? '').toString();
+      if (!id) continue;
+      const topScore = Number(it?.matches?.[0]?.score ?? 0) || 0;
+      byId.set(id, { ...it, _vvSort: 10_000 + topScore });
+    }
+    for (let i = 0; i < ftsItems.length; i += 1) {
+      const it = ftsItems[i];
+      const id = (it?.id ?? '').toString();
+      if (!id) continue;
+      if (!byId.has(id)) {
+        byId.set(id, { ...it, _vvSort: 1000 - i });
+      } else {
+        const cur = byId.get(id);
+        byId.set(id, { ...it, ...cur, matches: cur?.matches ?? it?.matches ?? [], _vvSort: cur?._vvSort ?? 0 });
+      }
+    }
+    items = Array.from(byId.values());
+    items.sort((a, b) => (Number(b?._vvSort ?? 0) || 0) - (Number(a?._vvSort ?? 0) || 0));
+    items = items.map((x) => {
+      const { _vvSort, ...rest } = x || {};
+      return rest;
+    });
   }
-  const data = await resp.json();
-  const items = data.items ?? [];
+
   lastSearchItems = Array.isArray(items) ? items : [];
-  lastSearchQuery = isSearch ? (q ?? '').toString().trim() : '';
+  lastSearchQuery = isSearch ? queryText : '';
   // Don't auto-render Quick answer. It should only appear when Quick answer is pressed.
   if (answerWrapEl) {
     answerWrapEl.hidden = true;
@@ -1032,8 +1148,10 @@ async function refreshResults(q = '') {
     note.innerHTML = `
       <div class="noteSummary">
         <div class="noteTitleRow">
-        <div class="noteTitle">${title}</div>
-          <div class="noteMeta">${created}</div>
+          <div class="noteTitle">${title}</div>
+          <div class="noteTitleRight">
+            <div class="noteMeta">${created}</div>
+          </div>
         </div>
         <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
           <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
@@ -1052,7 +1170,23 @@ async function refreshResults(q = '') {
           }
           ${durationMs > 0 ? `<span class="pill noteLength">Length ${escapeHtml(formatMs(durationMs))}</span>` : ''}
           ${lang ? `<span class="pill timerPill">Lang: ${escapeHtml(lang)}</span>` : ''}
-          ${status === 'ready' ? `<button class="btn" data-toggle="${item.id}">Expand</button>` : ''}
+          ${
+            status === 'ready'
+              ? `<button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
+                 <div class="noteActionsWrap" data-actions-wrap="${item.id}">
+                   <button class="btn noteActionsChevron" data-actions-toggle="${item.id}" aria-label="Toggle actions">▼</button>
+                   <div class="noteActions" data-actions-menu="${item.id}" hidden>
+                     <div class="noteActionsList">
+                       <button class="btn" data-play="${item.id}">Play Audio</button>
+                       <button class="btn" data-dl-audio="${item.id}">Download Audio</button>
+                       <button class="btn" data-dl-text="${item.id}">Download Transcript</button>
+                       <button class="btn" data-edit="${item.id}">Edit</button>
+                       <button class="btn" data-delete="${item.id}">Delete Note</button>
+                     </div>
+                   </div>
+                 </div>`
+              : ''
+          }
           ${
             status === 'processing'
               ? `<button class="btn err" data-remove="${item.id}" title="Delete this note and stop processing">Remove</button>`
@@ -1076,6 +1210,7 @@ async function refreshResults(q = '') {
               : ''
           }
         </div>
+
       </div>
 
       <div class="noteDetails" hidden>
@@ -1092,17 +1227,7 @@ async function refreshResults(q = '') {
         </div>
         <div class="noteScrollHint" hidden>More transcript below</div>
 
-        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
-          <button class="btn" data-scroll-up="${item.id}">Scroll up</button>
-          <button class="btn" data-scroll-down="${item.id}">Scroll down</button>
-          <button class="btn" data-play="${item.id}">Play Audio</button>
-          <button class="btn" data-dl-audio="${item.id}">Download Audio</button>
-          <button class="btn" data-dl-text="${item.id}">Download Transcript</button>
-          <button class="btn" data-edit="${item.id}">Edit</button>
-          <button class="btn" data-delete="${item.id}">Delete Note</button>
-        </div>
-
-        <div class="row" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap">
+        <div class="row notePlaybackRow" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap">
           <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
             <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Speed</span>
             <select class="jobsSelect" data-rate="${item.id}">
@@ -1136,6 +1261,7 @@ async function refreshResults(q = '') {
     `;
 
     const summary = note.querySelector('.noteSummary');
+    const actionsMenu = note.querySelector(`[data-actions-menu="${CSS.escape(String(item.id))}"]`);
     const details = note.querySelector('.noteDetails');
     const scrollHint = note.querySelector('.noteScrollHint');
 
@@ -1177,6 +1303,24 @@ async function refreshResults(q = '') {
             autoPlayMatch: false
           }).catch(() => {
             // ignore
+          });
+        }
+      });
+    }
+
+    const btnActionsToggle = note.querySelector('button[data-actions-toggle]');
+    if (btnActionsToggle && actionsMenu) {
+      btnActionsToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        installActionMenuGlobalHandlersOnce();
+        const willOpen = actionsMenu.hidden;
+        // Always close any other open menus before toggling this one.
+        closeAllActionMenus(actionsMenu);
+        actionsMenu.hidden = !willOpen;
+        btnActionsToggle.textContent = willOpen ? '▲' : '▼';
+        if (willOpen) {
+          requestAnimationFrame(() => {
+            ensureElementFullyVisible(actionsMenu, 8);
           });
         }
       });
@@ -1319,34 +1463,50 @@ async function refreshResults(q = '') {
     const btnRemove = note.querySelector('button[data-remove]');
     const btnDlAudio = note.querySelector('button[data-dl-audio]');
     const btnDlText = note.querySelector('button[data-dl-text]');
-    const btnScrollUp = note.querySelector('button[data-scroll-up]');
-    const btnScrollDown = note.querySelector('button[data-scroll-down]');
     const btnSave = note.querySelector('button[data-save]');
     const btnCancel = note.querySelector('button[data-cancel]');
-
-    btnScrollUp?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      transcriptBox?.scrollBy({ top: -220, behavior: 'smooth' });
-    });
-
-    btnScrollDown?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      transcriptBox?.scrollBy({ top: 220, behavior: 'smooth' });
-    });
 
     transcriptBox?.addEventListener('scroll', () => updateScrollHint(transcriptBox, scrollHint));
     updateScrollHint(transcriptBox, scrollHint);
 
-    btnEdit.addEventListener('click', (e) => {
+    btnEdit.addEventListener('click', async (e) => {
       e.stopPropagation();
-      editBox.hidden = !editBox.hidden;
-      editTitle.value = (item.title ?? '').toString();
-      editBody.value = (item.body ?? '').toString();
+      // Close the actions dropdown when entering edit mode.
+      if (actionsMenu && !actionsMenu.hidden) {
+        actionsMenu.hidden = true;
+        if (btnActionsToggle) btnActionsToggle.textContent = '▼';
+      }
+      // Editing UI lives inside details; ensure it's visible.
+      if (details?.hidden) {
+        details.hidden = false;
+        note.classList.add('noteExpanded');
+        note.classList.remove('noteCollapsed');
+        if (btnToggle) btnToggle.textContent = 'Collapse';
+        expandedNoteIds.add(item.id);
+      }
+      const willShow = !!editBox.hidden;
+      editBox.hidden = !willShow;
+      if (transcriptBox) transcriptBox.hidden = willShow;
+      note.classList.toggle('isEditing', willShow);
+      if (willShow) {
+        try {
+          const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
+          const full = await safeJson(resp);
+          if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
+          editTitle.value = (full?.title ?? item.title ?? '').toString();
+          editBody.value = (full?.body ?? item.body ?? '').toString();
+        } catch {
+          editTitle.value = (item.title ?? '').toString();
+          editBody.value = (item.body ?? '').toString();
+        }
+      }
     });
 
     btnCancel.addEventListener('click', (e) => {
       e.stopPropagation();
       editBox.hidden = true;
+      if (transcriptBox) transcriptBox.hidden = false;
+      note.classList.remove('isEditing');
     });
 
     btnSave.addEventListener('click', async (e) => {
@@ -1367,6 +1527,8 @@ async function refreshResults(q = '') {
           throw new Error(msg?.error || `Save failed (${resp.status})`);
         }
         editBox.hidden = true;
+        if (transcriptBox) transcriptBox.hidden = false;
+        note.classList.remove('isEditing');
         setStatus('Saved');
         await refreshResults(qEl.value);
       } catch (e) {
@@ -1452,23 +1614,7 @@ async function refreshResults(q = '') {
   });
 }
 
-async function runAsk() {
-  const q = (qEl?.value ?? '').toString().trim();
-  if (!q) return;
-  if (!answerWrapEl) return;
-
-  btnAskEl.disabled = true;
-  setStatus('Quick answer…');
-  try {
-    // Offline-only: show top clips from current results.
-    renderAnswerBox(q, lastSearchItems);
-    setStatus('Quick answer ready');
-  } catch (e) {
-    setStatus(`Ask error: ${e?.message ?? e}`, true);
-  } finally {
-    btnAskEl.disabled = false;
-  }
-}
+// Removed: Quick answer button + handler.
 
 function renderAnswerHtmlWithCitations(answer, clips) {
   const safe = escapeHtml((answer ?? '').toString());
@@ -1502,77 +1648,7 @@ function wireCitationClicks(rootEl, clips) {
   });
 }
 
-function renderAnswerBox(queryText, items) {
-  if (!answerWrapEl) return;
-  const q = (queryText ?? '').toString().trim();
-  if (!q) {
-    answerWrapEl.hidden = true;
-    answerWrapEl.innerHTML = '';
-    if (resultsEl) resultsEl.hidden = false;
-    return;
-  }
-
-  const clips = [];
-  for (const it of items ?? []) {
-    const matches = Array.isArray(it?.matches) ? it.matches : [];
-    for (const m of matches.slice(0, 2)) {
-      if (!m?.text) continue;
-      clips.push({
-        noteId: (it?.id ?? '').toString(),
-        noteTitle: (it?.title ?? '').toString(),
-        start: Number(m.start),
-        end: Number(m.end),
-        text: (m.text ?? '').toString().trim()
-      });
-    }
-    if (clips.length >= 6) break;
-  }
-
-  if (clips.length === 0) {
-    answerWrapEl.hidden = true;
-    answerWrapEl.innerHTML = '';
-    if (resultsEl) resultsEl.hidden = false;
-    return;
-  }
-
-  answerWrapEl.hidden = false;
-  answerWrapEl.innerHTML = `
-    <div class="answerTitle">Quick answer (top clips)</div>
-    <div class="answerMeta">Built offline from matched timestamped segments.</div>
-    ${clips
-      .map(
-        (c) => `
-      <div class="answerItem">
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
-          <button class="btn segPlay" type="button"
-            data-answer-play="1"
-            data-note-id="${escapeHtml(c.noteId)}"
-            data-seg-start="${escapeHtml(String(c.start))}"
-            data-seg-end="${escapeHtml(String(c.end))}">Play</button>
-          <span class="segTime">${escapeHtml(`${formatClock(c.start)}–${formatClock(c.end)}`)}</span>
-          <span class="pill" style="padding:4px 8px">${escapeHtml(c.noteTitle || 'Note')}</span>
-        </div>
-        <div style="margin-top:6px">${escapeHtml(c.text)}</div>
-      </div>
-    `.trim()
-      )
-      .join('')}
-  `.trim();
-  // Hide the saved-notes/results list under Quick answer.
-  if (resultsEl) resultsEl.hidden = true;
-
-  answerWrapEl.querySelectorAll('button[data-answer-play]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const noteId = (btn.getAttribute('data-note-id') ?? '').toString();
-      const start = Number(btn.getAttribute('data-seg-start') || '0');
-      const end = Number(btn.getAttribute('data-seg-end') || '0');
-      if (!noteId || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
-      playClipFromNote(noteId, start, end);
-    });
-  });
-}
+// Removed: Quick answer render box.
 
 function playClipFromNote(noteId, start, end) {
   // Use (or create) a hidden global player so answer playback doesn't depend on which note is expanded.
@@ -1630,6 +1706,7 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
     if (!playBtn) return;
     e.preventDefault();
     e.stopPropagation();
+    closeAllActionMenus();
 
     const start = Number(playBtn.getAttribute('data-seg-start') || '0');
     const end = Number(playBtn.getAttribute('data-seg-end') || '0');
@@ -1654,6 +1731,17 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
     }
     playAudioRange(audioEl, start, end, { loop: loopSegments, rate: playbackRate });
     startWordHighlight(audioEl, rowEl);
+
+    if (rowEl) {
+      requestAnimationFrame(() => {
+        try {
+          rowEl.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+          ensureElementFullyVisible(rowEl, 12);
+        } catch {
+          // ignore
+        }
+      });
+    }
   });
 
   // If we have match segments, scroll the first one into view. (No auto-play.)
@@ -2267,6 +2355,19 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
 
   const jobs = summary?.jobs ?? {};
   const notes = summary?.notes ?? {};
+  const hasFailures = Number(jobs?.error ?? 0) > 0 || Number(notes?.error ?? 0) > 0;
+
+  // Hide the Processes card entirely unless there are failures.
+  // If failures appear later, it will show again and can auto-open.
+  if (processCardEl) {
+    processCardEl.hidden = !hasFailures;
+  }
+  if (!hasFailures) {
+    // Ensure it's collapsed if we hide it.
+    if (procBodyEl) procBodyEl.hidden = true;
+    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
+    return;
+  }
   const delayed = Number(summary?.jobs_delayed_queued ?? 0) || 0;
   const lastUnlockAt = (summary?.jobs_last_stale_unlock_at ?? '').toString().trim();
   const lastUnlockCount = Number(summary?.jobs_last_stale_unlock_count ?? 0) || 0;
@@ -2771,17 +2872,7 @@ function renderBitrateHint() {
         <strong>last 3 days</strong>, or <strong>2026-04-22</strong>.
       </div>
       <div style="margin-top:6px">
-        Use <strong>Semantic search</strong> to switch between:
-        <div style="margin-top:6px; opacity:0.9">
-          • <strong>Off</strong>: keyword search (fast; matches exact words)<br/>
-          • <strong>On</strong>: semantic retrieval (meaning-based) over transcript segments
-        </div>
-      </div>
-      <div style="margin-top:6px">
-        Use <strong>Quick answer</strong> to see the top matching clips from your current results (offline).
-      </div>
-      <div style="margin-top:6px">
-        While <strong>Quick answer</strong> is shown, the saved-notes list under Search is temporarily hidden. Press <strong>Search</strong> again to bring results back.
+        Search is <strong>hybrid</strong> by default: it blends keyword matching with local semantic retrieval over transcript segments.
       </div>
     `.trim();
   }
@@ -2810,31 +2901,23 @@ function renderBitrateHint() {
         7) To find a note: type in Search and press <strong>Enter</strong>, or use <strong>Record search</strong> → <strong>Stop</strong> → <strong>Search</strong>
       </div>
       <div style="margin-top:4px">
-        8) (Optional) Enable <strong>Semantic search</strong> for meaning-based matching, then press <strong>Quick answer</strong> to see the best clips.
+        8) In results: use <strong>Expand</strong> to see transcript + playback. Use the <strong>▼</strong> menu for actions (download, edit, delete).
       </div>
       <div style="margin-top:4px">
-        Tip: When <strong>Quick answer</strong> is open, results are hidden — press <strong>Search</strong> again to show them.
+        9) In expanded notes: use per-segment <strong>Play</strong> for clipped playback; use <strong>Play Audio</strong> for full audio.
       </div>
       <div style="margin-top:4px">
-        9) In results: use <strong>Expand</strong> to see full transcript + actions
-      </div>
-      <div style="margin-top:4px">
-        10) In expanded notes: use per-segment <strong>Play</strong> for clipped playback; use <strong>Play Audio</strong> for full audio.
-      </div>
-      <div style="margin-top:4px">
-        11) If a note gets stuck on <strong>Processing</strong>, use <strong>Remove</strong> to delete it.
-      </div>
-      <div style="margin-top:4px">
-        Tip: Toggle <strong>Semantic search</strong> on for “meaning-based” matches (useful when wording differs), and off for exact keyword matches.
+        10) If a note gets stuck on <strong>Processing</strong>, use <strong>Remove</strong> to delete it.
       </div>
       <div style="margin-top:4px">
         Tip: You can ask time-filtered queries like <strong>"recording yesterday"</strong> or <strong>"between 2026-04-20 and 2026-04-22 upload"</strong>.
       </div>
       <div style="margin-top:10px; border-top:1px dotted rgba(255,255,255,0.16); padding-top:10px">
         Layout: The left side has three windows — <strong>New note</strong>, <strong>Processes</strong>, and <strong>Help</strong>.
-        Press <strong>Show/+</strong> on any window to restore a <strong>50/50</strong> split with Search. Press <strong>Hide</strong> to make Search wider.
+        Opening any left window restores a <strong>50/50</strong> split with Search; collapsing it makes Search wider.
         Only one window can be open at a time (mutually exclusive). On page load, all three start collapsed by default.
-        If any note is in <strong>Error</strong> state, the app automatically opens <strong>Processes</strong>.
+        The <strong>Processes</strong> window stays hidden unless there are failures; if any note is in <strong>Error</strong> state, it auto-opens.
+        Help is opened by pressing <strong>App hint</strong> or <strong>UI steps</strong>.
       </div>
     `.trim();
   }
@@ -2852,6 +2935,18 @@ function renderBitrateHint() {
         box.hidden = true;
         if (toggle) toggle.textContent = 'UI steps';
       }
+      // Bind layout + Help window visibility to App hint.
+      if (!nextHidden) {
+        openExclusivePane('help').catch(() => {
+          // ignore
+        });
+      } else {
+        // If both help sections are hidden, collapse Help and widen Search.
+        const nothingOpen = (!!aboutBox?.hidden ?? true) && (!!box?.hidden ?? true);
+        if (nothingOpen) {
+          updateMainGridLayout({ prefer: 'searchWide' });
+        }
+      }
     });
   }
   if (toggle && box) {
@@ -2863,6 +2958,17 @@ function renderBitrateHint() {
       if (!nextHidden && aboutBox) {
         aboutBox.hidden = true;
         if (aboutToggle) aboutToggle.textContent = 'App hint';
+      }
+      // Bind layout + Help window visibility to UI steps.
+      if (!nextHidden) {
+        openExclusivePane('help').catch(() => {
+          // ignore
+        });
+      } else {
+        const nothingOpen = (!!aboutBox?.hidden ?? true) && (!!box?.hidden ?? true);
+        if (nothingOpen) {
+          updateMainGridLayout({ prefer: 'searchWide' });
+        }
       }
     });
   }
@@ -2887,13 +2993,7 @@ function syncVisibility() {
   btnSearch.hidden = hideSearch;
   btnSearch.disabled = hideSearch;
 
-  const hasTextQ = qEl.value.trim().length > 0;
-  const askHidden = query.isRecording;
-  if (btnAskEl) {
-    btnAskEl.hidden = askHidden;
-    btnAskEl.disabled = askHidden || !hasTextQ;
-    btnAskEl.title = !hasTextQ ? 'Type a query first' : 'AskOpenAi';
-  }
+  // Removed: Quick answer button
 }
 
 function isFastMode() {

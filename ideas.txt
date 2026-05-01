@@ -1,6 +1,0 @@
-ideas about addition features , (we need to check if they are possible.)
-1. highlight transcript when audio is being played .
-2. download audio and transcript,  individually if needed.
-3. upload audio to convert into  transcript .
-4. modify saved audio in the note and generate its new transcript.
-5. voice recognition of user and character mapping in the transcript.(specifying who said what ,when and in which  order. ) .

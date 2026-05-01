@@ -12,7 +12,7 @@ repo: voiceVault
 - **Index** them locally by transcribing audio **offline** using Whisper via `faster-whisper`.
 - **Retrieve** notes by searching across transcripts, including **voice query** search (record a short query → transcribe offline → search).
 
-This prototype focuses on delivering the core “voice in → searchable knowledge out” loop described in `VoiceVault.md`, but implements **full‑text search (SQLite FTS5)** rather than vector/semantic search.
+This prototype focuses on delivering the core “voice in → searchable knowledge out” loop described in `VoiceVault.md`, with **hybrid search** (SQLite FTS5 keyword matching blended with local semantic retrieval over transcript segments).
 
 ## 1.1) Screenshots
 
@@ -69,14 +69,8 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 - **Full-text search (SQLite FTS5)** across title + body.
 - **Voice query search** (record a short “search” audio query → transcribe offline → search).
-- **Semantic search (local embeddings)**
-  - Optional embeddings-based retrieval over timestamped segments (local-first; embeddings computed lazily).
-- **Advanced search (UI)**
-  - Semantic mode is enabled via the **Advanced search** panel (Show/Hide).
-- **Quick answer (extractive, offline)**
-  - The UI shows top matching timestamped segments **only when the user presses the Quick answer button**.
-- **LLM Q&A (optional)**
-  - Optional LLM answering is available via Ask mode (OpenAI or Ollama if configured); otherwise the UI stays in offline/extractive mode.
+- **Hybrid search (default)**
+  - Keyword matching blended with local embeddings-based retrieval over timestamped segments (local-first; embeddings computed lazily).
 - **Natural-language query rewrite (offline)**
   - Queries like “find me the note where I talked about recording” are rewritten into keyword-style queries.
 - **Date/time filters in search (offline)**
@@ -104,9 +98,10 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 ### UI layout (current)
 
 - The left column is organized into three windows: **New note**, **Processes**, and **Help** (App hint + UI steps).
-- Each window has a **Show/Hide** control.
-- Pressing **Show/+** restores a **50/50** split with the Search window; pressing **Hide** widens Search.
+- Opening any left window restores a **50/50** split with the Search window; collapsing it widens Search.
 - The three windows are **mutually exclusive** (opening one closes the other two). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens.
+- The **Processes** card stays hidden unless there are failures.
+- Help uses **App hint** / **UI steps** buttons (no separate Help Show/Hide button).
 
 ## 5) Architecture and data flow
 
