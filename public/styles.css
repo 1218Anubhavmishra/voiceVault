@@ -542,17 +542,45 @@ input[type='file'] {
 .noteTitleRow {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
 }
 
-.noteTitle {
+.noteTitleCluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.noteTitleCluster .noteTitle {
   font-weight: 750;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.noteFileMeta {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex: 0 1 auto;
 }
 
 .noteMeta {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+.noteTitleStamp {
+  flex-shrink: 0;
+  text-align: right;
+  align-self: flex-start;
 }
 
 .noteBody {
@@ -776,6 +804,18 @@ input[type='file'] {
   outline: none;
 }
 
+/* Per-note processing priority (native select: closed + options where browser allows) */
+select.jobsSelect--priority {
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+}
+
+select.jobsSelect--priority option {
+  background: #ffffff;
+  color: #111111;
+}
+
 /* Ask mode dropdown: default (non-hover) colors only */
 #askMode {
   background: #ffffff;
@@ -789,20 +829,6 @@ input[type='file'] {
 }
 
 /* Note header + actions dropdown */
-.noteTitleRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.noteTitleRight {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
-}
-
 .noteActionsChevron {
   padding: 8px 10px;
   min-width: 42px;

@@ -294,6 +294,20 @@ function migrate(db) {
   }
 
   try {
+    const npsCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(note_processing_state)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!npsCols.has('cancel_requested')) {
+      db.exec(`ALTER TABLE note_processing_state ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0`);
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
     db.exec(`CREATE TABLE IF NOT EXISTS job_events (
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL,

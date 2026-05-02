@@ -89,7 +89,8 @@ def main():
             )
 
         out = "".join(parts).strip()
-        detected_language = getattr(info, "language", "") or ""
+        # `info.language` is set when model runs with `language=None` (auto-detect).
+        detected_language = str(getattr(info, "language", "") or "").strip()
 
         if args.json:
             sys.stdout.write(

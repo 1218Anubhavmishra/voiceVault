@@ -148,6 +148,106 @@ app.post('/api/debug/force-semantic', async (req, res) => {
   }
 });
 
+/** Persisted `notes.language`: explicit user hint wins; otherwise model detection. */
+function persistedNoteLanguage(hint, detected) {
+  const h = (hint ?? '').toString().trim();
+  const d = (detected ?? '').toString().trim();
+  return h || d;
+}
+
+/** Trim STT language fields; drop placeholders that should not be stored as a real locale. */
+function normalizeDetectedLanguage(raw) {
+  const s = (raw ?? '').toString().trim();
+  if (!s) return '';
+  const lower = s.toLowerCase();
+  if (lower === 'und' || lower === 'unknown' || lower === 'auto') return '';
+  return s;
+}
+
+/**
+ * Re-run STT to fill `notes.language` where it is empty (uses current pipeline: Whisper or Google Chirp via env).
+ * Body: { limit?: number, dry_run?: boolean, language_hint?: string } — hint is passed to transcribe (empty = auto-detect).
+ */
+app.post('/api/debug/backfill-note-languages', async (req, res) => {
+  const limit = clampInt(req.body?.limit, 1, 500, 25);
+  const dryRun = !!(req.body?.dry_run ?? false);
+  const languageHint = (req.body?.language_hint ?? '').toString().trim();
+
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, audio_blob_id, audio_mime, language
+         FROM notes
+         WHERE (language IS NULL OR trim(language) = '') AND status = 'ready'
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(limit);
+
+    if (dryRun) {
+      return res.json({
+        ok: true,
+        dry_run: true,
+        count: rows.length,
+        ids: rows.map((r) => r.id)
+      });
+    }
+
+    const model = process.env.WHISPER_LANG_MODEL || process.env.WHISPER_FAST_MODEL || 'tiny';
+    const results = [];
+
+    for (const row of rows) {
+      const noteId = (row.id ?? '').toString();
+      const blobId = (row.audio_blob_id ?? '').toString().trim();
+      if (!noteId || !blobId) {
+        results.push({ id: noteId, ok: false, error: 'missing_blob' });
+        continue;
+      }
+      const blobPath = path.join(blobsDir, blobId);
+      if (!fs.existsSync(blobPath)) {
+        results.push({ id: noteId, ok: false, error: 'blob_missing' });
+        continue;
+      }
+
+      const ext = mimeToExt(row.audio_mime) ?? 'webm';
+      const tmpPath = path.join(audioDir, `__langbf_${noteId}.${ext}`);
+      try {
+        fs.writeFileSync(tmpPath, fs.readFileSync(blobPath));
+        const out = await transcribeAudioFile(tmpPath, {
+          model,
+          language: languageHint || ''
+        });
+        const detected = (out?.language ?? '').toString().trim();
+        const hint = (row.language ?? '').toString().trim();
+        const finalLang = persistedNoteLanguage(hint, detected);
+        if (finalLang) {
+          const updatedAt = new Date().toISOString();
+          db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id`).run({
+            id: noteId,
+            language: finalLang,
+            updated_at: updatedAt
+          });
+          results.push({ id: noteId, ok: true, language: finalLang });
+        } else {
+          results.push({ id: noteId, ok: false, reason: 'no_language_from_model' });
+        }
+      } catch (e) {
+        results.push({ id: noteId, ok: false, error: (e?.message ?? String(e)).slice(0, 500) });
+      } finally {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    res.json({ ok: true, count: results.length, results });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message ?? String(e) });
+  }
+});
+
 app.get('/api/export.zip', (_req, res) => {
   const exportedAt = new Date().toISOString();
 
@@ -774,6 +874,96 @@ app.post('/api/notes/:id/resume-processing', (req, res) => {
   }
 });
 
+function requestStopNoteJobs(db, noteId) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO note_processing_state (note_id, paused, cancel_requested, updated_at)
+     VALUES (@note_id, 0, 1, @updated_at)
+     ON CONFLICT(note_id) DO UPDATE SET cancel_requested = 1, updated_at = excluded.updated_at`
+  ).run({ note_id: noteId, updated_at: now });
+  db.prepare(
+    `UPDATE ingestion_jobs
+     SET status = 'cancelled', last_error = 'Stopped', updated_at = @updated_at
+     WHERE note_id = @note_id AND status = 'queued'`
+  ).run({ note_id: noteId, updated_at: now });
+
+  const running = db.prepare(`SELECT id FROM ingestion_jobs WHERE note_id = ? AND status = 'running'`).get(noteId);
+  if (!running) {
+    db.prepare(
+      `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND status = 'processing'`
+    ).run({
+      id: noteId,
+      error: 'Stopped by user',
+      updated_at: now
+    });
+    db.prepare(`UPDATE note_processing_state SET cancel_requested = 0, updated_at = @updated_at WHERE note_id = @note_id`).run({
+      note_id: noteId,
+      updated_at: now
+    });
+  }
+}
+
+function consumeCancelIfRequested(db, noteId) {
+  const row = db.prepare(`SELECT COALESCE(cancel_requested, 0) AS c FROM note_processing_state WHERE note_id = ?`).get(noteId);
+  if (Number(row?.c ?? 0) !== 1) return false;
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND status = 'processing'`
+  ).run({
+    id: noteId,
+    error: 'Stopped by user',
+    updated_at: now
+  });
+  db.prepare(`UPDATE note_processing_state SET cancel_requested = 0, updated_at = @updated_at WHERE note_id = @note_id`).run({
+    note_id: noteId,
+    updated_at: now
+  });
+  return true;
+}
+
+function throwIfTranscribeCancelled(db, noteId) {
+  if (consumeCancelIfRequested(db, noteId)) {
+    const e = new Error('__VV_CANCEL__');
+    e.code = 'VV_CANCEL';
+    throw e;
+  }
+}
+
+/** Inline /retry has no running ingestion job: stop may set the note to `error` while clearing cancel — still must abort. */
+function throwIfRetryInlineCancelled(db, noteId) {
+  const row = db.prepare(`SELECT status FROM notes WHERE id = ?`).get(noteId);
+  if (!row || (row.status ?? '').toString() !== 'processing') {
+    const e = new Error('__VV_CANCEL__');
+    e.code = 'VV_CANCEL';
+    throw e;
+  }
+  throwIfTranscribeCancelled(db, noteId);
+}
+
+app.post('/api/notes/:id/stop-processing', (req, res) => {
+  const noteId = (req.params?.id ?? '').toString().trim();
+  if (!noteId) return res.status(400).json({ error: 'Missing id' });
+  try {
+    requestStopNoteJobs(db, noteId);
+    res.json({ ok: true, note_id: noteId });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.post('/api/processing/stop-all', (_req, res) => {
+  try {
+    const rows = db.prepare(`SELECT id FROM notes WHERE status = 'processing'`).all();
+    for (const r of rows) {
+      const id = (r?.id ?? '').toString().trim();
+      if (id) requestStopNoteJobs(db, id);
+    }
+    res.json({ ok: true, count: rows.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message ?? String(e) });
+  }
+});
+
 app.post('/api/notes/:id/priority', (req, res) => {
   const noteId = (req.params?.id ?? '').toString().trim();
   if (!noteId) return res.status(400).json({ error: 'Missing id' });
@@ -1069,7 +1259,7 @@ app.get('/api/notes', (req, res) => {
   if ((!qText || !ftsQ) && !hasTimeFilter) {
     rows = db
       .prepare(
-        `SELECT n.id, n.title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language, n.folder_id, n.is_favorite,
+        `SELECT n.id, n.title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
          LEFT JOIN note_processing_state nps ON nps.note_id = n.id
@@ -1081,7 +1271,7 @@ app.get('/api/notes', (req, res) => {
   } else if ((!qText || !ftsQ) && hasTimeFilter) {
     rows = db
       .prepare(
-        `SELECT n.id, n.title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language, n.folder_id, n.is_favorite,
+        `SELECT n.id, n.title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
          LEFT JOIN note_processing_state nps ON nps.note_id = n.id
@@ -1094,7 +1284,7 @@ app.get('/api/notes', (req, res) => {
     try {
       rows = db
         .prepare(
-          `SELECT n.id, n.title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language, n.folder_id, n.is_favorite,
+          `SELECT n.id, n.title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
                  COALESCE(nps.paused, 0) AS processing_paused,
                  bm25(notes_fts, 10.0, 1.0) AS rank
            FROM notes_fts
@@ -1113,7 +1303,7 @@ app.get('/api/notes', (req, res) => {
       const like = `%${effectiveQuery.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
       rows = db
         .prepare(
-          `SELECT n.id, n.title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language, n.folder_id, n.is_favorite,
+          `SELECT n.id, n.title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
                   COALESCE(nps.paused, 0) AS processing_paused
            FROM notes n
            LEFT JOIN note_processing_state nps ON nps.note_id = n.id
@@ -1540,7 +1730,7 @@ app.get('/api/blobs/:id', (req, res) => {
 app.post('/api/notes/:id/retry', (req, res) => {
   const { id } = req.params;
   const row = db
-    .prepare(`SELECT id, audio_filename, audio_mime, audio_blob FROM notes WHERE id = ?`)
+    .prepare(`SELECT id, audio_filename, audio_mime, audio_blob, language FROM notes WHERE id = ?`)
     .get(id);
   if (!row) return res.status(404).json({ error: 'Not found' });
 
@@ -1574,47 +1764,96 @@ app.post('/api/notes/:id/retry', (req, res) => {
      WHERE id = @id`
   ).run({ id, status: 'processing', error: '', updated_at: now });
 
+  // Resume any paused pipeline for this note and clear stop flags so queued workers can run; timer uses fresh updated_at.
+  try {
+    db.prepare(
+      `INSERT INTO note_processing_state (note_id, paused, cancel_requested, updated_at)
+       VALUES (@note_id, 0, 0, @updated_at)
+       ON CONFLICT(note_id) DO UPDATE SET paused = 0, cancel_requested = 0, updated_at = excluded.updated_at`
+    ).run({ note_id: id, updated_at: now });
+  } catch {
+    // ignore if columns mismatch old DB
+  }
+
   res.json({ ok: true, id, status: 'processing' });
 
   (async () => {
     try {
-      const out = await transcribeAudioFile(tmpPath, {
-        model: process.env.WHISPER_MODEL || 'medium',
-        language: process.env.WHISPER_LANGUAGE || ''
-      });
+      throwIfRetryInlineCancelled(db, id);
+
+      let cancelledDuringTranscribe = false;
+      const pollIv = setInterval(() => {
+        try {
+          throwIfRetryInlineCancelled(db, id);
+        } catch (e) {
+          if (e?.code === 'VV_CANCEL') cancelledDuringTranscribe = true;
+        }
+      }, 900);
+
+      try {
+        // Reprocess: always auto-detect language (do not use notes.language or WHISPER_LANGUAGE — they force a fixed lang and often yield empty "detection").
+        const out = await transcribeAudioFile(tmpPath, {
+          model: process.env.WHISPER_MODEL || 'medium',
+          language: ''
+        });
+
+        if (cancelledDuringTranscribe) {
+          const e = new Error('__VV_CANCEL__');
+          e.code = 'VV_CANCEL';
+          throw e;
+        }
+        throwIfRetryInlineCancelled(db, id);
 
       const transcript = formatTranscript(out?.transcript ?? out ?? '');
       const updatedAt = new Date().toISOString();
-      db.prepare(
+        const detectedLang = normalizeDetectedLanguage(out?.language);
+        const priorLang = (row.language ?? '').toString().trim();
+        const storedLang = (detectedLang || priorLang).toString().trim();
+
+        const r = db
+          .prepare(
         `UPDATE notes
          SET body = @body,
-             segments_json = @segments_json,
+                 segments_json = @segments_json,
+                 language = @language,
              status = @status,
              error = @error,
              updated_at = @updated_at
-         WHERE id = @id`
-      ).run({
+             WHERE id = @id AND status = 'processing'`
+          )
+          .run({
         id,
         body: transcript || '',
-        segments_json: safeStringifySegments(out?.segments),
+            segments_json: safeStringifySegments(out?.segments),
+            language: storedLang,
         status: 'ready',
         error: '',
         updated_at: updatedAt
       });
+        if (!r.changes) return;
     } catch (e) {
+        if (e?.code === 'VV_CANCEL' || e?.message === '__VV_CANCEL__') return;
+
       const updatedAt = new Date().toISOString();
       db.prepare(
         `UPDATE notes
          SET status = @status,
              error = @error,
              updated_at = @updated_at
-         WHERE id = @id`
+           WHERE id = @id AND status = 'processing'`
       ).run({
         id,
         status: 'error',
         error: (e?.message ?? String(e)).slice(0, 2000),
         updated_at: updatedAt
       });
+      } finally {
+        try {
+          clearInterval(pollIv);
+        } catch {
+          // ignore
+        }
+      }
     } finally {
       try {
         fs.unlinkSync(tmpPath);
@@ -2317,6 +2556,23 @@ async function processNextJob(db, { blobsDir }) {
       message: 'Job completed'
     });
   } catch (e) {
+    if (e?.code === 'VV_CANCEL' || e?.message === '__VV_CANCEL__') {
+      const u = new Date().toISOString();
+      db.prepare(
+        `UPDATE ingestion_jobs
+         SET status = 'cancelled', last_error = 'Stopped by user', locked_at = '', updated_at = @updated_at
+         WHERE id = @id`
+      ).run({ id: job.id, updated_at: u });
+      appendJobEvent(db, {
+        jobId: job.id,
+        noteId: job.note_id,
+        eventType: 'cancelled',
+        message: 'Transcription stopped',
+        meta: { job_type: (job.job_type ?? '').toString() }
+      });
+      return;
+    }
+
     const msg = (e?.message ?? String(e)).slice(0, 2000);
     const attempts = Number(job.attempts ?? 0) + 1;
     const maxAttempts = Number(job.max_attempts ?? 3) || 3;
@@ -2459,38 +2715,70 @@ async function runTranscribeJob(db, { noteId, blobsDir }) {
   fs.writeFileSync(tmpPath, fs.readFileSync(blobPath));
 
   try {
-    const out = await transcribeAudioFile(tmpPath, {
-      model: process.env.WHISPER_FAST_MODEL || process.env.WHISPER_LANG_MODEL || 'tiny',
-      language: (row.language ?? '').toString().trim() || process.env.WHISPER_LANGUAGE || ''
-    });
+    throwIfTranscribeCancelled(db, noteId);
 
-    let transcript = formatTranscript(out?.transcript ?? '');
-    const segmentsJson = safeStringifySegments(out?.segments);
-    await ensureNoteSegments(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
-    await ensureNoteChunks(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
+    let cancelledDuringTranscribe = false;
+    const pollIv = setInterval(() => {
+      try {
+        throwIfTranscribeCancelled(db, noteId);
+      } catch (e) {
+        if (e?.code === 'VV_CANCEL') cancelledDuringTranscribe = true;
+      }
+    }, 900);
 
-    const updatedAt = new Date().toISOString();
-    const finalTitle =
-      (row.title ?? '').toString().trim() ||
-      (transcript ? transcript.slice(0, 64).trim() : '') ||
-      'Untitled';
+    try {
+      const out = await transcribeAudioFile(tmpPath, {
+        model: process.env.WHISPER_FAST_MODEL || process.env.WHISPER_LANG_MODEL || 'tiny',
+        language: (row.language ?? '').toString().trim() || process.env.WHISPER_LANGUAGE || ''
+      });
 
-    db.prepare(
-      `UPDATE notes
-       SET title = @title,
-           body = @body,
-           segments_json = @segments_json,
-           status = 'ready',
-           error = '',
-           updated_at = @updated_at
-       WHERE id = @id`
-    ).run({
-      id: noteId,
-      title: finalTitle,
-      body: transcript || '',
-      segments_json: segmentsJson,
-      updated_at: updatedAt
-    });
+      if (cancelledDuringTranscribe) {
+        const e = new Error('__VV_CANCEL__');
+        e.code = 'VV_CANCEL';
+        throw e;
+      }
+      throwIfTranscribeCancelled(db, noteId);
+
+      let transcript = formatTranscript(out?.transcript ?? '');
+      const segmentsJson = safeStringifySegments(out?.segments);
+      await ensureNoteSegments(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
+      await ensureNoteChunks(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
+
+      const updatedAt = new Date().toISOString();
+      const finalTitle =
+        (row.title ?? '').toString().trim() ||
+        (transcript ? transcript.slice(0, 64).trim() : '') ||
+        'Untitled';
+
+      const hintLang = (row.language ?? '').toString().trim();
+      const detectedLang = (out?.language ?? '').toString().trim();
+      const storedLang = persistedNoteLanguage(hintLang, detectedLang);
+
+      db.prepare(
+        `UPDATE notes
+         SET title = @title,
+             body = @body,
+             segments_json = @segments_json,
+             language = @language,
+             status = 'ready',
+             error = '',
+             updated_at = @updated_at
+         WHERE id = @id AND status = 'processing'`
+      ).run({
+        id: noteId,
+        title: finalTitle,
+        body: transcript || '',
+        segments_json: segmentsJson,
+        language: storedLang,
+        updated_at: updatedAt
+      });
+    } finally {
+      try {
+        clearInterval(pollIv);
+      } catch {
+        // ignore
+      }
+    }
   } finally {
     try {
       fs.unlinkSync(tmpPath);
@@ -2529,6 +2817,17 @@ async function runBackfillWordsJob(db, { noteId, blobsDir }) {
     // Only refresh the derived tables that store words.
     await ensureNoteSegments(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
     await ensureNoteChunks(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
+
+    const hintLang = (row.language ?? '').toString().trim();
+    const detectedLang = (out?.language ?? '').toString().trim();
+    const storedLang = persistedNoteLanguage(hintLang, detectedLang);
+    if (!hintLang && storedLang) {
+      db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id`).run({
+        id: noteId,
+        language: storedLang,
+        updated_at: new Date().toISOString()
+      });
+    }
   } finally {
     try {
       fs.unlinkSync(tmpPath);

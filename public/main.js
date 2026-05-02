@@ -93,6 +93,48 @@ const MEDIARECORDER_TIMESLICE_MS = 100; // 0.1s chunks (recording only)
 const LIVE_LANG_DETECT_INTERVAL_MS = 2000; // practical Whisper polling cadence
 const LIVE_TRANSCRIBE_INTERVAL_MS = 3000; // live transcript preview cadence
 
+/** Wall-clock STT vs recording length (very approximate; GPU/local Whisper varies). Used only for UI estimate. */
+const PROCESSING_TIME_ESTIMATE_RATIO = 0.45;
+
+/** When we have no duration or byte size yet, show a neutral countdown instead of elapsed time. */
+const DEFAULT_PROCESSING_ESTIMATE_MS = 60_000;
+
+/** When the initial estimate reaches 0 but the note is still processing, add this much per bump so the UI keeps counting down. */
+const EXTEND_PROCESSING_ESTIMATE_CHUNK_MS = 45_000;
+
+/** @returns {number|null} estimated processing duration in ms, or null if unknown */
+function estimatedProcessingMsFromAudioDuration(durationMs) {
+  const d = Number(durationMs) || 0;
+  if (d <= 0) return null;
+  return Math.max(1000, Math.round(d * PROCESSING_TIME_ESTIMATE_RATIO));
+}
+
+/** Infer playback duration from blob size at nominal recording bitrate (matches recorder setup). */
+function audioDurationMsFromBytes(audioBytes) {
+  const b = Number(audioBytes) || 0;
+  if (b <= 0) return 0;
+  return Math.max(0, Math.round((b * 8 * 1000) / AUDIO_BITS_PER_SECOND));
+}
+
+/** Best-effort audio length: stored duration, else size-based guess. */
+function inferredAudioDurationMsForItem(item) {
+  const d = Number(item?.duration_ms ?? 0) || 0;
+  if (d > 0) return d;
+  return audioDurationMsFromBytes(item?.audio_bytes);
+}
+
+/**
+ * Wall-clock STT time to show as "X left" (replaces raw elapsed). Always a positive number.
+ */
+function totalProcessingEstimateMsForItem(item) {
+  const audioLen = inferredAudioDurationMsForItem(item);
+  if (audioLen > 0) {
+    const est = estimatedProcessingMsFromAudioDuration(audioLen);
+    if (est != null && est > 0) return est;
+  }
+  return DEFAULT_PROCESSING_ESTIMATE_MS;
+}
+
 let note = makeRecorderState();
 let query = makeRecorderState();
 
@@ -119,6 +161,87 @@ let semanticMode = true;
 // (Removed) Quick answer feature.
 let lastSearchItems = [];
 let lastSearchQuery = '';
+
+/** Per-note processing timer: pause freezes remaining (`frozenRemainingMs`) or elapsed (`frozenMs`); resume sets `baseIso`. */
+const procTimerByNoteId = new Map();
+
+/** Client-side extended budget when initial ETA hits 0 while still transcribing; keyed by noteId + data-processing-since. */
+const procEffectiveEstimateTotalByPass = new Map();
+
+function procPassKey(el, noteId) {
+  const iso = (el?.getAttribute?.('data-processing-since') ?? '').toString();
+  return `${(noteId ?? '').toString()}\t${iso}`;
+}
+
+function clearProcessingEstimateExtensionForNote(noteId) {
+  const p = `${(noteId ?? '').toString()}\t`;
+  for (const k of [...procEffectiveEstimateTotalByPass.keys()]) {
+    if (k.startsWith(p)) procEffectiveEstimateTotalByPass.delete(k);
+  }
+}
+
+/**
+ * Keeps `data-estimated-total-ms` in sync when the first estimate runs out but processing continues.
+ * @returns {{ remainingMs: number, effectiveTotalMs: number }}
+ */
+function resolveProcessingRemainingMs(el, noteId, elapsedMs) {
+  const passKey = procPassKey(el, noteId);
+  const attr = Number(el.getAttribute('data-estimated-total-ms') ?? '') || 0;
+  const floor = attr > 0 ? attr : DEFAULT_PROCESSING_ESTIMATE_MS;
+  const stored = procEffectiveEstimateTotalByPass.get(passKey);
+  let total = Math.max(floor, typeof stored === 'number' ? stored : 0);
+  if (typeof stored === 'number' && stored > floor) {
+    el.setAttribute('data-estimated-total-ms', String(stored));
+  }
+  let remainingMs = total - elapsedMs;
+  while (remainingMs <= 0) {
+    total += EXTEND_PROCESSING_ESTIMATE_CHUNK_MS;
+    procEffectiveEstimateTotalByPass.set(passKey, total);
+    el.setAttribute('data-estimated-total-ms', String(total));
+    remainingMs = total - elapsedMs;
+  }
+  return { remainingMs, effectiveTotalMs: total };
+}
+
+/** While any note in the current list is processing, poll so transcript appears when STT actually finishes (timer ≠ completion). */
+let processingNotesPollId = null;
+
+function syncProcessingNotesPoll(items) {
+  const busy = Array.isArray(items) && items.some((it) => (it?.status ?? '').toString() === 'processing');
+  if (!busy) {
+    if (processingNotesPollId != null) {
+      clearInterval(processingNotesPollId);
+      processingNotesPollId = null;
+    }
+    return;
+  }
+  if (processingNotesPollId != null) return;
+  processingNotesPollId = setInterval(() => {
+    refreshResults((qEl?.value ?? '').toString()).catch(() => {
+      // ignore
+    });
+  }, 2500);
+}
+
+function syncProcTimerFromServerPaused(noteId, processingSinceIso, procPaused, status, item) {
+  const id = (noteId ?? '').toString();
+  if ((status ?? '').toString() !== 'processing' || !procPaused || procTimerByNoteId.has(id)) return;
+  const base = Date.parse((processingSinceIso ?? '').toString()) || Date.now();
+  const elapsed = Math.max(0, Date.now() - base);
+  const est = totalProcessingEstimateMsForItem(item);
+  procTimerByNoteId.set(id, {
+    paused: true,
+    frozenRemainingMs: Math.max(0, est - elapsed),
+    estimatedMs: est
+  });
+}
+
+function timerAttrIsoForNote(noteId, processingSinceIso) {
+  const id = (noteId ?? '').toString();
+  const tm = procTimerByNoteId.get(id);
+  if (tm?.baseIso && !tm.paused) return tm.baseIso;
+  return (processingSinceIso ?? '').toString();
+}
 
 let advancedSearchOpen = ((localStorage.getItem('vv_adv_search_open') ?? '0').toString().trim() === '1');
 
@@ -407,6 +530,19 @@ refreshIngestionUi().catch(() => {
 });
 syncVisibility();
 startProcessingTimers();
+
+function beaconStopAllProcessing() {
+  try {
+    const url = `${window.location.origin}/api/processing/stop-all`;
+    const blob = new Blob(['{}'], { type: 'application/json' });
+    if (navigator.sendBeacon) navigator.sendBeacon(url, blob);
+    else fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true });
+  } catch {
+    // ignore
+  }
+}
+window.addEventListener('pagehide', beaconStopAllProcessing);
+window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
   // Saved searches + folder/tag filtering removed.
@@ -1144,6 +1280,7 @@ async function refreshResults(q = '') {
     const resp = await fetch(url.toString());
     if (!resp.ok) {
       resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
+      syncProcessingNotesPoll([]);
       return;
     }
     const data = await resp.json();
@@ -1160,6 +1297,7 @@ async function refreshResults(q = '') {
     const [semResp, ftsResp] = await Promise.all([fetch(urlSem.toString()), fetch(urlFts.toString())]);
     if (!semResp.ok && !ftsResp.ok) {
       resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
+      syncProcessingNotesPoll([]);
       return;
     }
     const semJson = await safeJson(semResp);
@@ -1208,6 +1346,7 @@ async function refreshResults(q = '') {
 
   if (items.length === 0) {
     resultsEl.innerHTML = `<div class="note"><div class="pill">No results</div></div>`;
+    syncProcessingNotesPoll([]);
     return;
   }
 
@@ -1219,6 +1358,8 @@ async function refreshResults(q = '') {
     });
   }
 
+  const hideReprocessWhileBusy = items.some((it) => (it?.status ?? '').toString() === 'processing');
+
   for (let idx = 0; idx < items.length; idx += 1) {
     const item = items[idx];
     const isLastNote = idx === items.length - 1;
@@ -1227,7 +1368,15 @@ async function refreshResults(q = '') {
 
     const created = new Date(item.created_at).toLocaleString();
     const createdAtIso = (item.created_at ?? '').toString();
+    const updatedAtIso = (item.updated_at ?? '').toString();
+    /** Server sets `updated_at` when reprocess/retry starts (`processing`); use for elapsed timer so it resets on each reprocess. */
+    const processingSinceIso = updatedAtIso || createdAtIso;
     const status = (item.status ?? '').toString();
+    if (status !== 'processing') {
+      const nid = (item.id ?? '').toString();
+      procTimerByNoteId.delete(nid);
+      clearProcessingEstimateExtensionForNote(nid);
+    }
     const errText = (item.error ?? '').toString().trim();
     const durationMs = Number(item.duration_ms ?? 0) || 0;
     const lang = (item.language ?? '').toString().trim();
@@ -1236,13 +1385,29 @@ async function refreshResults(q = '') {
     const title = escapeHtml(item.title || 'Untitled');
     const body = escapeHtml(item.body || '');
 
+    const metaParts = [];
+    if (durationMs > 0) metaParts.push(formatMs(durationMs));
+    if (lang) metaParts.push(lang);
+    const fileMetaHtml = metaParts.length
+      ? `<span class="noteFileMeta">${escapeHtml(metaParts.join(' · '))}</span>`
+      : '';
+
+    syncProcTimerFromServerPaused(item.id, processingSinceIso, procPaused, status, item);
+    const timerAttrIso = timerAttrIsoForNote(item.id, processingSinceIso);
+    const estProcMs = totalProcessingEstimateMsForItem(item);
+    const estProcAttr = String(estProcMs);
+    const sinceT = Date.parse(processingSinceIso) || Date.now();
+    const elapsed0 = Math.max(0, Date.now() - sinceT);
+    const initialProcTxt = `${formatMs(Math.max(0, estProcMs - elapsed0))} left`;
+
     note.innerHTML = `
       <div class="noteSummary">
         <div class="noteTitleRow">
-          <div class="noteTitle">${title}</div>
-          <div class="noteTitleRight">
-            <div class="noteMeta">${created}</div>
+          <div class="noteTitleCluster">
+            <div class="noteTitle">${title}</div>
+            ${fileMetaHtml}
           </div>
+          <div class="noteMeta noteTitleStamp">${created}</div>
         </div>
         <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
           <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
@@ -1251,16 +1416,18 @@ async function refreshResults(q = '') {
               ? status === 'ready'
                 ? `<span class="noteStatus ready">Ready</span>`
                 : status === 'processing'
-                  ? `<span class="noteStatus">Processing <span class="noteProcessingTime" data-created-at="${escapeHtml(
-                      createdAtIso
-                    )}">00:00</span></span>`
+                  ? `<span class="noteStatus">Processing <span class="noteProcessingTime" data-note-id="${escapeHtml(
+                      String(item.id)
+                    )}" data-processing-since="${escapeHtml(
+                      timerAttrIso
+                    )                    }" data-estimated-total-ms="${escapeHtml(estProcAttr)}" title="Approx. time left. If the first guess hits 0:00 and work is still running, the estimate is extended so you can see it is still processing.">${escapeHtml(
+                      initialProcTxt
+                    )}</span></span>`
                   : status === 'error'
                     ? `<span class="noteStatus err">Error</span>`
                     : `<span class="noteStatus">${escapeHtml(status)}</span>`
               : ''
           }
-          ${durationMs > 0 ? `<span class="pill noteLength">Length ${escapeHtml(formatMs(durationMs))}</span>` : ''}
-          ${lang ? `<span class="pill timerPill">Lang: ${escapeHtml(lang)}</span>` : ''}
           ${
             status === 'ready'
               ? `<button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
@@ -1271,6 +1438,11 @@ async function refreshResults(q = '') {
                        <button class="btn" data-play="${item.id}">Play Audio</button>
                        <button class="btn" data-dl-audio="${item.id}">Download Audio</button>
                        <button class="btn" data-dl-text="${item.id}">Download Transcript</button>
+                       ${
+                         hideReprocessWhileBusy
+                           ? ''
+                           : `<button class="btn" data-reprocess="${item.id}" type="button" title="Re-run transcription (e.g. fix missing language)">Reprocess</button>`
+                       }
                        <button class="btn" data-edit="${item.id}">Edit</button>
                        <button class="btn" data-delete="${item.id}">Delete Note</button>
                      </div>
@@ -1280,24 +1452,8 @@ async function refreshResults(q = '') {
           }
           ${
             status === 'processing'
-              ? `<button class="btn err" data-remove="${item.id}" title="Delete this note and stop processing">Remove</button>`
-              : ''
-          }
-          ${
-            status === 'processing'
-              ? `<button class="btn ${procPaused ? 'primary' : ''}" data-proc-toggle="${item.id}" type="button" title="Pause/resume jobs for this note">${procPaused ? 'Resume processing' : 'Pause processing'}</button>`
-              : ''
-          }
-          ${
-            status === 'processing'
-              ? `<label class="label" style="margin:0; display:flex; align-items:center; gap:8px">
-                  <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Priority</span>
-                  <select class="jobsSelect" data-proc-priority="${item.id}" style="min-width:120px">
-                    <option value="2">High</option>
-                    <option value="0">Normal</option>
-                    <option value="-2">Low</option>
-                  </select>
-                </label>`
+              ? `<button class="btn ${procPaused ? 'primary' : ''}" data-proc-toggle="${item.id}" type="button" title="Pause/resume jobs for this note">${procPaused ? 'Resume processing' : 'Pause processing'}</button>
+                 <button class="btn err" data-proc-stop="${item.id}" type="button" title="Stop transcription for this note">Stop</button>`
               : ''
           }
         </div>
@@ -1478,14 +1634,43 @@ async function refreshResults(q = '') {
       });
     });
 
-    // Per-note processing controls (pause/resume + priority for queued jobs).
+    // Per-note processing controls (pause/resume + stop + priority for queued jobs).
     const btnProcToggle = note.querySelector(`button[data-proc-toggle="${CSS.escape(String(item.id))}"]`);
     if (btnProcToggle) {
       btnProcToggle.addEventListener('click', async (e) => {
         e.preventDefault();
+        const nid = (item.id ?? '').toString();
         try {
-          const endpoint = procPaused ? 'resume-processing' : 'pause-processing';
-          await fetch(`/api/notes/${encodeURIComponent(item.id)}/${endpoint}`, { method: 'POST' });
+          if (procPaused) {
+            const st = procTimerByNoteId.get(nid);
+            const span = note.querySelector(`.noteProcessingTime[data-note-id="${CSS.escape(nid)}"]`);
+            const estTotal =
+              Number(span?.getAttribute('data-estimated-total-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
+            let elapsed = 0;
+            if (typeof st?.frozenRemainingMs === 'number') {
+              elapsed = Math.max(0, estTotal - st.frozenRemainingMs);
+            } else if (typeof st?.frozenMs === 'number') {
+              elapsed = st.frozenMs;
+            }
+            procTimerByNoteId.set(nid, {
+              paused: false,
+              baseIso: new Date(Date.now() - elapsed).toISOString()
+            });
+            await fetch(`/api/notes/${encodeURIComponent(nid)}/resume-processing`, { method: 'POST' });
+          } else {
+            const span = note.querySelector(`.noteProcessingTime[data-note-id="${CSS.escape(nid)}"]`);
+            const iso = span?.getAttribute('data-processing-since') || '';
+            const estTotal =
+              Number(span?.getAttribute('data-estimated-total-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
+            const t0 = Date.parse(iso) || Date.now();
+            const elapsed = Math.max(0, Date.now() - t0);
+            procTimerByNoteId.set(nid, {
+              paused: true,
+              frozenRemainingMs: Math.max(0, estTotal - elapsed),
+              estimatedMs: estTotal
+            });
+            await fetch(`/api/notes/${encodeURIComponent(nid)}/pause-processing`, { method: 'POST' });
+          }
           await refreshResults(qEl.value);
         } catch {
           // ignore
@@ -1493,19 +1678,24 @@ async function refreshResults(q = '') {
       });
     }
 
-    const procPrioritySel = note.querySelector(`select[data-proc-priority="${CSS.escape(String(item.id))}"]`);
-    if (procPrioritySel) {
-      procPrioritySel.value = '0';
-      procPrioritySel.addEventListener('change', async () => {
-        const p = Number.parseInt((procPrioritySel.value ?? '0').toString(), 10) || 0;
+    const btnProcStop = note.querySelector(`button[data-proc-stop="${CSS.escape(String(item.id))}"]`);
+    if (btnProcStop) {
+      btnProcStop.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const nid = (item.id ?? '').toString();
+        const ok = confirm('Stop transcription for this note? Queued work will be cancelled.');
+        if (!ok) return;
+        btnProcStop.disabled = true;
         try {
-          await fetch(`/api/notes/${encodeURIComponent(item.id)}/priority`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ priority: p })
-          });
+          await fetch(`/api/notes/${encodeURIComponent(nid)}/stop-processing`, { method: 'POST' });
+          procTimerByNoteId.delete(nid);
+          clearProcessingEstimateExtensionForNote(nid);
+          setStatus('Processing stopped');
+          await refreshResults(qEl.value);
         } catch {
           // ignore
+        } finally {
+          btnProcStop.disabled = false;
         }
       });
     }
@@ -1514,43 +1704,46 @@ async function refreshResults(q = '') {
 
     const btn = note.querySelector('button[data-play]');
     const audio = note.querySelector('audio');
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const src = `/api/notes/${encodeURIComponent(item.id)}/audio`;
-      const isPlaying = !audio.paused && !audio.ended && audio.currentTime > 0;
-      if (isPlaying) {
-        try {
-          audio.pause();
-          audio.currentTime = 0;
-        } catch {
-          // ignore
+    // Ready notes expose Play/Downloads/Edit in the summary actions; processing/error notes omit those controls.
+    if (btn && audio) {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const src = `/api/notes/${encodeURIComponent(item.id)}/audio`;
+        const isPlaying = !audio.paused && !audio.ended && audio.currentTime > 0;
+        if (isPlaying) {
+          try {
+            audio.pause();
+            audio.currentTime = 0;
+          } catch {
+            // ignore
+          }
+          btn.textContent = 'Play Audio';
+          return;
         }
+
+        audio.hidden = false;
+        if (audio.src !== new URL(src, window.location.origin).toString()) {
+          audio.src = src;
+        }
+        try {
+          try {
+            audio.playbackRate = playbackRate || 1;
+          } catch {
+            // ignore
+          }
+          await audio.play();
+          // If segments are rendered (word spans exist), follow along while playing full audio.
+          startWordFollowAll(audio, note.querySelector('.noteBody'));
+          btn.textContent = 'Stop Audio';
+        } catch {
+          // ignore autoplay restrictions
+        }
+      });
+
+      audio.addEventListener('ended', () => {
         btn.textContent = 'Play Audio';
-        return;
-      }
-
-      audio.hidden = false;
-      if (audio.src !== new URL(src, window.location.origin).toString()) {
-        audio.src = src;
-      }
-      try {
-        try {
-          audio.playbackRate = playbackRate || 1;
-        } catch {
-          // ignore
-        }
-        await audio.play();
-        // If segments are rendered (word spans exist), follow along while playing full audio.
-        startWordFollowAll(audio, note.querySelector('.noteBody'));
-        btn.textContent = 'Stop Audio';
-      } catch {
-        // ignore autoplay restrictions
-      }
-    });
-
-    audio.addEventListener('ended', () => {
-      btn.textContent = 'Play Audio';
-    });
+      });
+    }
 
     const editBox = note.querySelector('.editBox');
     const transcriptBox = note.querySelector('.noteTranscript');
@@ -1572,40 +1765,42 @@ async function refreshResults(q = '') {
     };
     syncEditMenuBtn();
 
-    btnEdit.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      // Close the actions dropdown when entering edit mode.
-      if (actionsMenu && !actionsMenu.hidden) {
-        actionsMenu.hidden = true;
-        if (btnActionsToggle) btnActionsToggle.textContent = '▼';
-      }
-      // Editing UI lives inside details; ensure it's visible.
-      if (details?.hidden) {
-        details.hidden = false;
-        note.classList.add('noteExpanded');
-        note.classList.remove('noteCollapsed');
-        if (btnToggle) btnToggle.textContent = 'Collapse';
-        expandedNoteIds.add(item.id);
-        scheduleExpandedNoteScroll(note, isLastNote);
-      }
-      const willShow = !!editBox.hidden;
-      editBox.hidden = !willShow;
-      if (transcriptBox) transcriptBox.hidden = willShow;
-      note.classList.toggle('isEditing', willShow);
-      syncEditMenuBtn();
-      if (willShow) {
-        try {
-          const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
-          const full = await safeJson(resp);
-          if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
-          editTitle.value = (full?.title ?? item.title ?? '').toString();
-          editBody.value = (full?.body ?? item.body ?? '').toString();
-        } catch {
-          editTitle.value = (item.title ?? '').toString();
-          editBody.value = (item.body ?? '').toString();
+    if (btnEdit) {
+      btnEdit.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        // Close the actions dropdown when entering edit mode.
+        if (actionsMenu && !actionsMenu.hidden) {
+          actionsMenu.hidden = true;
+          if (btnActionsToggle) btnActionsToggle.textContent = '▼';
         }
-      }
-    });
+        // Editing UI lives inside details; ensure it's visible.
+        if (details?.hidden) {
+          details.hidden = false;
+          note.classList.add('noteExpanded');
+          note.classList.remove('noteCollapsed');
+          if (btnToggle) btnToggle.textContent = 'Collapse';
+          expandedNoteIds.add(item.id);
+          scheduleExpandedNoteScroll(note, isLastNote);
+        }
+        const willShow = !!editBox.hidden;
+        editBox.hidden = !willShow;
+        if (transcriptBox) transcriptBox.hidden = willShow;
+        note.classList.toggle('isEditing', willShow);
+        syncEditMenuBtn();
+        if (willShow) {
+          try {
+            const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
+            const full = await safeJson(resp);
+            if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
+            editTitle.value = (full?.title ?? item.title ?? '').toString();
+            editBody.value = (full?.body ?? item.body ?? '').toString();
+          } catch {
+            editTitle.value = (item.title ?? '').toString();
+            editBody.value = (item.body ?? '').toString();
+          }
+        }
+      });
+    }
 
     btnCancel.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1645,27 +1840,29 @@ async function refreshResults(q = '') {
       }
     });
 
-    btnDelete.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const ok = confirm('Delete this note permanently?');
-      if (!ok) return;
-      btnDelete.disabled = true;
-      setStatus('Deleting…');
-      try {
-        const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
-          method: 'DELETE'
-        });
-        if (!resp.ok) {
-          const msg = await safeJson(resp);
-          throw new Error(msg?.error || `Delete failed (${resp.status})`);
+    if (btnDelete) {
+      btnDelete.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const ok = confirm('Delete this note permanently?');
+        if (!ok) return;
+        btnDelete.disabled = true;
+        setStatus('Deleting…');
+        try {
+          const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
+            method: 'DELETE'
+          });
+          if (!resp.ok) {
+            const msg = await safeJson(resp);
+            throw new Error(msg?.error || `Delete failed (${resp.status})`);
+          }
+          setStatus('Deleted');
+          await refreshResults(qEl.value);
+        } catch (e) {
+          setStatus(`Delete error: ${e?.message ?? e}`, true);
+          btnDelete.disabled = false;
         }
-        setStatus('Deleted');
-        await refreshResults(qEl.value);
-      } catch (e) {
-        setStatus(`Delete error: ${e?.message ?? e}`, true);
-        btnDelete.disabled = false;
-      }
-    });
+      });
+    }
 
     btnRemove?.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1689,29 +1886,62 @@ async function refreshResults(q = '') {
       }
     });
 
-    btnDlAudio.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const a = document.createElement('a');
-      a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
-      a.download = `${sanitizeFilename((item.title || 'recording').toString()) || 'recording'}.webm`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    });
+    if (btnDlAudio) {
+      btnDlAudio.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const a = document.createElement('a');
+        a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
+        a.download = `${sanitizeFilename((item.title || 'recording').toString()) || 'recording'}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+    }
 
-    btnDlText.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const text = (item.body ?? '').toString();
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${sanitizeFilename((item.title || 'transcript').toString()) || 'transcript'}.txt`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
+    const btnReprocess = note.querySelector('button[data-reprocess]');
+    if (btnReprocess) {
+      btnReprocess.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const ok = confirm(
+          'Re-run transcription on the saved audio? The transcript, word timing, and detected language will refresh. This may take a minute.'
+        );
+        if (!ok) return;
+        btnReprocess.disabled = true;
+        closeAllActionMenus();
+        if (btnActionsToggle) btnActionsToggle.textContent = '▼';
+        setStatus('Reprocessing note…');
+        try {
+          const nid = (item.id ?? '').toString();
+          procTimerByNoteId.delete(nid);
+          clearProcessingEstimateExtensionForNote(nid);
+          const resp = await fetch(`/api/notes/${encodeURIComponent(nid)}/retry`, { method: 'POST' });
+          const j = await safeJson(resp);
+          if (!resp.ok) throw new Error(j?.error || `Reprocess failed (${resp.status})`);
+          setStatus('Reprocessing…');
+          await refreshResults(qEl.value);
+        } catch (err) {
+          setStatus(`Reprocess error: ${err?.message ?? err}`, true);
+        } finally {
+          btnReprocess.disabled = false;
+        }
+      });
+    }
+
+    if (btnDlText) {
+      btnDlText.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const text = (item.body ?? '').toString();
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${sanitizeFilename((item.title || 'transcript').toString()) || 'transcript'}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+    }
 
     resultsEl.appendChild(note);
   }
@@ -1719,6 +1949,8 @@ async function refreshResults(q = '') {
   requestAnimationFrame(() => {
     resultsEl.scrollTop = prevScroll;
   });
+
+  syncProcessingNotesPoll(items);
 }
 
 // Removed: Quick answer button + handler.
@@ -2297,14 +2529,34 @@ function updateScrollHint(transcriptBox, hintEl) {
 
 function startProcessingTimers() {
   setInterval(() => {
-    const els = document.querySelectorAll('.noteProcessingTime[data-created-at]');
+    const els = document.querySelectorAll('.noteProcessingTime[data-processing-since]');
     const now = Date.now();
     for (const el of els) {
-      const iso = el.getAttribute('data-created-at') || '';
+      const id = (el.getAttribute('data-note-id') ?? '').toString();
+      const tm = id ? procTimerByNoteId.get(id) : null;
+
+      if (tm?.paused) {
+        let remainingMs = Infinity;
+        if (typeof tm.frozenRemainingMs === 'number') {
+          remainingMs = tm.frozenRemainingMs;
+          el.textContent = `${formatMs(Math.max(0, remainingMs))} left`;
+        } else if (typeof tm.frozenMs === 'number') {
+          const passKey = procPassKey(el, id);
+          const attr = Number(el.getAttribute('data-estimated-total-ms') ?? '') || 0;
+          const floor = attr > 0 ? attr : DEFAULT_PROCESSING_ESTIMATE_MS;
+          const cap = Math.max(floor, procEffectiveEstimateTotalByPass.get(passKey) ?? 0);
+          remainingMs = Math.max(0, cap - tm.frozenMs);
+          el.textContent = `${formatMs(remainingMs)} left`;
+        }
+        continue;
+      }
+
+      const iso = el.getAttribute('data-processing-since') || '';
       const t = Date.parse(iso);
       if (!Number.isFinite(t)) continue;
-      const ms = Math.max(0, now - t);
-      el.textContent = formatMs(ms);
+      const elapsed = Math.max(0, now - t);
+      const { remainingMs } = resolveProcessingRemainingMs(el, id, elapsed);
+      el.textContent = `${formatMs(remainingMs)} left`;
     }
   }, 1000);
 }
@@ -2996,6 +3248,12 @@ function renderBitrateHint() {
         <strong>Search</strong> blends keyword matching with local <strong>semantic</strong> retrieval over segments. Type normally or use filters like <strong>today</strong>, <strong>yesterday</strong>, or a calendar date.
       </div>
       <div style="margin-top:6px">
+        <strong>Processing:</strong> the note shows an <strong>approximate time left</strong> (from clip length). If it reaches <strong>0:00</strong> and transcription is still running, the estimate <strong>extends</strong> so you can see work is ongoing. The results list <strong>refreshes</strong> when a note becomes Ready. <strong>Pause</strong> / <strong>Stop</strong> apply only to that note.
+      </div>
+      <div style="margin-top:6px">
+        <strong>Reprocess</strong> (Ready → ▼) runs transcription again with <strong>automatic language detection</strong>. While <strong>any</strong> note is still processing, Reprocess is hidden on other notes to avoid overlapping runs.
+      </div>
+      <div style="margin-top:6px">
         <strong>Layout:</strong> <strong>Search</strong> and results are at the top. <strong>New note</strong> and <strong>Help</strong> open from <strong>+</strong> / <strong>Help</strong> under that column (panels sit above the buttons). <strong>Processes</strong> appears beside Search when jobs need attention.
       </div>
       <div style="margin-top:6px">
@@ -3016,13 +3274,13 @@ function renderBitrateHint() {
         3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>. Edit the <strong>Transcript preview</strong> after it finishes processing.
       </div>
       <div style="margin-top:4px">
-        4) Tap <strong>Save</strong>. Status moves through <strong>Processing</strong> → <strong>Ready</strong> when indexing completes.
+        4) Tap <strong>Save</strong>. Status moves through <strong>Processing</strong> → <strong>Ready</strong>. While processing, an <strong>approximate time left</strong> is shown; if it hits <strong>0:00</strong> early, the estimate <strong>extends</strong> until work finishes. Use <strong>Pause processing</strong> / <strong>Stop</strong> only for that note.
       </div>
       <div style="margin-top:4px">
         5) <strong>Search:</strong> type and press <strong>Enter</strong>, or <strong>Record search</strong> → <strong>Stop</strong> → <strong>Search</strong>.
       </div>
       <div style="margin-top:4px">
-        6) In results, <strong>Expand</strong> a note for transcript + audio. Use <strong>▼</strong> for <strong>Play Audio</strong>, downloads, <strong>Edit</strong>, <strong>Delete</strong>. (<strong>Edit</strong> hides in that menu while you’re already editing that note.)
+        6) In results, <strong>Expand</strong> a note for transcript + audio. When <strong>Ready</strong>, <strong>▼</strong> includes <strong>Reprocess</strong> (re-run transcription + language detection), <strong>Play Audio</strong>, downloads, <strong>Edit</strong>, <strong>Delete</strong>. While <strong>another</strong> note is still processing, <strong>Reprocess</strong> is hidden on other notes. (<strong>Edit</strong> hides in that menu while you’re already editing that note.)
       </div>
       <div style="margin-top:4px">
         7) Expanded notes: per-segment <strong>Play</strong> for clips; adjust <strong>Speed</strong> / <strong>Loop segment</strong> as needed. Expanding scrolls the row into view; only the <strong>last</strong> result uses a full scroll to the bottom of the page.

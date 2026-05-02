@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { transcribeWithGoogleChirp } from './transcribe-google-chirp.js';
+
+function sttProvider() {
+  return (process.env.VOICEVAULT_STT_PROVIDER ?? '').toString().trim().toLowerCase();
+}
 
 export async function transcribeAudioFile(audioPath, { model = 'small', language = '' } = {}) {
   const scriptPath = path.resolve(process.cwd(), 'server', 'transcribe.py');
@@ -50,10 +55,28 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
     // If ffmpeg preprocessing fails, fall back to original path.
   }
 
+  const audioForStt = fs.existsSync(preprocessedPath) ? preprocessedPath : audioPath;
+
+  if (sttProvider() === 'google') {
+    try {
+      return await transcribeWithGoogleChirp(audioForStt, { language });
+    } catch (e) {
+      const err = new Error(e?.message ?? String(e));
+      err.code = 'TRANSCRIBE_FAILED';
+      throw err;
+    } finally {
+      try {
+        if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   const args = [
     scriptPath,
     '--audio',
-    fs.existsSync(preprocessedPath) ? preprocessedPath : audioPath,
+    audioForStt,
     '--model',
     model,
     '--json'
