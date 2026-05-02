@@ -2984,24 +2984,22 @@ function renderBitrateHint() {
   const uiStepsBox = document.getElementById('uiStepsBox');
   if (aboutBox) {
     aboutBox.innerHTML = `
-      <div>Audio is being recorded at <strong>${kbps} kbps</strong>.</div>
-      <div style="margin-top:6px">Maximum audio length limit is <strong>around 100 minutes</strong>.</div>
-      <div style="margin-top:6px">This app uses <strong>Whisper</strong> model for transcription.</div>
+      <div>Audio is recorded at <strong>${kbps} kbps</strong>. Maximum length is about <strong>100 minutes</strong> per note.</div>
+      <div style="margin-top:6px">Transcription uses a local <strong>Whisper</strong>-style pipeline; saving runs <strong>offline</strong> indexing for search.</div>
       <div style="margin-top:6px">
-        <strong>Fast mode</strong> is enabled by default (green dot = on). Turn it off for higher quality (slower).
+        <strong>Fast mode</strong> (green dot) trades a little accuracy for speed — turn it off in New note when you want higher quality.
       </div>
       <div style="margin-top:6px">
-        When you save, voiceVault will <strong>transcribe offline</strong> and use the transcript for cross-note search.
+        Notes store <strong>timestamped segments</strong>; use each segment’s <strong>Play</strong> for a clip, or full <strong>Play Audio</strong> for the whole file.
       </div>
       <div style="margin-top:6px">
-        Saved notes include <strong>timestamped segments</strong> — use each segment’s <strong>Play</strong> button to play only that section.
+        <strong>Search</strong> blends keyword matching with local <strong>semantic</strong> retrieval over segments. Type normally or use filters like <strong>today</strong>, <strong>yesterday</strong>, or a calendar date.
       </div>
       <div style="margin-top:6px">
-        Search supports <strong>natural language</strong> (offline rewrite) and <strong>date/time filters</strong> like <strong>today</strong>, <strong>yesterday</strong>,
-        <strong>last 3 days</strong>, or <strong>2026-04-22</strong>.
+        <strong>Layout:</strong> <strong>Search</strong> and results are at the top. <strong>New note</strong> and <strong>Help</strong> open from <strong>+</strong> / <strong>Help</strong> under that column (panels sit above the buttons). <strong>Processes</strong> appears beside Search when jobs need attention.
       </div>
       <div style="margin-top:6px">
-        Search is <strong>hybrid</strong> by default: it blends keyword matching with local semantic retrieval over transcript segments.
+        In Help, <strong>App hint</strong> and <strong>UI steps</strong> only show one at a time; <strong>Hide …</strong> on either closes the whole Help card.
       </div>
     `.trim();
   }
@@ -3009,42 +3007,34 @@ function renderBitrateHint() {
   if (uiStepsBox) {
     uiStepsBox.innerHTML = `
       <div style="margin-top:6px">
-        1) Enter/confirm the Title (auto-filled as Recording_YYYY-MM-DD_HH-MM-SS)
+        1) Tap <strong>+</strong> (under Search) to open <strong>New note</strong>. Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> — change it if you like.
       </div>
       <div style="margin-top:4px">
-        2) (Optional) Upload audio: click <strong>Choose file</strong> and select an audio file
+        2) Optional: <strong>Choose file</strong> to upload audio, or tap <strong>Record note</strong> / <strong>Record with fast mode</strong>, speak, then <strong>Stop</strong>.
       </div>
       <div style="margin-top:4px">
-        3) Or record: click <strong>Record note</strong> (or <strong>Record with fast mode</strong>) → speak → click <strong>Stop</strong>
+        3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>. Edit the <strong>Transcript preview</strong> after it finishes processing.
       </div>
       <div style="margin-top:4px">
-        4) (Optional) Choose <strong>Language</strong> (or keep <strong>Auto-detect</strong>)
+        4) Tap <strong>Save</strong>. Status moves through <strong>Processing</strong> → <strong>Ready</strong> when indexing completes.
       </div>
       <div style="margin-top:4px">
-        5) Review <strong>Transcript preview (editable)</strong> (wait for <strong>Processing…</strong>; scroll/edit after Stop)
+        5) <strong>Search:</strong> type and press <strong>Enter</strong>, or <strong>Record search</strong> → <strong>Stop</strong> → <strong>Search</strong>.
       </div>
       <div style="margin-top:4px">
-        6) Click <strong>Save</strong> (note will show Processing → Ready)
+        6) In results, <strong>Expand</strong> a note for transcript + audio. Use <strong>▼</strong> for <strong>Play Audio</strong>, downloads, <strong>Edit</strong>, <strong>Delete</strong>. (<strong>Edit</strong> hides in that menu while you’re already editing that note.)
       </div>
       <div style="margin-top:4px">
-        7) To find a note: type in Search and press <strong>Enter</strong>, or use <strong>Record search</strong> → <strong>Stop</strong> → <strong>Search</strong>
+        7) Expanded notes: per-segment <strong>Play</strong> for clips; adjust <strong>Speed</strong> / <strong>Loop segment</strong> as needed. Expanding scrolls the row into view; only the <strong>last</strong> result uses a full scroll to the bottom of the page.
       </div>
       <div style="margin-top:4px">
-        8) In results: use <strong>Expand</strong> to see transcript + playback. Use the <strong>▼</strong> menu for actions (download, edit, delete).
+        8) Tap <strong>Help</strong> for this panel. <strong>App hint</strong> vs <strong>UI steps</strong> toggle each other off; <strong>Hide …</strong> closes Help entirely.
       </div>
       <div style="margin-top:4px">
-        9) In expanded notes: use per-segment <strong>Play</strong> for clipped playback; use <strong>Play Audio</strong> for full audio.
+        9) If <strong>Processes</strong> appears beside Search (failures/jobs), use <strong>Show</strong>/<strong>Hide</strong> there — it does not close New note or Help.
       </div>
       <div style="margin-top:4px">
-        10) If a note gets stuck on <strong>Processing</strong>, use <strong>Remove</strong> to delete it.
-      </div>
-      <div style="margin-top:4px">
-        Tip: You can ask time-filtered queries like <strong>"recording yesterday"</strong> or <strong>"between 2026-04-20 and 2026-04-22 upload"</strong>.
-      </div>
-      <div style="margin-top:10px; border-top:1px dotted rgba(255,255,255,0.16); padding-top:10px">
-        Layout: <strong>Search</strong> and results stay at the top. Use <strong>+</strong> and <strong>Help</strong> at the bottom of that column to open the panels — they expand <strong>above</strong> those buttons. Each quick button hides while its panel is open (close with <strong>×</strong> on the card).
-        Opening <strong>Help</strong> expands <strong>App hint</strong> automatically. <strong>App hint</strong> and <strong>UI steps</strong> are mutually exclusive. Clicking <strong>Hide App hint</strong> or <strong>Hide UI steps</strong> closes the whole Help panel.
-        <strong>Processes</strong> is independent and opens beside Search when it appears.
+        Tip: Try queries like <strong>yesterday</strong> or <strong>between 2026-04-20 and 2026-04-22</strong> with your search text.
       </div>
     `.trim();
   }

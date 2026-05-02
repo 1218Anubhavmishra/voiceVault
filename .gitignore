@@ -13,6 +13,10 @@ apikeys.txt
 *.txt
 !server/requirements.txt
 
+# Local edit logs (do not commit)
+Edits_made.md
+Edits_today.md
+
 # Local tooling
 .claude/
 node_modules/
