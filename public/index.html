@@ -18,12 +18,98 @@
         <div class="status" id="status"></div>
       </header>
 
-      <main class="grid" id="mainGrid">
-        <div class="leftCol" id="leftCol">
-          <section class="card" id="newNoteCard">
+      <main class="grid mainGrid--dock" id="mainGrid">
+        <!-- Processes only: shown beside Search when the Processes card is visible -->
+        <div class="leftCol" id="leftCol" hidden>
+            <!-- Hidden until JS confirms job/note failures (fail-safe if summary fetch fails on some browsers) -->
+            <section class="card miniCard" id="processCard" hidden>
+              <div class="cardHeaderRow">
+                <h2 style="margin:0; font-size:14px">Processes</h2>
+                <button id="btnProcToggle" class="btn" type="button">Show</button>
+              </div>
+              <div id="procBody">
+                <div class="jobsRow">
+                  <span class="pill" id="jobsPausedPill" hidden>Paused</span>
+                  <button id="btnIngestPause" class="btn err" type="button">Pause</button>
+                  <button id="btnIngestResume" class="btn" type="button" hidden>Resume</button>
+                </div>
+                <div class="jobsSummary" id="jobsSummary" hidden></div>
+                <div class="jobsFilters" id="jobsFilters" hidden>
+                  <select id="jobsStatusFilter" class="jobsSelect">
+                    <option value="">All statuses</option>
+                    <option value="queued">Queued</option>
+                    <option value="running">Running</option>
+                    <option value="done">Done</option>
+                    <option value="error">Error</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
+                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Backoff base (sec)</span>
+                    <input
+                      id="jobsBackoffBaseSec"
+                      class="input"
+                      style="width:96px; padding:8px 10px"
+                      type="number"
+                      min="1"
+                      max="60"
+                      value="5"
+                    />
+                  </label>
+                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
+                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Backoff max (sec)</span>
+                    <input
+                      id="jobsBackoffMaxSec"
+                      class="input"
+                      style="width:110px; padding:8px 10px"
+                      type="number"
+                      min="5"
+                      max="3600"
+                      value="300"
+                    />
+                  </label>
+                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
+                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Max parallel</span>
+                    <input
+                      id="jobsMaxParallel"
+                      class="input"
+                      style="width:90px; padding:8px 10px"
+                      type="number"
+                      min="1"
+                      max="6"
+                      value="1"
+                    />
+                  </label>
+                  <button id="btnJobsApply" class="btn" type="button">Apply</button>
+                  <button id="btnJobsRetryAll" class="btn" type="button">Retry all errors</button>
+                  <button id="btnJobsUnlockNow" class="btn err" type="button">Unlock stale</button>
+                </div>
+                <div class="jobsList" id="jobsList" hidden></div>
+              </div>
+            </section>
+        </div>
+
+        <div class="rightStack" id="rightStack">
+          <section class="card" id="searchCard">
+            <h2>Search</h2>
+            <div class="row">
+              <input id="q" class="input" placeholder="Transcript of your search audio will appear here…" />
+            </div>
+            <div class="row">
+              <button id="btnRecordQuery" class="btn primary">Record search</button>
+              <button id="btnStopQuery" class="btn" disabled hidden>Stop</button>
+              <button id="btnSearch" class="btn" disabled hidden>Search</button>
+              <span class="pill timerPill" id="queryTimer" hidden>00:00</span>
+            </div>
+            <div class="row">
+              <audio id="previewQuery" controls class="audio" hidden></audio>
+            </div>
+            <div id="results" class="results"></div>
+          </section>
+
+          <section class="card vvDockPanel" id="newNoteCard" hidden>
             <div class="cardHeaderRow">
               <h2 style="margin:0">New note</h2>
-              <button id="btnNewNoteToggle" class="btn" type="button">x</button>
+              <button id="btnNewNoteToggle" class="btn" type="button" aria-label="Close New note">×</button>
             </div>
 
             <div id="newNoteBody">
@@ -102,105 +188,26 @@
             </div>
           </section>
 
-          <div class="sideWindows" id="sideWindows">
-            <!-- Hidden until JS confirms job/note failures (fail-safe if summary fetch fails on some browsers) -->
-            <section class="card miniCard" id="processCard" hidden>
-              <div class="cardHeaderRow">
-                <h2 style="margin:0; font-size:14px">Processes</h2>
-                <button id="btnProcToggle" class="btn" type="button">Hide</button>
+          <section class="card miniCard vvDockPanel" id="helpCard" hidden>
+            <div class="cardHeaderRow">
+              <h2 style="margin:0; font-size:14px">Help</h2>
+              <button id="btnHelpClose" class="btn" type="button" aria-label="Close Help">×</button>
+            </div>
+            <div id="helpBody">
+              <div class="row helpButtonsRow" style="margin-bottom:0">
+                <button class="btn" id="aboutToggle" type="button">App hint</button>
+                <button class="btn" id="uiStepsToggle" type="button">UI steps</button>
               </div>
-              <div id="procBody">
-                <div class="jobsRow">
-                  <span class="pill" id="jobsPausedPill" hidden>Paused</span>
-                  <button id="btnIngestPause" class="btn err" type="button">Pause</button>
-                  <button id="btnIngestResume" class="btn" type="button" hidden>Resume</button>
-                </div>
-                <div class="jobsSummary" id="jobsSummary" hidden></div>
-                <div class="jobsFilters" id="jobsFilters" hidden>
-                  <select id="jobsStatusFilter" class="jobsSelect">
-                    <option value="">All statuses</option>
-                    <option value="queued">Queued</option>
-                    <option value="running">Running</option>
-                    <option value="done">Done</option>
-                    <option value="error">Error</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
-                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Backoff base (sec)</span>
-                    <input
-                      id="jobsBackoffBaseSec"
-                      class="input"
-                      style="width:96px; padding:8px 10px"
-                      type="number"
-                      min="1"
-                      max="60"
-                      value="5"
-                    />
-                  </label>
-                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
-                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Backoff max (sec)</span>
-                    <input
-                      id="jobsBackoffMaxSec"
-                      class="input"
-                      style="width:110px; padding:8px 10px"
-                      type="number"
-                      min="5"
-                      max="3600"
-                      value="300"
-                    />
-                  </label>
-                  <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
-                    <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Max parallel</span>
-                    <input
-                      id="jobsMaxParallel"
-                      class="input"
-                      style="width:90px; padding:8px 10px"
-                      type="number"
-                      min="1"
-                      max="6"
-                      value="1"
-                    />
-                  </label>
-                  <button id="btnJobsApply" class="btn" type="button">Apply</button>
-                  <button id="btnJobsRetryAll" class="btn" type="button">Retry all errors</button>
-                  <button id="btnJobsUnlockNow" class="btn err" type="button">Unlock stale</button>
-                </div>
-                <div class="jobsList" id="jobsList" hidden></div>
-              </div>
-            </section>
+              <div id="aboutBox" style="margin-top:10px" hidden></div>
+              <div id="uiStepsBox" style="margin-top:10px" hidden></div>
+            </div>
+          </section>
 
-            <section class="card miniCard" id="helpCard">
-              <div class="cardHeaderRow">
-                <h2 style="margin:0; font-size:14px">Help</h2>
-              </div>
-              <div id="helpBody">
-                <div class="row helpButtonsRow" style="margin-bottom:0">
-                  <button class="btn" id="aboutToggle" type="button">App hint</button>
-                  <button class="btn" id="uiStepsToggle" type="button">UI steps</button>
-                </div>
-                <div id="aboutBox" style="margin-top:10px" hidden></div>
-                <div id="uiStepsBox" style="margin-top:10px" hidden></div>
-              </div>
-            </section>
+          <div class="floatDock" id="floatDock" role="toolbar" aria-label="Quick actions">
+            <button type="button" class="btn floatDockBtn" id="btnFloatNewNote" title="Toggle New note">+</button>
+            <button type="button" class="btn floatDockBtn floatDockBtnHelp" id="btnFloatHelp" title="Toggle Help">Help</button>
           </div>
         </div>
-
-        <section class="card" id="searchCard">
-          <h2>Search</h2>
-          <div class="row">
-            <input id="q" class="input" placeholder="Transcript of your search audio will appear here…" />
-          </div>
-          <div class="row">
-            <button id="btnRecordQuery" class="btn primary">Record search</button>
-            <button id="btnStopQuery" class="btn" disabled hidden>Stop</button>
-            <button id="btnSearch" class="btn" disabled hidden>Search</button>
-            <span class="pill timerPill" id="queryTimer" hidden>00:00</span>
-          </div>
-          <div class="row">
-            <audio id="previewQuery" controls class="audio" hidden></audio>
-          </div>
-          <div id="results" class="results"></div>
-        </section>
       </main>
     </div>
 

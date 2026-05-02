@@ -25,7 +25,7 @@ const btnStopQuery = document.getElementById('btnStopQuery');
 const previewQuery = document.getElementById('previewQuery');
 const resultsEl = document.getElementById('results');
 const queryTimerEl = document.getElementById('queryTimer');
-const sideWindowsEl = document.getElementById('sideWindows');
+const newNoteCardEl = document.getElementById('newNoteCard');
 const btnHelpToggleEl = document.getElementById('btnHelpToggle');
 const helpBodyEl = document.getElementById('helpBody');
 const answerWrapEl = document.getElementById('answerWrap');
@@ -44,6 +44,12 @@ const btnIngestResumeEl = document.getElementById('btnIngestResume');
 const btnProcToggleEl = document.getElementById('btnProcToggle');
 const procBodyEl = document.getElementById('procBody');
 const processCardEl = document.getElementById('processCard');
+const leftColEl = document.getElementById('leftCol');
+const floatDockEl = document.getElementById('floatDock');
+const btnFloatNewNoteEl = document.getElementById('btnFloatNewNote');
+const btnFloatHelpEl = document.getElementById('btnFloatHelp');
+const helpCardEl = document.getElementById('helpCard');
+const btnHelpCloseEl = document.getElementById('btnHelpClose');
 const jobsListEl = document.getElementById('jobsList');
 const jobsPausedPillEl = document.getElementById('jobsPausedPill');
 const jobsSummaryEl = document.getElementById('jobsSummary');
@@ -181,6 +187,10 @@ function applyMainGridColumns(mode) {
       mainGridEl.style.removeProperty('grid-template-columns');
       return;
     }
+    if (mode === 'dock') {
+      mainGridEl.style.setProperty('grid-template-columns', '1fr', 'important');
+      return;
+    }
     const cols = mode === 'equal' ? '1fr 1fr' : mode === 'searchWide' ? '0.35fr 1.65fr' : '';
     if (!cols) {
       mainGridEl.style.removeProperty('grid-template-columns');
@@ -192,41 +202,170 @@ function applyMainGridColumns(mode) {
   }
 }
 
+function isDockMode() {
+  // Full-width main column when the Processes side card is not shown.
+  return !(processCardEl && !processCardEl.hidden);
+}
+
+function syncFloatDockVisibility() {
+  if (!floatDockEl) return;
+  const showNewNoteBtn = !!(btnFloatNewNoteEl && !btnFloatNewNoteEl.hidden);
+  const showHelpBtn = !!(btnFloatHelpEl && !btnFloatHelpEl.hidden);
+  floatDockEl.hidden = !showNewNoteBtn && !showHelpBtn;
+}
+
+function expandAppHintInHelp() {
+  const aboutBox = document.getElementById('aboutBox');
+  const aboutToggle = document.getElementById('aboutToggle');
+  const uiStepsBox = document.getElementById('uiStepsBox');
+  const uiStepsToggle = document.getElementById('uiStepsToggle');
+  if (aboutBox) aboutBox.hidden = false;
+  if (aboutToggle) aboutToggle.textContent = 'Hide App hint';
+  if (uiStepsBox) uiStepsBox.hidden = true;
+  if (uiStepsToggle) uiStepsToggle.textContent = 'UI steps';
+}
+
+/** Scroll so the bottom of the document sits in view (quick-action bar, footer padding). Retries after layout for tall panels (Help, etc.). */
+function scrollPageBottomIntoView({ behavior = 'smooth', bottomPad = 24 } = {}) {
+  try {
+    const se = document.scrollingElement || document.documentElement;
+    const viewH = window.visualViewport?.height ?? se.clientHeight ?? window.innerHeight;
+    const maxScroll = Math.max(0, se.scrollHeight - viewH);
+    const top = Math.max(0, maxScroll - bottomPad);
+    window.scrollTo({ top, left: 0, behavior });
+  } catch {
+    try {
+      const se = document.scrollingElement || document.documentElement;
+      se.scrollTop = Math.max(0, se.scrollHeight - se.clientHeight);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function scheduleScrollPageBottomAfterExpand() {
+  const run = () => scrollPageBottomIntoView({ behavior: 'smooth', bottomPad: 28 });
+  try {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        run();
+        window.setTimeout(run, 0);
+        window.setTimeout(run, 120);
+        window.setTimeout(run, 320);
+      });
+    });
+  } catch {
+    scrollPageBottomIntoView({ behavior: 'auto', bottomPad: 28 });
+  }
+}
+
+/** Search results: last note uses page-bottom scroll; others only scroll enough to fit the note row. */
+function scheduleExpandedNoteScroll(noteEl, isLastNote) {
+  if (!noteEl) return;
+  if (isLastNote) {
+    scheduleScrollPageBottomAfterExpand();
+    return;
+  }
+  const run = () => {
+    try {
+      ensureElementFullyVisible(noteEl, 20);
+    } catch {
+      // ignore
+    }
+  };
+  try {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        run();
+        window.setTimeout(run, 0);
+        window.setTimeout(run, 120);
+        window.setTimeout(run, 320);
+      });
+    });
+  } catch {
+    run();
+  }
+}
+
 function updateMainGridLayout({ prefer = 'auto' } = {}) {
   if (!mainGridEl) return;
-  const noteCollapsed = !!newNoteBodyEl?.hidden;
   const procCollapsed = !!procBodyEl?.hidden;
-  // Help is considered "open" if either App hint or UI steps is expanded.
-  const aboutBoxEl = document.getElementById('aboutBox');
-  const uiStepsBoxEl = document.getElementById('uiStepsBox');
-  const helpCollapsed =
-    aboutBoxEl && uiStepsBoxEl
-      ? !!aboutBoxEl.hidden && !!uiStepsBoxEl.hidden
-      : !!helpBodyEl?.hidden;
 
-  // Explicit set/clear (more reliable than toggle chains if multiple calls happen).
+  const dock = isDockMode();
+  mainGridEl.classList.toggle('mainGrid--dock', dock);
+  if (leftColEl) leftColEl.hidden = dock;
+  syncFloatDockVisibility();
+
   mainGridEl.classList.remove('noteCollapsed', 'procCollapsed', 'helpCollapsed');
-  if (noteCollapsed) mainGridEl.classList.add('noteCollapsed');
   if (procCollapsed) mainGridEl.classList.add('procCollapsed');
-  if (helpCollapsed) mainGridEl.classList.add('helpCollapsed');
 
-  // Layout rule (per your UX requirement):
-  // - Pressing Show/+ on ANY window should restore 50/50 immediately.
-  // - Pressing Hide on ANY window should widen Search.
-  // We store the last action as a mode, and only fall back to 'auto' when needed.
   if (prefer !== 'auto') gridLayoutMode = prefer;
 
-  const anyCollapsed = noteCollapsed || procCollapsed || helpCollapsed;
-  const resolved =
-    gridLayoutMode === 'equal' ? 'equal' : gridLayoutMode === 'searchWide' ? 'searchWide' : anyCollapsed ? 'searchWide' : 'equal';
-  applyMainGridColumns(resolved);
-
-  // Debug hint in status bar (temporary but useful).
-  if (statusEl) {
-    statusEl.title = `layout: note=${noteCollapsed ? 'collapsed' : 'open'}, proc=${procCollapsed ? 'collapsed' : 'open'}, help=${
-      helpCollapsed ? 'collapsed' : 'open'
-    }, mode=${gridLayoutMode}`;
+  if (dock) {
+    applyMainGridColumns('dock');
+  } else {
+    const resolved =
+      gridLayoutMode === 'equal'
+        ? 'equal'
+        : gridLayoutMode === 'searchWide'
+          ? 'searchWide'
+          : procCollapsed
+            ? 'searchWide'
+            : 'equal';
+    applyMainGridColumns(resolved);
   }
+
+  if (statusEl) {
+    statusEl.title = `layout: dock=${dock}, proc=${procCollapsed ? 'collapsed' : 'open'}, mode=${gridLayoutMode}`;
+  }
+}
+
+async function expandProcessesSide() {
+  if (procBodyEl) procBodyEl.hidden = false;
+  if (btnProcToggleEl) btnProcToggleEl.textContent = 'Hide';
+  try {
+    await refreshIngestionUi({ toggleList: false, forceShow: true });
+  } catch {
+    // ignore
+  }
+  updateMainGridLayout({ prefer: 'equal' });
+  scheduleScrollPageBottomAfterExpand();
+}
+
+function setNewNotePanelOpen(open) {
+  if (!newNoteCardEl) return;
+  const on = !!open;
+  newNoteCardEl.hidden = !on;
+  if (on && newNoteBodyEl) newNoteBodyEl.hidden = false;
+  if (btnFloatNewNoteEl) {
+    btnFloatNewNoteEl.hidden = on;
+    btnFloatNewNoteEl.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  updateMainGridLayout({ prefer: 'auto' });
+  if (on) scheduleScrollPageBottomAfterExpand();
+}
+
+function setHelpPanelOpen(open) {
+  if (!helpCardEl) return;
+  const on = !!open;
+  helpCardEl.hidden = !on;
+  if (on) expandAppHintInHelp();
+  else {
+    const aboutBox = document.getElementById('aboutBox');
+    const uiStepsBox = document.getElementById('uiStepsBox');
+    const aboutToggle = document.getElementById('aboutToggle');
+    const uiStepsToggle = document.getElementById('uiStepsToggle');
+    if (aboutBox) aboutBox.hidden = true;
+    if (uiStepsBox) uiStepsBox.hidden = true;
+    if (aboutToggle) aboutToggle.textContent = 'App hint';
+    if (uiStepsToggle) uiStepsToggle.textContent = 'UI steps';
+  }
+  if (btnFloatHelpEl) {
+    btnFloatHelpEl.hidden = on;
+    btnFloatHelpEl.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  updateMainGridLayout({ prefer: 'auto' });
+  if (on) scheduleScrollPageBottomAfterExpand();
 }
 
 function setAdvancedSearchOpen(open) {
@@ -247,67 +386,6 @@ function setAdvancedSearchOpen(open) {
     localStorage.setItem('vv_adv_search_open', advancedSearchOpen ? '1' : '0');
   } catch {
     // ignore
-  }
-}
-
-async function openExclusivePane(which) {
-  // Opening one pane collapses the other two.
-  if (which === 'note') {
-    if (newNoteBodyEl) newNoteBodyEl.hidden = false;
-    if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = 'x';
-
-    if (procBodyEl) procBodyEl.hidden = true;
-    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
-
-    const aboutBoxEl = document.getElementById('aboutBox');
-    const uiStepsBoxEl = document.getElementById('uiStepsBox');
-    const aboutToggleEl = document.getElementById('aboutToggle');
-    const uiStepsToggleEl = document.getElementById('uiStepsToggle');
-    if (aboutBoxEl) aboutBoxEl.hidden = true;
-    if (uiStepsBoxEl) uiStepsBoxEl.hidden = true;
-    if (aboutToggleEl) aboutToggleEl.textContent = 'App hint';
-    if (uiStepsToggleEl) uiStepsToggleEl.textContent = 'UI steps';
-
-    // Opening any pane should restore 50/50.
-    updateMainGridLayout({ prefer: 'equal' });
-    return;
-  }
-
-  if (which === 'proc') {
-    if (procBodyEl) procBodyEl.hidden = false;
-    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Hide';
-
-    if (newNoteBodyEl) newNoteBodyEl.hidden = true;
-    if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = '+';
-
-    const aboutBoxEl = document.getElementById('aboutBox');
-    const uiStepsBoxEl = document.getElementById('uiStepsBox');
-    const aboutToggleEl = document.getElementById('aboutToggle');
-    const uiStepsToggleEl = document.getElementById('uiStepsToggle');
-    if (aboutBoxEl) aboutBoxEl.hidden = true;
-    if (uiStepsBoxEl) uiStepsBoxEl.hidden = true;
-    if (aboutToggleEl) aboutToggleEl.textContent = 'App hint';
-    if (uiStepsToggleEl) uiStepsToggleEl.textContent = 'UI steps';
-
-    // When opening Processes, refresh its contents.
-    try {
-      await refreshIngestionUi({ toggleList: false, forceShow: true });
-    } catch {
-      // ignore
-    }
-
-    updateMainGridLayout({ prefer: 'equal' });
-    return;
-  }
-
-  if (which === 'help') {
-    if (newNoteBodyEl) newNoteBodyEl.hidden = true;
-    if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = '+';
-
-    if (procBodyEl) procBodyEl.hidden = true;
-    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
-
-    updateMainGridLayout({ prefer: 'equal' });
   }
 }
 
@@ -365,13 +443,24 @@ function wire() {
 
   btnNewNoteToggleEl?.addEventListener('click', (e) => {
     e.preventDefault();
-    if (!newNoteBodyEl) return;
-    const nextHidden = !newNoteBodyEl.hidden;
-    newNoteBodyEl.hidden = nextHidden;
-    // x when expanded, + when collapsed
-    btnNewNoteToggleEl.textContent = nextHidden ? '+' : 'x';
-    if (!nextHidden) openExclusivePane('note');
-    else updateMainGridLayout({ prefer: 'searchWide' });
+    setNewNotePanelOpen(false);
+  });
+
+  btnHelpCloseEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setHelpPanelOpen(false);
+  });
+
+  btnFloatNewNoteEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const willOpen = !!newNoteCardEl?.hidden;
+    setNewNotePanelOpen(willOpen);
+  });
+
+  btnFloatHelpEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const willOpen = !!helpCardEl?.hidden;
+    setHelpPanelOpen(willOpen);
   });
 
   btnRecordNote.addEventListener('click', () =>
@@ -632,10 +721,12 @@ function wire() {
     e.preventDefault();
     if (!procBodyEl) return;
     const willShow = procBodyEl.hidden;
-    procBodyEl.hidden = !willShow;
-    btnProcToggleEl.textContent = willShow ? 'Hide' : 'Show';
-    if (willShow) await openExclusivePane('proc');
-    else updateMainGridLayout({ prefer: 'searchWide' });
+    if (willShow) await expandProcessesSide();
+    else {
+      procBodyEl.hidden = true;
+      btnProcToggleEl.textContent = 'Show';
+      updateMainGridLayout({ prefer: 'searchWide' });
+    }
   });
 
   btnJobsApplyEl?.addEventListener('click', async (e) => {
@@ -677,14 +768,12 @@ function wire() {
     }
   });
 
-  // Default mutual-exclusion state on load/refresh:
-  // Keep all three panes collapsed by default.
+  // Default: New note + Help panels closed; Processes body collapsed; Help hint panels collapsed.
   try {
-    if (newNoteBodyEl) newNoteBodyEl.hidden = true;
-    if (btnNewNoteToggleEl) btnNewNoteToggleEl.textContent = '+';
+    setNewNotePanelOpen(false);
+    setHelpPanelOpen(false);
     if (procBodyEl) procBodyEl.hidden = true;
     if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
-    // Help buttons stay visible; collapse means both sections are hidden.
     const aboutBoxEl = document.getElementById('aboutBox');
     const uiStepsBoxEl = document.getElementById('uiStepsBox');
     const aboutToggleEl = document.getElementById('aboutToggle');
@@ -1125,12 +1214,14 @@ async function refreshResults(q = '') {
   // Auto-expand Processes when any note is in error.
   const hasErrorNote = items.some((it) => (it?.status ?? '').toString() === 'error');
   if (hasErrorNote) {
-    openExclusivePane('proc').catch(() => {
+    expandProcessesSide().catch(() => {
       // ignore
     });
   }
 
-  for (const item of items) {
+  for (let idx = 0; idx < items.length; idx += 1) {
+    const item = items[idx];
+    const isLastNote = idx === items.length - 1;
     const note = document.createElement('div');
     note.className = 'note noteCollapsed';
 
@@ -1281,9 +1372,13 @@ async function refreshResults(q = '') {
         loadNoteSegmentsIntoUi(item.id, note, {
           highlight: item?.matches ?? item?.best_match ?? null,
           autoPlayMatch: false
-        }).catch(() => {
-          // ignore
-        });
+        })
+          .catch(() => {
+            // ignore
+          })
+          .finally(() => {
+            scheduleExpandedNoteScroll(note, isLastNote);
+          });
       }
       btnToggle.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1295,15 +1390,18 @@ async function refreshResults(q = '') {
         if (isOpen) expandedNoteIds.add(item.id);
         else expandedNoteIds.delete(item.id);
         if (!isOpen) {
+          scheduleExpandedNoteScroll(note, isLastNote);
           requestAnimationFrame(() => updateScrollHint(transcriptBox, scrollHint));
-        }
-        if (!isOpen) {
           loadNoteSegmentsIntoUi(item.id, note, {
             highlight: item?.best_match ?? null,
             autoPlayMatch: false
-          }).catch(() => {
-            // ignore
-          });
+          })
+            .catch(() => {
+              // ignore
+            })
+            .finally(() => {
+              scheduleExpandedNoteScroll(note, isLastNote);
+            });
         }
       });
     }
@@ -1469,6 +1567,11 @@ async function refreshResults(q = '') {
     transcriptBox?.addEventListener('scroll', () => updateScrollHint(transcriptBox, scrollHint));
     updateScrollHint(transcriptBox, scrollHint);
 
+    const syncEditMenuBtn = () => {
+      if (btnEdit) btnEdit.hidden = note.classList.contains('isEditing');
+    };
+    syncEditMenuBtn();
+
     btnEdit.addEventListener('click', async (e) => {
       e.stopPropagation();
       // Close the actions dropdown when entering edit mode.
@@ -1483,11 +1586,13 @@ async function refreshResults(q = '') {
         note.classList.remove('noteCollapsed');
         if (btnToggle) btnToggle.textContent = 'Collapse';
         expandedNoteIds.add(item.id);
+        scheduleExpandedNoteScroll(note, isLastNote);
       }
       const willShow = !!editBox.hidden;
       editBox.hidden = !willShow;
       if (transcriptBox) transcriptBox.hidden = willShow;
       note.classList.toggle('isEditing', willShow);
+      syncEditMenuBtn();
       if (willShow) {
         try {
           const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
@@ -1507,6 +1612,7 @@ async function refreshResults(q = '') {
       editBox.hidden = true;
       if (transcriptBox) transcriptBox.hidden = false;
       note.classList.remove('isEditing');
+      syncEditMenuBtn();
     });
 
     btnSave.addEventListener('click', async (e) => {
@@ -1529,6 +1635,7 @@ async function refreshResults(q = '') {
         editBox.hidden = true;
         if (transcriptBox) transcriptBox.hidden = false;
         note.classList.remove('isEditing');
+        syncEditMenuBtn();
         setStatus('Saved');
         await refreshResults(qEl.value);
       } catch (e) {
@@ -2331,6 +2438,7 @@ function applyProcessesCardVisibility(hasFailures) {
 }
 
 async function refreshIngestionUi({ toggleList = false, forceShow = null } = {}) {
+  try {
   if (
     !btnIngestPauseEl ||
     !btnIngestResumeEl ||
@@ -2521,6 +2629,13 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
   } else {
     jobsSummaryEl.hidden = true;
     jobsFiltersEl.hidden = true;
+  }
+  } finally {
+    try {
+      updateMainGridLayout({ prefer: 'auto' });
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -2927,11 +3042,9 @@ function renderBitrateHint() {
         Tip: You can ask time-filtered queries like <strong>"recording yesterday"</strong> or <strong>"between 2026-04-20 and 2026-04-22 upload"</strong>.
       </div>
       <div style="margin-top:10px; border-top:1px dotted rgba(255,255,255,0.16); padding-top:10px">
-        Layout: The left side has three windows — <strong>New note</strong>, <strong>Processes</strong>, and <strong>Help</strong>.
-        Opening any left window restores a <strong>50/50</strong> split with Search; collapsing it makes Search wider.
-        Only one window can be open at a time (mutually exclusive). On page load, all three start collapsed by default.
-        The <strong>Processes</strong> window stays hidden unless there are failures; if any note is in <strong>Error</strong> state, it auto-opens.
-        Help is opened by pressing <strong>App hint</strong> or <strong>UI steps</strong>.
+        Layout: <strong>Search</strong> and results stay at the top. Use <strong>+</strong> and <strong>Help</strong> at the bottom of that column to open the panels — they expand <strong>above</strong> those buttons. Each quick button hides while its panel is open (close with <strong>×</strong> on the card).
+        Opening <strong>Help</strong> expands <strong>App hint</strong> automatically. <strong>App hint</strong> and <strong>UI steps</strong> are mutually exclusive. Clicking <strong>Hide App hint</strong> or <strong>Hide UI steps</strong> closes the whole Help panel.
+        <strong>Processes</strong> is independent and opens beside Search when it appears.
       </div>
     `.trim();
   }
@@ -2944,23 +3057,14 @@ function renderBitrateHint() {
       const nextHidden = !aboutBox.hidden;
       aboutBox.hidden = nextHidden;
       aboutToggle.textContent = nextHidden ? 'App hint' : 'Hide App hint';
-      // Mutually exclusive with UI steps
-      if (!nextHidden && box) {
-        box.hidden = true;
-        if (toggle) toggle.textContent = 'UI steps';
-      }
-      // Bind layout + Help window visibility to App hint.
       if (!nextHidden) {
-        openExclusivePane('help').catch(() => {
-          // ignore
-        });
+        if (box) box.hidden = true;
+        if (toggle) toggle.textContent = 'UI steps';
       } else {
-        // If both help sections are hidden, collapse Help and widen Search.
-        const nothingOpen = (!!aboutBox?.hidden ?? true) && (!!box?.hidden ?? true);
-        if (nothingOpen) {
-          updateMainGridLayout({ prefer: 'searchWide' });
-        }
+        setHelpPanelOpen(false);
       }
+      updateMainGridLayout({ prefer: 'auto' });
+      if (!nextHidden) scheduleScrollPageBottomAfterExpand();
     });
   }
   if (toggle && box) {
@@ -2968,22 +3072,14 @@ function renderBitrateHint() {
       const nextHidden = !box.hidden;
       box.hidden = nextHidden;
       toggle.textContent = nextHidden ? 'UI steps' : 'Hide UI steps';
-      // Mutually exclusive with App hint
-      if (!nextHidden && aboutBox) {
-        aboutBox.hidden = true;
-        if (aboutToggle) aboutToggle.textContent = 'App hint';
-      }
-      // Bind layout + Help window visibility to UI steps.
       if (!nextHidden) {
-        openExclusivePane('help').catch(() => {
-          // ignore
-        });
+        if (aboutBox) aboutBox.hidden = true;
+        if (aboutToggle) aboutToggle.textContent = 'App hint';
       } else {
-        const nothingOpen = (!!aboutBox?.hidden ?? true) && (!!box?.hidden ?? true);
-        if (nothingOpen) {
-          updateMainGridLayout({ prefer: 'searchWide' });
-        }
+        setHelpPanelOpen(false);
       }
+      updateMainGridLayout({ prefer: 'auto' });
+      if (!nextHidden) scheduleScrollPageBottomAfterExpand();
     });
   }
 }

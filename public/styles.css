@@ -21,10 +21,11 @@
 html {
   min-height: 100%;
   color-scheme: dark;
-  background-color: var(--page-transition-bg);
-  background-image: radial-gradient(1200px 600px at 15% 10%, rgba(124, 58, 237, 0.22), transparent 60%),
-    radial-gradient(900px 600px at 70% 15%, rgba(168, 85, 247, 0.18), transparent 55%),
-    linear-gradient(180deg, var(--page-transition-bg) 0%, var(--bg) 45%, var(--bg) 100%);
+  /* Single base + soft radials only — avoids sharp horizontal bands from multi-stop linear blends */
+  background-color: var(--bg);
+  background-image: radial-gradient(ellipse 1300px 720px at 18% 12%, rgba(124, 58, 237, 0.16), transparent 58%),
+    radial-gradient(ellipse 1000px 620px at 78% 22%, rgba(168, 85, 247, 0.12), transparent 55%);
+  background-repeat: no-repeat;
 }
 
 body {
@@ -146,15 +147,13 @@ input[type='file'] {
     align-items: start;
   }
 
-  /* When ANY left window is collapsed, give Search more room. */
-  .grid.noteCollapsed,
-  .grid.procCollapsed,
-  .grid.helpCollapsed,
-  .grid.noteCollapsed.procCollapsed,
-  .grid.noteCollapsed.helpCollapsed,
-  .grid.procCollapsed.helpCollapsed,
-  .grid.noteCollapsed.procCollapsed.helpCollapsed {
-    /* Slightly wider left column so Help buttons fit one line */
+  /* Dock: full-width main column (Search + stacked cards); Processes side hidden */
+  .grid.mainGrid--dock {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Split mode: when Processes body is collapsed, widen the Search column */
+  .grid.procCollapsed {
     grid-template-columns: 1fr 2fr;
   }
 }
@@ -163,6 +162,33 @@ input[type='file'] {
   display: grid;
   gap: 12px;
   align-items: start;
+}
+
+.rightStack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.floatDock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px 8px;
+}
+
+.floatDockBtn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+}
+
+.floatDockBtnHelp {
+  padding-inline: 18px;
 }
 
 .card {
