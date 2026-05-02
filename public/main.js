@@ -2322,6 +2322,14 @@ async function transcribeFullPreview() {
   if (liveTxStatusEl) liveTxStatusEl.hidden = true;
 }
 
+function applyProcessesCardVisibility(hasFailures) {
+  if (processCardEl) processCardEl.hidden = !hasFailures;
+  if (!hasFailures) {
+    if (procBodyEl) procBodyEl.hidden = true;
+    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
+  }
+}
+
 async function refreshIngestionUi({ toggleList = false, forceShow = null } = {}) {
   if (
     !btnIngestPauseEl ||
@@ -2338,12 +2346,25 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     !jobsBackoffMaxSecEl ||
     !btnJobsRetryAllEl ||
     !btnJobsUnlockNowEl
-  )
+  ) {
+    // Fail-safe: keep Processes hidden if ingestion UI is incomplete (avoid stuck visible panel).
+    applyProcessesCardVisibility(false);
     return;
+  }
 
-  const summaryResp = await fetch('/api/processes/summary');
-  if (!summaryResp.ok) return;
-  const summary = await summaryResp.json();
+  let summary;
+  try {
+    const summaryResp = await fetch('/api/processes/summary');
+    if (!summaryResp.ok) {
+      applyProcessesCardVisibility(false);
+      return;
+    }
+    summary = await summaryResp.json();
+  } catch {
+    // Network / Safari ITP / HTTPS quirks: never leave Processes visible without a valid summary.
+    applyProcessesCardVisibility(false);
+    return;
+  }
   const paused = !!summary?.paused;
 
   jobsPausedPillEl.hidden = !paused;
@@ -2359,15 +2380,8 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
 
   // Hide the Processes card entirely unless there are failures.
   // If failures appear later, it will show again and can auto-open.
-  if (processCardEl) {
-    processCardEl.hidden = !hasFailures;
-  }
-  if (!hasFailures) {
-    // Ensure it's collapsed if we hide it.
-    if (procBodyEl) procBodyEl.hidden = true;
-    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
-    return;
-  }
+  applyProcessesCardVisibility(hasFailures);
+  if (!hasFailures) return;
   const delayed = Number(summary?.jobs_delayed_queued ?? 0) || 0;
   const lastUnlockAt = (summary?.jobs_last_stale_unlock_at ?? '').toString().trim();
   const lastUnlockCount = Number(summary?.jobs_last_stale_unlock_count ?? 0) || 0;

@@ -1,4 +1,6 @@
 :root {
+  /* Base canvas + transition paint (overscroll / reload / View Transitions) */
+  --page-transition-bg: #060a14;
   --bg: #0b1220;
   --card: rgba(255, 255, 255, 0.06);
   --card2: rgba(255, 255, 255, 0.09);
@@ -16,17 +18,36 @@
   box-sizing: border-box;
 }
 
+html {
+  min-height: 100%;
+  color-scheme: dark;
+  background-color: var(--page-transition-bg);
+  background-image: radial-gradient(1200px 600px at 15% 10%, rgba(124, 58, 237, 0.22), transparent 60%),
+    radial-gradient(900px 600px at 70% 15%, rgba(168, 85, 247, 0.18), transparent 55%),
+    linear-gradient(180deg, var(--page-transition-bg) 0%, var(--bg) 45%, var(--bg) 100%);
+}
+
 body {
   margin: 0;
+  min-height: 100%;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial,
     "Apple Color Emoji", "Segoe UI Emoji";
-  background: radial-gradient(1200px 600px at 15% 10%, rgba(124, 58, 237, 0.22), transparent 60%),
-    radial-gradient(900px 600px at 70% 15%, rgba(168, 85, 247, 0.18), transparent 55%),
-    var(--bg);
+  background: transparent;
   color: var(--text);
 }
 
+/* Same canvas during browser View Transitions (full reload / bfcache restore) */
+::view-transition-old(root),
+::view-transition-new(root) {
+  background-color: var(--page-transition-bg);
+}
+
 [hidden] {
+  display: none !important;
+}
+
+/* Safari: some builds respect [hidden] inconsistently on <section>; keep Processes fully suppressed */
+#processCard[hidden] {
   display: none !important;
 }
 

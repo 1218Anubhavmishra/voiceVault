@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#060a14" />
+    <meta name="color-scheme" content="dark" />
     <title>voiceVault</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -101,7 +103,8 @@
           </section>
 
           <div class="sideWindows" id="sideWindows">
-            <section class="card miniCard" id="processCard">
+            <!-- Hidden until JS confirms job/note failures (fail-safe if summary fetch fails on some browsers) -->
+            <section class="card miniCard" id="processCard" hidden>
               <div class="cardHeaderRow">
                 <h2 style="margin:0; font-size:14px">Processes</h2>
                 <button id="btnProcToggle" class="btn" type="button">Hide</button>
