@@ -38,6 +38,7 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
+      display_title TEXT NOT NULL DEFAULT '',
       body TEXT NOT NULL,
       segments_json TEXT NOT NULL DEFAULT '',
       audio_filename TEXT NOT NULL,
@@ -47,6 +48,7 @@ function migrate(db) {
       audio_blob BLOB NOT NULL DEFAULT X'',
       duration_ms INTEGER NOT NULL DEFAULT 0,
       language TEXT NOT NULL DEFAULT '',
+      stt_provider TEXT NOT NULL DEFAULT 'whisper',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       status TEXT NOT NULL DEFAULT 'processing',
@@ -218,6 +220,21 @@ function migrate(db) {
   if (!cols.has('is_favorite')) {
     db.exec(`ALTER TABLE notes ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!cols.has('stt_provider')) {
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN stt_provider TEXT NOT NULL DEFAULT 'whisper'`);
+    } catch {
+      // ignore
+    }
+  }
+  if (!cols.has('display_title')) {
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN display_title TEXT NOT NULL DEFAULT ''`);
+      db.exec(`UPDATE notes SET display_title = title WHERE trim(display_title) = ''`);
+    } catch {
+      // ignore
+    }
+  }
   if (!cols.has('audio_blob')) {
     db.exec(`ALTER TABLE notes ADD COLUMN audio_blob BLOB NOT NULL DEFAULT X''`);
   }
@@ -226,6 +243,13 @@ function migrate(db) {
   }
   if (!cols.has('segments_json')) {
     db.exec(`ALTER TABLE notes ADD COLUMN segments_json TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('transcribe_mode')) {
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN transcribe_mode TEXT NOT NULL DEFAULT ''`);
+    } catch {
+      // ignore
+    }
   }
 
   try {

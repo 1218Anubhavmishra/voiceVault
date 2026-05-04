@@ -173,9 +173,9 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
     args.push(tag);
   }
   if (title) {
-    where.push(`n.title LIKE ? ESCAPE '\\'`);
     const like = `%${title.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
-    args.push(like);
+    where.push(`(n.display_title LIKE ? ESCAPE '\\' OR n.title LIKE ? ESCAPE '\\')`);
+    args.push(like, like);
   }
   if (dmin !== null) {
     where.push(`n.duration_ms >= ?`);
@@ -193,7 +193,7 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
   let rows = db
     .prepare(
       `SELECT nc.note_id, nc.chunk_idx AS seg_idx, nc.start_sec, nc.end_sec, nc.text, nc.embedding,
-              n.title, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language
+              n.title, n.display_title, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language
        FROM note_chunks nc
        JOIN notes n ON n.id = nc.note_id
        ${whereSql}
@@ -209,7 +209,7 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
     rows = db
       .prepare(
         `SELECT nc.note_id, nc.chunk_idx AS seg_idx, nc.start_sec, nc.end_sec, nc.text, nc.embedding,
-                n.title, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language
+                n.title, n.display_title, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language
          FROM note_chunks nc
          JOIN notes n ON n.id = nc.note_id
          ${whereSql}
@@ -291,13 +291,15 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
       text: (r.text ?? '').toString(),
       note: {
         id: r.note_id,
-        title: (r.title ?? '').toString(),
+        title: ((r.display_title ?? '').toString().trim() || (r.title ?? '').toString()).trim(),
+        display_title: (r.display_title ?? '').toString().trim(),
         created_at: r.created_at,
         updated_at: r.updated_at,
         status: r.status,
         error: r.error,
         duration_ms: r.duration_ms,
-        language: r.language
+        // Avoid null in JSON — client merge `{...fts, ...sem}` would otherwise overwrite FTS language with null.
+        language: (r.language ?? '').toString()
       }
     });
   }

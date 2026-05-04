@@ -7,7 +7,13 @@ import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'node:url';
 import { getPaths, openDb } from './db.js';
-import { transcribeAudioFile } from './transcribe.js';
+import { cleanupEphemeralServerCache } from './cleanup-ephemeral.js';
+import {
+  transcribeAudioFile,
+  warmupWhisperPipeline,
+  whisperModelFromEnv,
+  whisperFinalModelFromEnv
+} from './transcribe.js';
 import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic.js';
 import { embedTexts, bufferToFloat32, cosineSim } from './embeddings.js';
 import OpenAI from 'openai';
@@ -17,12 +23,113 @@ import unzipper from 'unzipper';
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5177;
 
+/** User-visible note title (separate from stored audio filename and from FTS `title`). */
+function stemFilenameForDisplayTitle(name) {
+  const base = path.basename((name ?? '').toString().trim());
+  if (!base) return '';
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return stem.trim();
+}
+
+/** Indexed headline for FTS triggers: prefers display title, else transcript prefix. */
+function computeFtsTitle(displayTitle, body) {
+  const d = (displayTitle ?? '').toString().trim();
+  if (d) return d;
+  const b = (body ?? '').toString().trim().replace(/\s+/g, ' ');
+  if (b) return b.slice(0, 120);
+  return 'Untitled';
+}
+
+/**
+ * Notes list: expose pending ingestion work so the UI can recompute "time left" from queue state
+ * (instead of extending a blind +45s budget when the first audio-based guess hits zero).
+ */
+function attachProcessingEtaFields(db, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const processingIds = [];
+  for (const r of rows) {
+    if ((r?.status ?? '').toString() !== 'processing') continue;
+    const id = (r?.id ?? '').toString().trim();
+    if (id) processingIds.push(id);
+  }
+  if (processingIds.length === 0) {
+    return rows.map((r) => ({
+      ...r,
+      processing_pending_units: 0,
+      processing_running_locked_at: '',
+      processing_coarse_stage: ''
+    }));
+  }
+  const uniqueIds = [...new Set(processingIds)];
+  const ph = uniqueIds.map(() => '?').join(',');
+  let sums = [];
+  try {
+    sums = db
+      .prepare(
+        `SELECT note_id,
+                COALESCE(SUM(
+                  CASE
+                    WHEN status IN ('queued', 'running') AND job_type = 'transcribe_note' THEN 100
+                    WHEN status IN ('queued', 'running') AND job_type = 'backfill_words' THEN 12
+                    ELSE 0
+                  END
+                ), 0) AS units,
+                MAX(CASE WHEN status = 'running' AND locked_at != '' THEN locked_at END) AS locked_at,
+                SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_n,
+                SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_n
+         FROM ingestion_jobs
+         WHERE note_id IN (${ph})
+         GROUP BY note_id`
+      )
+      .all(...uniqueIds);
+  } catch {
+    sums = [];
+  }
+  const byId = new Map(sums.map((s) => [((s?.note_id ?? '') || '').toString(), s]));
+  return rows.map((r) => {
+    const st = (r?.status ?? '').toString();
+    if (st !== 'processing') {
+      return { ...r, processing_pending_units: 0, processing_running_locked_at: '', processing_coarse_stage: '' };
+    }
+    const id = (r?.id ?? '').toString();
+    const s = byId.get(id);
+    let units = Number(s?.units ?? 0) || 0;
+    if (units <= 0) units = 100;
+    const locked_at = ((s?.locked_at ?? '') || '').toString();
+    const rn = Number(s?.running_n ?? 0) || 0;
+    const qn = Number(s?.queued_n ?? 0) || 0;
+    let processing_coarse_stage = 'unknown';
+    if (rn > 0) processing_coarse_stage = 'running';
+    else if (qn > 0) processing_coarse_stage = 'queued';
+    return {
+      ...r,
+      processing_pending_units: units,
+      processing_running_locked_at: locked_at,
+      processing_coarse_stage
+    };
+  });
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 let db = openDb();
 const { dataDir, audioDir, blobsDir, dbPath } = getPaths();
+if ((process.env.VOICEVAULT_CLEAN_EPHEMERAL ?? '1').toString().trim() !== '0') {
+  try {
+    const s = cleanupEphemeralServerCache({ dataDir, audioDir });
+    const n = s.audio_files + s.audio_dirs + s.import_zips + s.staging_dirs;
+    if (n > 0) {
+      // eslint-disable-next-line no-console
+      console.log('[voicevault] cleaned ephemeral cache:', s);
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[voicevault] ephemeral cache cleanup failed:', e?.message ?? e);
+  }
+}
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const pinecone =
   process.env.PINECONE_API_KEY && process.env.PINECONE_INDEX
@@ -155,6 +262,25 @@ function persistedNoteLanguage(hint, detected) {
   return h || d;
 }
 
+/** New-note / reprocess engine: `whisper` (local) or `google` (Chirp). */
+function normalizeSttProvider(raw) {
+  const s = (raw ?? '').toString().trim().toLowerCase();
+  if (s === 'google' || s === 'chirp') return 'google';
+  return 'whisper';
+}
+
+/** Optional override for queued / authoritative transcription (not live preview). */
+function sttProviderForAuthoritativeFinal(rowSttRaw) {
+  const o = (process.env.VOICEVAULT_SERVER_FINAL_STT_PROVIDER ?? '').toString().trim().toLowerCase();
+  if (o === 'google' || o === 'chirp') return 'google';
+  if (o === 'whisper') return 'whisper';
+  return normalizeSttProvider(rowSttRaw);
+}
+
+function whisperModelForPipeline() {
+  return whisperModelFromEnv();
+}
+
 /** Trim STT language fields; drop placeholders that should not be stored as a real locale. */
 function normalizeDetectedLanguage(raw) {
   const s = (raw ?? '').toString().trim();
@@ -193,7 +319,7 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
       });
     }
 
-    const model = process.env.WHISPER_LANG_MODEL || process.env.WHISPER_FAST_MODEL || 'tiny';
+    const model = whisperModelFromEnv();
     const results = [];
 
     for (const row of rows) {
@@ -454,7 +580,7 @@ app.get('/api/jobs', (req, res) => {
     .prepare(
       `SELECT j.id, j.job_type, j.note_id, j.status, j.attempts, j.max_attempts, j.locked_at, j.last_error, j.created_at, j.updated_at,
               j.available_at,
-              n.title AS note_title, n.status AS note_status
+              COALESCE(NULLIF(trim(n.display_title), ''), n.title) AS note_title, n.status AS note_status
        FROM ingestion_jobs j
        LEFT JOIN notes n ON n.id = j.note_id
        ${where}
@@ -1005,6 +1131,50 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   res.json({ ok: true, id, status: 'cancelled' });
 });
 
+function removeIngestionJobRow(res, idRaw) {
+  const id = (idRaw ?? '').toString().trim();
+  if (!id) {
+    res.status(400).json({ error: 'Missing id' });
+    return;
+  }
+  const job = db.prepare(`SELECT id, status, note_id FROM ingestion_jobs WHERE id = ?`).get(id);
+  if (!job) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const st = (job?.status ?? '').toString();
+  if (st === 'running') {
+    res.status(409).json({ error: 'Job is running; pause processing or wait until it finishes' });
+    return;
+  }
+
+  const noteId = (job?.note_id ?? '').toString().trim();
+  const noteStillExists = noteId ? !!db.prepare(`SELECT id FROM notes WHERE id = ?`).get(noteId) : false;
+
+  if (noteStillExists) {
+    deleteNoteCascade(noteId);
+    res.json({ ok: true, id, note_id: noteId, note_deleted: true });
+    return;
+  }
+
+  const deleteTxn = db.transaction(() => {
+    db.prepare(`DELETE FROM job_events WHERE job_id = ?`).run(id);
+    db.prepare(`DELETE FROM ingestion_jobs WHERE id = ?`).run(id);
+  });
+  deleteTxn();
+
+  res.json({ ok: true, id, note_deleted: false });
+}
+
+app.delete('/api/jobs/:id', (req, res) => {
+  removeIngestionJobRow(res, req.params?.id);
+});
+
+/** Same as DELETE — some proxies strip DELETE; UI uses POST for reliability. */
+app.post('/api/jobs/:id/remove', (req, res) => {
+  removeIngestionJobRow(res, req.params?.id);
+});
+
 app.post('/api/jobs/:id/retry', (req, res) => {
   const id = (req.params?.id ?? '').toString().trim();
   if (!id) return res.status(400).json({ error: 'Missing id' });
@@ -1027,87 +1197,105 @@ app.post('/api/jobs/:id/retry', (req, res) => {
   res.json({ ok: true, id, status: 'queued' });
 });
 
-app.post('/api/notes', upload.single('audio'), (req, res) => {
-  const { title, duration_ms, language, fast_mode, source_filename } = req.body ?? {};
-  const audio = req.file;
-
-  if (!audio) return res.status(400).json({ error: 'Missing audio file' });
-
-  const safeTitle = (title ?? '').toString().trim();
-  const safeDurationMs = clampInt(duration_ms, 0, 24 * 60 * 60 * 1000, 0);
-  const safeLanguage = (language ?? '').toString().trim();
-  const safeFastMode = (fast_mode ?? '').toString().trim() !== '0';
-  const safeSourceFilename = (source_filename ?? '').toString().trim();
-
-  const id = nanoid(12);
-  const ext = mimeToExt(audio.mimetype) ?? 'webm';
-  const audioFilename = `${id}.${ext}`;
-
-  const blobId = sha256Hex(audio.buffer);
-  const blobPath = path.join(blobsDir, blobId);
+app.post('/api/notes', upload.single('audio'), async (req, res) => {
   try {
-    if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, audio.buffer);
-  } catch {
-    // ignore blob store failures; we still have audio_blob in SQLite.
+    const { title, display_title, duration_ms, language, stt_provider, source_filename } = req.body ?? {};
+    const audio = req.file;
+
+    if (!audio) return res.status(400).json({ error: 'Missing audio file' });
+
+    const safeDisplayTitle = (display_title ?? title ?? '').toString().trim();
+    const safeDurationMs = clampInt(duration_ms, 0, 24 * 60 * 60 * 1000, 0);
+    const safeLanguage = (language ?? '').toString().trim();
+    const safeStt = normalizeSttProvider(stt_provider);
+    const safeSourceFilename = (source_filename ?? '').toString().trim();
+    const stemFromFile = stemFilenameForDisplayTitle(safeSourceFilename);
+    const initialDisplayTitle = safeDisplayTitle || stemFromFile || '';
+    const ftsTitle = computeFtsTitle(initialDisplayTitle, '');
+
+    const id = nanoid(12);
+    const ext = mimeToExt(audio.mimetype) ?? 'webm';
+    const audioFilename = `${id}.${ext}`;
+
+    const blobId = sha256Hex(audio.buffer);
+    const blobPath = path.join(blobsDir, blobId);
+    try {
+      if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, audio.buffer);
+    } catch {
+      // ignore blob store failures; we still have audio_blob in SQLite.
+    }
+
+    const createdAt = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO notes (id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, language, stt_provider, created_at, updated_at, status, error)
+       VALUES (@id, @title, @display_title, @body, @segments_json, @audio_filename, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @language, @stt_provider, @created_at, @updated_at, @status, @error)`
+    ).run({
+      id,
+      title: ftsTitle,
+      display_title: initialDisplayTitle,
+      body: '',
+      segments_json: '',
+      audio_filename: audioFilename,
+      audio_blob_id: blobId,
+      audio_mime: audio.mimetype || 'application/octet-stream',
+      audio_bytes: audio.size,
+      audio_blob: audio.buffer,
+      duration_ms: safeDurationMs,
+      language: safeLanguage,
+      stt_provider: safeStt,
+      created_at: createdAt,
+      updated_at: createdAt,
+      status: 'processing',
+      error: ''
+    });
+
+    // Authoritative transcript always comes from a server-side pass on the full uploaded blob
+    // (same path as retry). Client `preview_bundle` is not used for persisted body/segments.
+    db.prepare(`UPDATE notes SET transcribe_mode = 'retranscribe' WHERE id = ?`).run(id);
+    res.status(201).json({ id, status: 'processing', transcribe_mode: 'retranscribe' });
+    enqueueJob(db, { job_type: 'transcribe_note', note_id: id });
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ error: e?.message ?? String(e) });
   }
-
-  const createdAt = new Date().toISOString();
-  const initialTitle = safeTitle || 'Untitled';
-  db.prepare(
-    `INSERT INTO notes (id, title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, language, created_at, updated_at, status, error)
-     VALUES (@id, @title, @body, @segments_json, @audio_filename, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @language, @created_at, @updated_at, @status, @error)`
-  ).run({
-    id,
-    title: initialTitle,
-    body: '',
-    segments_json: '',
-    audio_filename: audioFilename,
-    audio_blob_id: blobId,
-    audio_mime: audio.mimetype || 'application/octet-stream',
-    audio_bytes: audio.size,
-    audio_blob: audio.buffer,
-    duration_ms: safeDurationMs,
-    language: safeLanguage,
-    created_at: createdAt,
-    updated_at: createdAt,
-    status: 'processing',
-    error: ''
-  });
-
-  // Respond immediately; finish transcription in background.
-  res.status(201).json({ id, status: 'processing' });
-  enqueueJob(db, { job_type: 'transcribe_note', note_id: id });
 });
 
-app.post('/api/transcribe', upload.single('audio'), (req, res) => {
+app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
   const safeLanguage = (req.body?.language ?? '').toString().trim();
-  const safeFastMode = (req.body?.fast_mode ?? '').toString().trim() !== '0';
+  const safeStt = normalizeSttProvider(req.body?.stt_provider);
 
   const id = nanoid(12);
   const ext = mimeToExt(audio.mimetype) ?? 'webm';
   const tmpPath = path.join(audioDir, `__query_${id}.${ext}`);
   fs.writeFileSync(tmpPath, audio.buffer);
 
-  (async () => {
+  // Long-running Whisper/STT: disable socket timeout so proxies do not see an idle upstream.
+  // (Reverse proxies still need proxy_read_timeout high enough—see deployment notes.)
+  try {
+    req.socket.setTimeout(0);
+  } catch {
+    // ignore
+  }
+
     try {
-      const out = await transcribeAudioFile(tmpPath, {
-        model: safeFastMode
-          ? process.env.WHISPER_FAST_MODEL || process.env.WHISPER_LANG_MODEL || 'tiny'
-          : process.env.WHISPER_MODEL || 'medium',
-        language: safeLanguage || process.env.WHISPER_LANGUAGE || ''
+      const out = await transcribeWithLanguageHintFallback(tmpPath, {
+        model: whisperModelForPipeline(),
+        language: safeLanguage,
+        provider: safeStt
       });
       res.json({
         transcript: formatTranscript(out?.transcript ?? ''),
-        language: out?.language ?? '',
-        segments: Array.isArray(out?.segments) ? out.segments : []
+      language: out?.language ?? '',
+      segments: Array.isArray(out?.segments) ? out.segments : []
       });
     } catch (e) {
+    if (!res.headersSent) {
       res.status(500).json({
         error: 'Transcription failed',
         details: e?.message ?? String(e)
       });
+    }
     } finally {
       try {
         fs.unlinkSync(tmpPath);
@@ -1115,7 +1303,6 @@ app.post('/api/transcribe', upload.single('audio'), (req, res) => {
         // ignore
       }
     }
-  })();
 });
 
 app.post('/api/detect-language', upload.single('audio'), (req, res) => {
@@ -1130,7 +1317,7 @@ app.post('/api/detect-language', upload.single('audio'), (req, res) => {
   (async () => {
     try {
       const out = await transcribeAudioFile(tmpPath, {
-        model: process.env.WHISPER_LANG_MODEL || process.env.WHISPER_MODEL || 'tiny',
+        model: whisperModelFromEnv(),
         language: '' // force auto-detect
       });
       res.json({ language: out?.language ?? '' });
@@ -1153,6 +1340,7 @@ app.post('/api/live-transcribe', upload.single('audio'), (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
   const safeLanguage = (req.body?.language ?? '').toString().trim();
+  const safeStt = normalizeSttProvider(req.body?.stt_provider);
 
   const id = nanoid(12);
   const ext = mimeToExt(audio.mimetype) ?? 'webm';
@@ -1161,9 +1349,10 @@ app.post('/api/live-transcribe', upload.single('audio'), (req, res) => {
 
   (async () => {
     try {
-      const out = await transcribeAudioFile(tmpPath, {
-        model: process.env.WHISPER_FAST_MODEL || process.env.WHISPER_LANG_MODEL || 'tiny',
-        language: safeLanguage || process.env.WHISPER_LANGUAGE || ''
+      const out = await transcribeWithLanguageHintFallback(tmpPath, {
+        model: whisperModelForPipeline(),
+        language: safeLanguage,
+        provider: safeStt
       });
       res.json({
         transcript: formatTranscript(out?.transcript ?? ''),
@@ -1238,8 +1427,9 @@ app.get('/api/notes', (req, res) => {
     extraArgs.push(adv.tag);
   }
   if (adv.title) {
-    extraWhere.push(`n.title LIKE ? ESCAPE '\\'`);
-    extraArgs.push(`%${adv.title.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
+    const tLike = `%${adv.title.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    extraWhere.push(`(n.display_title LIKE ? ESCAPE '\\' OR n.title LIKE ? ESCAPE '\\')`);
+    extraArgs.push(tLike, tLike);
   }
   if (typeof adv.duration_min_ms === 'number') {
     extraWhere.push(`n.duration_ms >= ?`);
@@ -1259,7 +1449,8 @@ app.get('/api/notes', (req, res) => {
   if ((!qText || !ftsQ) && !hasTimeFilter) {
     rows = db
       .prepare(
-        `SELECT n.id, n.title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
+        `SELECT n.id, n.title, n.display_title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+                n.transcribe_mode,
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
          LEFT JOIN note_processing_state nps ON nps.note_id = n.id
@@ -1271,7 +1462,8 @@ app.get('/api/notes', (req, res) => {
   } else if ((!qText || !ftsQ) && hasTimeFilter) {
     rows = db
       .prepare(
-        `SELECT n.id, n.title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
+        `SELECT n.id, n.title, n.display_title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+                n.transcribe_mode,
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
          LEFT JOIN note_processing_state nps ON nps.note_id = n.id
@@ -1284,7 +1476,8 @@ app.get('/api/notes', (req, res) => {
     try {
       rows = db
         .prepare(
-          `SELECT n.id, n.title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
+          `SELECT n.id, n.title, n.display_title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+                 n.transcribe_mode,
                  COALESCE(nps.paused, 0) AS processing_paused,
                  bm25(notes_fts, 10.0, 1.0) AS rank
            FROM notes_fts
@@ -1303,18 +1496,19 @@ app.get('/api/notes', (req, res) => {
       const like = `%${effectiveQuery.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
       rows = db
         .prepare(
-          `SELECT n.id, n.title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.audio_filename, n.folder_id, n.is_favorite,
+          `SELECT n.id, n.title, n.display_title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+                  n.transcribe_mode,
                   COALESCE(nps.paused, 0) AS processing_paused
            FROM notes n
            LEFT JOIN note_processing_state nps ON nps.note_id = n.id
-           WHERE (n.title LIKE ? ESCAPE '\\' OR n.body LIKE ? ESCAPE '\\')
+           WHERE (n.display_title LIKE ? ESCAPE '\\' OR n.title LIKE ? ESCAPE '\\' OR n.body LIKE ? ESCAPE '\\')
            ${hasTimeFilter ? 'AND n.created_at >= ? AND n.created_at <= ?' : ''}
            ${extraSql}
            ORDER BY n.created_at DESC
            LIMIT ? OFFSET ?`
         )
         .all(
-          ...(hasTimeFilter ? [like, like, fromIso, toIso] : [like, like]),
+          ...(hasTimeFilter ? [like, like, like, fromIso, toIso] : [like, like, like]),
           ...extraArgs,
           limit,
           offset
@@ -1339,7 +1533,7 @@ app.get('/api/notes', (req, res) => {
     q,
     effective_q: effectiveQuery,
     time_filter: hasTimeFilter ? { from: fromIso, to: toIso } : null,
-    items: rows
+    items: attachProcessingEtaFields(db, rows)
   });
 });
 
@@ -1347,7 +1541,7 @@ app.get('/api/notes/:id', (req, res) => {
   const { id } = req.params;
   const row = db
     .prepare(
-      `SELECT id, title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, created_at, updated_at, status, error, folder_id, is_favorite
+      `SELECT id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider, created_at, updated_at, status, error, folder_id, is_favorite, transcribe_mode
        FROM notes
        WHERE id = ?`
     )
@@ -1567,20 +1761,32 @@ app.get('/api/ollama/health', async (_req, res) => {
 
 app.patch('/api/notes/:id', (req, res) => {
   const { id } = req.params;
-  const title = (req.body?.title ?? '').toString().trim();
-  const body = (req.body?.body ?? '').toString();
-  const language = (req.body?.language ?? '').toString().trim();
+  const bodyIn = req.body ?? {};
+  const legacyTitle = (bodyIn.title ?? '').toString().trim();
+  const hasDisplayKey = Object.prototype.hasOwnProperty.call(bodyIn, 'display_title');
+  const hasBodyKey = Object.prototype.hasOwnProperty.call(bodyIn, 'body');
+  const hasLanguageKey = Object.prototype.hasOwnProperty.call(bodyIn, 'language');
+  const hasSttKey = Object.prototype.hasOwnProperty.call(bodyIn, 'stt_provider');
   const folderId = (req.body?.folder_id ?? '').toString().trim();
   const favoriteRaw = req.body?.is_favorite;
   const hasFavorite = typeof favoriteRaw !== 'undefined';
   const isFavorite = hasFavorite ? ((favoriteRaw ?? 0).toString().trim() === '1' || favoriteRaw === true ? 1 : 0) : null;
 
-  const existing = db.prepare(`SELECT id FROM notes WHERE id = ?`).get(id);
-  if (!existing) return res.status(404).json({ error: 'Not found' });
+  const prev = db.prepare(`SELECT id, title, display_title, body, language, stt_provider FROM notes WHERE id = ?`).get(id);
+  if (!prev) return res.status(404).json({ error: 'Not found' });
+
+  const displayTitle = hasDisplayKey
+    ? (bodyIn.display_title ?? '').toString().trim()
+    : legacyTitle || (prev.display_title ?? '').toString().trim();
+  const body = hasBodyKey ? (bodyIn.body ?? '').toString() : (prev.body ?? '').toString();
+  const language = hasLanguageKey ? (bodyIn.language ?? '').toString().trim() : (prev.language ?? '').toString().trim();
+
+  const ftsTitle = computeFtsTitle(displayTitle, body);
 
   const updatedAt = new Date().toISOString();
   const parts = [
     `title = @title`,
+    `display_title = @display_title`,
     `body = @body`,
     `language = @language`,
     `status = @status`,
@@ -1589,10 +1795,12 @@ app.patch('/api/notes/:id', (req, res) => {
   ];
   if (folderId) parts.push(`folder_id = @folder_id`);
   if (hasFavorite) parts.push(`is_favorite = @is_favorite`);
+  if (hasSttKey) parts.push(`stt_provider = @stt_provider`);
   const sql = `UPDATE notes SET ${parts.join(', ')} WHERE id = @id`;
-  db.prepare(sql).run({
+  const runParams = {
     id,
-    title: title || 'Untitled',
+    title: ftsTitle,
+    display_title: displayTitle,
     body,
     language,
     folder_id: folderId || '',
@@ -1600,17 +1808,31 @@ app.patch('/api/notes/:id', (req, res) => {
     status: 'ready',
     error: '',
     updated_at: updatedAt
-  });
+  };
+  if (hasSttKey) runParams.stt_provider = normalizeSttProvider(bodyIn.stt_provider);
+  db.prepare(sql).run(runParams);
 
   res.json({ ok: true, id });
 });
 
-app.delete('/api/notes/:id', (req, res) => {
-  const { id } = req.params;
-  const row = db.prepare(`SELECT audio_filename FROM notes WHERE id = ?`).get(id);
-  if (!row) return res.status(404).json({ error: 'Not found' });
+/** Permanently removes note + dependent rows + on-disk audio file. Returns true if a row was deleted. */
+function deleteNoteCascade(noteId) {
+  const nid = (noteId ?? '').toString().trim();
+  if (!nid) return false;
+  const row = db.prepare(`SELECT audio_filename FROM notes WHERE id = ?`).get(nid);
+  if (!row) return false;
 
-  db.prepare(`DELETE FROM notes WHERE id = ?`).run(id);
+  const deleteTxn = db.transaction(() => {
+    db.prepare(`DELETE FROM job_events WHERE job_id IN (SELECT id FROM ingestion_jobs WHERE note_id = ?)`).run(nid);
+    db.prepare(`DELETE FROM job_events WHERE note_id = ?`).run(nid);
+    db.prepare(`DELETE FROM ingestion_jobs WHERE note_id = ?`).run(nid);
+    db.prepare(`DELETE FROM note_processing_state WHERE note_id = ?`).run(nid);
+    db.prepare(`DELETE FROM note_segments WHERE note_id = ?`).run(nid);
+    db.prepare(`DELETE FROM note_chunks WHERE note_id = ?`).run(nid);
+    db.prepare(`DELETE FROM note_tags WHERE note_id = ?`).run(nid);
+    db.prepare(`DELETE FROM notes WHERE id = ?`).run(nid);
+  });
+  deleteTxn();
 
   const audioPath = path.join(audioDir, row.audio_filename);
   try {
@@ -1618,8 +1840,17 @@ app.delete('/api/notes/:id', (req, res) => {
   } catch {
     // ignore
   }
+  return true;
+}
 
-  res.json({ ok: true, id });
+app.delete('/api/notes/:id', (req, res) => {
+  const { id } = req.params;
+  const nid = (id ?? '').toString().trim();
+  if (!nid) return res.status(400).json({ error: 'Missing id' });
+
+  if (!deleteNoteCascade(nid)) return res.status(404).json({ error: 'Not found' });
+
+  res.json({ ok: true, id: nid });
 });
 
 app.get('/api/notes/:id/audio', (req, res) => {
@@ -1730,7 +1961,7 @@ app.get('/api/blobs/:id', (req, res) => {
 app.post('/api/notes/:id/retry', (req, res) => {
   const { id } = req.params;
   const row = db
-    .prepare(`SELECT id, audio_filename, audio_mime, audio_blob, language FROM notes WHERE id = ?`)
+    .prepare(`SELECT id, audio_filename, audio_mime, audio_blob, language, stt_provider FROM notes WHERE id = ?`)
     .get(id);
   if (!row) return res.status(404).json({ error: 'Not found' });
 
@@ -1791,10 +2022,13 @@ app.post('/api/notes/:id/retry', (req, res) => {
       }, 900);
 
       try {
-        // Reprocess: always auto-detect language (do not use notes.language or WHISPER_LANGUAGE — they force a fixed lang and often yield empty "detection").
-        const out = await transcribeAudioFile(tmpPath, {
-          model: process.env.WHISPER_MODEL || 'medium',
-          language: ''
+        // Use stored hint when set (e.g. user chose Hindi in UI); empty string => Whisper auto-detect.
+        const hintLang = (row.language ?? '').toString().trim();
+        const stt = sttProviderForAuthoritativeFinal(row.stt_provider);
+        const out = await transcribeAuthoritativeFullFile(tmpPath, {
+          model: whisperFinalModelFromEnv(),
+          language: hintLang,
+          provider: stt
         });
 
         if (cancelledDuringTranscribe) {
@@ -1905,9 +2139,26 @@ app.use(
   })
 );
 
+/** Clear screen + scrollback on startup so each restart does not show old terminal output (CI: VOICEVAULT_CLEAR_CONSOLE=0). */
+function clearStartupConsole() {
+  if ((process.env.VOICEVAULT_CLEAR_CONSOLE ?? '1').toString().trim() === '0') return;
+  if (!process.stdout.isTTY) return;
+  try {
+    // \x1B[3J = erase scrollback (xterm / VS Code); \x1B[2J\x1B[H = clear viewport + home cursor
+    process.stdout.write('\x1B[3J\x1B[2J\x1B[H');
+  } catch {
+    // ignore
+  }
+}
+
 app.listen(PORT, () => {
+  clearStartupConsole();
   // eslint-disable-next-line no-console
   console.log(`voiceVault running on http://localhost:${PORT}`);
+  void warmupWhisperPipeline().catch((e) => {
+    // eslint-disable-next-line no-console
+    console.warn('[voicevault] whisper warmup:', e?.message ?? e);
+  });
 });
 
 function clampInt(value, min, max, fallback) {
@@ -2035,9 +2286,9 @@ function rerankSearchResults(q, rows) {
   if (qTokens.length === 0) return rows;
 
   const scored = rows.map((r) => {
-    const title = (r?.title ?? '').toString();
+    const headline = (r?.display_title ?? '').toString().trim() || (r?.title ?? '').toString();
     const body = (r?.body ?? '').toString();
-    const docText = `${title}\n${body}`;
+    const docText = `${headline}\n${body}`;
 
     const docTokens = tokenizeForCompare(docText);
     const docTokenSet = new Set(docTokens);
@@ -2109,6 +2360,57 @@ function formatTranscript(text) {
     .replaceAll('\r\n', '\n')
     .replaceAll(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * If the UI sent a language hint and STT returns no usable text (wrong locale for multilingual speech is common),
+ * retry once with auto-detect (empty language string). Matches client-side live/full preview fallback.
+ */
+async function transcribeWithLanguageHintFallback(tmpPath, { model, language, provider }) {
+  const hint = (language ?? '').toString().trim();
+  const first = await transcribeAudioFile(tmpPath, {
+    model,
+    language: hint,
+    provider
+  });
+  const text = formatTranscript(first?.transcript ?? '').trim();
+  const segs = Array.isArray(first?.segments) ? first.segments : [];
+  const hasSegText = segs.some((s) => ((s?.text ?? '').toString().trim().length > 0));
+  if (text || hasSegText || !hint) return first;
+  return transcribeAudioFile(tmpPath, {
+    model,
+    language: '',
+    provider
+  });
+}
+
+/**
+ * Full-file authoritative STT: first pass + optional Whisper refine model (`WHISPER_REFINE_MODEL`).
+ */
+async function transcribeAuthoritativeFullFile(tmpPath, { model, language, provider }) {
+  const stt = normalizeSttProvider(provider);
+  let out = await transcribeWithLanguageHintFallback(tmpPath, {
+    model,
+    language,
+    provider: stt
+  });
+  const refineModel = (process.env.WHISPER_REFINE_MODEL ?? '').toString().trim();
+  if (stt === 'whisper' && refineModel && refineModel !== model) {
+    try {
+      const out2 = await transcribeWithLanguageHintFallback(tmpPath, {
+        model: refineModel,
+        language,
+        provider: stt
+      });
+      const t2 = formatTranscript(out2?.transcript ?? '').trim();
+      const segs2 = Array.isArray(out2?.segments) ? out2.segments : [];
+      const hasSeg2 = segs2.some((s) => ((s?.text ?? '').toString().trim().length > 0));
+      if (t2 || hasSeg2) out = out2;
+    } catch {
+      // keep first pass
+    }
+  }
+  return out;
 }
 
 function formatClock(sec) {
@@ -2313,6 +2615,58 @@ function parseSegmentsJson(segmentsJson) {
   } catch {
     return [];
   }
+}
+
+/** Shared persistence for STT output (queue job or inline /retry). */
+async function finalizeNoteFromSttOutput(
+  db,
+  noteId,
+  row,
+  { transcriptRaw, segments, detectedLang, transcribe_mode = '' } = {}
+) {
+  const transcript = formatTranscript(transcriptRaw ?? '');
+  const segArr = Array.isArray(segments) ? segments : [];
+  const segmentsJson = safeStringifySegments(segArr);
+  await ensureNoteSegments(db, noteId, segArr);
+  await ensureNoteChunks(db, noteId, segArr);
+
+  const updatedAt = new Date().toISOString();
+  const priorDisplay = (row.display_title ?? '').toString().trim();
+  const finalDisplayTitle =
+    priorDisplay || (transcript ? transcript.slice(0, 64).trim() : '') || '';
+  const ftsTitle = computeFtsTitle(finalDisplayTitle, transcript);
+
+  const hintLang = (row.language ?? '').toString().trim();
+  const detectedNorm = normalizeDetectedLanguage(detectedLang);
+  const storedLang = persistedNoteLanguage(hintLang, detectedNorm);
+
+  const mode = (transcribe_mode ?? '').toString().trim();
+
+  const r = db
+    .prepare(
+      `UPDATE notes
+       SET title = @title,
+           display_title = @display_title,
+           body = @body,
+           segments_json = @segments_json,
+           language = @language,
+           status = 'ready',
+           error = '',
+           transcribe_mode = @transcribe_mode,
+           updated_at = @updated_at
+       WHERE id = @id AND status = 'processing'`
+    )
+    .run({
+      id: noteId,
+      title: ftsTitle,
+      display_title: finalDisplayTitle,
+      body: transcript || '',
+      segments_json: segmentsJson,
+      language: storedLang,
+      transcribe_mode: mode,
+      updated_at: updatedAt
+    });
+  return (r?.changes ?? 0) > 0;
 }
 
 function parseWordsJson(wordsJson) {
@@ -2699,7 +3053,7 @@ function getBackoffMaxSec(db) {
 async function runTranscribeJob(db, { noteId, blobsDir }) {
   const row = db
     .prepare(
-      `SELECT id, title, audio_blob_id, audio_mime, language
+      `SELECT id, title, display_title, audio_blob_id, audio_mime, language, stt_provider
        FROM notes
        WHERE id = ?`
     )
@@ -2727,9 +3081,13 @@ async function runTranscribeJob(db, { noteId, blobsDir }) {
     }, 900);
 
     try {
-      const out = await transcribeAudioFile(tmpPath, {
-        model: process.env.WHISPER_FAST_MODEL || process.env.WHISPER_LANG_MODEL || 'tiny',
-        language: (row.language ?? '').toString().trim() || process.env.WHISPER_LANGUAGE || ''
+      const hintForStt = (row.language ?? '').toString().trim();
+      const stt = sttProviderForAuthoritativeFinal(row.stt_provider);
+      const out = await transcribeAuthoritativeFullFile(tmpPath, {
+        model: whisperFinalModelFromEnv(),
+        // Only pass explicit UI hint; empty => Whisper auto-detect (matches New note preview). Do not use WHISPER_LANGUAGE here — it forces a locale and breaks multi-language auto-detect vs preview.
+        language: hintForStt,
+        provider: stt
       });
 
       if (cancelledDuringTranscribe) {
@@ -2739,38 +3097,11 @@ async function runTranscribeJob(db, { noteId, blobsDir }) {
       }
       throwIfTranscribeCancelled(db, noteId);
 
-      let transcript = formatTranscript(out?.transcript ?? '');
-      const segmentsJson = safeStringifySegments(out?.segments);
-      await ensureNoteSegments(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
-      await ensureNoteChunks(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
-
-      const updatedAt = new Date().toISOString();
-      const finalTitle =
-        (row.title ?? '').toString().trim() ||
-        (transcript ? transcript.slice(0, 64).trim() : '') ||
-        'Untitled';
-
-      const hintLang = (row.language ?? '').toString().trim();
-      const detectedLang = (out?.language ?? '').toString().trim();
-      const storedLang = persistedNoteLanguage(hintLang, detectedLang);
-
-      db.prepare(
-        `UPDATE notes
-         SET title = @title,
-             body = @body,
-             segments_json = @segments_json,
-             language = @language,
-             status = 'ready',
-             error = '',
-             updated_at = @updated_at
-         WHERE id = @id AND status = 'processing'`
-      ).run({
-        id: noteId,
-        title: finalTitle,
-        body: transcript || '',
-        segments_json: segmentsJson,
-        language: storedLang,
-        updated_at: updatedAt
+      await finalizeNoteFromSttOutput(db, noteId, row, {
+        transcriptRaw: out?.transcript ?? '',
+        segments: Array.isArray(out?.segments) ? out.segments : [],
+        detectedLang: out?.language ?? '',
+        transcribe_mode: ''
       });
     } finally {
       try {
@@ -2791,7 +3122,7 @@ async function runTranscribeJob(db, { noteId, blobsDir }) {
 async function runBackfillWordsJob(db, { noteId, blobsDir }) {
   const row = db
     .prepare(
-      `SELECT id, audio_blob_id, audio_mime, language
+      `SELECT id, audio_blob_id, audio_mime, language, stt_provider
        FROM notes
        WHERE id = ?`
     )
@@ -2808,9 +3139,10 @@ async function runBackfillWordsJob(db, { noteId, blobsDir }) {
 
   try {
     const out = await transcribeAudioFile(tmpPath, {
-      // Use a configurable model for backfill (default fast).
-      model: process.env.WHISPER_WORDS_MODEL || process.env.WHISPER_FAST_MODEL || 'tiny',
-      language: (row.language ?? '').toString().trim() || process.env.WHISPER_LANGUAGE || ''
+      // Use a configurable model for backfill (defaults with whisperFinalModelFromEnv).
+      model: process.env.WHISPER_WORDS_MODEL || whisperFinalModelFromEnv(),
+      language: (row.language ?? '').toString().trim(),
+      provider: normalizeSttProvider(row.stt_provider)
     });
 
     // Important: do NOT overwrite notes.body/segments_json for older notes.
@@ -2819,7 +3151,7 @@ async function runBackfillWordsJob(db, { noteId, blobsDir }) {
     await ensureNoteChunks(db, noteId, Array.isArray(out?.segments) ? out.segments : []);
 
     const hintLang = (row.language ?? '').toString().trim();
-    const detectedLang = (out?.language ?? '').toString().trim();
+    const detectedLang = normalizeDetectedLanguage(out?.language);
     const storedLang = persistedNoteLanguage(hintLang, detectedLang);
     if (!hintLang && storedLang) {
       db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id`).run({

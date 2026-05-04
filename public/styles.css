@@ -52,6 +52,63 @@ body {
   display: none !important;
 }
 
+.floatDockBtnProcesses {
+  padding-inline: 12px;
+}
+
+/* New note: sequential transcription stages (live → full → save queue) */
+.newNoteTxStageRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 8px;
+  margin-bottom: 2px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.newNoteTxStageSep {
+  opacity: 0.55;
+  user-select: none;
+}
+
+.newNoteTxStage.pill {
+  margin: 0;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.newNoteTxStage[data-state='pending'] {
+  opacity: 0.55;
+}
+
+.newNoteTxStage[data-state='active'] {
+  opacity: 1;
+  border-color: rgba(124, 58, 237, 0.55);
+  background: rgba(124, 58, 237, 0.14);
+  color: var(--text);
+}
+
+.newNoteTxStage[data-state='done'] {
+  opacity: 1;
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.1);
+  color: rgba(220, 252, 231, 0.95);
+}
+
+.newNoteTxStage[data-state='skipped'] {
+  opacity: 0.75;
+  font-style: italic;
+  border-style: dashed;
+}
+
+#searchCard[hidden] {
+  display: none !important;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
@@ -147,14 +204,9 @@ input[type='file'] {
     align-items: start;
   }
 
-  /* Dock: full-width main column (Search + stacked cards); Processes side hidden */
+  /* Dock: full-width main column (stacked cards) */
   .grid.mainGrid--dock {
     grid-template-columns: 1fr !important;
-  }
-
-  /* Split mode: when Processes body is collapsed, widen the Search column */
-  .grid.procCollapsed {
-    grid-template-columns: 1fr 2fr;
   }
 }
 
@@ -168,6 +220,16 @@ input[type='file'] {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
+}
+
+/* Notes list: no card chrome (border/gradient/title) */
+.librarySurface {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   min-width: 0;
 }
 
@@ -243,6 +305,18 @@ input[type='file'] {
   margin-bottom: 12px;
 }
 
+/* Search row: mic + magnifying-glass icon buttons */
+.searchQueryRow .btnIconOnly {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 1.25rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .btn {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.06);
@@ -295,6 +369,23 @@ input[type='file'] {
   background: linear-gradient(180deg, rgba(168, 85, 247, 0.95), rgba(124, 58, 237, 0.7));
 }
 
+/*
+ * STT toggle row: hovering one button must not “lift” the sibling into the generic `.btn:hover`
+ * purple (seen when the pair lived inside `<label>`, and still guarded for other browsers).
+ * `:has()` is supported in current Chromium / Firefox / Safari used with this app.
+ */
+@supports selector(:has(*)) {
+  .sttEngineRow:has(> .btn:hover) > .btn:not(:hover) {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border);
+  }
+
+  .sttEngineRow:has(> .btn:hover) > .btn.primary:not(:hover) {
+    background: linear-gradient(180deg, rgba(124, 58, 237, 0.9), rgba(124, 58, 237, 0.65));
+    border-color: rgba(124, 58, 237, 0.65);
+  }
+}
+
 .btn.err:hover {
   background: rgba(239, 68, 68, 0.22);
   border-color: rgba(239, 68, 68, 0.55);
@@ -334,6 +425,28 @@ input[type='file'] {
 .toggleText {
   color: rgba(255, 255, 255, 0.92);
   font-weight: 700;
+}
+
+#searchBody {
+  padding-top: 8px;
+}
+
+.searchQueryRow {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.searchQueryRow .searchQueryInput {
+  width: auto;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: min(100%, 20rem);
+}
+
+@media (min-width: 480px) {
+  .searchQueryRow .searchQueryInput {
+    max-width: min(100%, 26rem);
+  }
 }
 
 .input,
@@ -425,8 +538,26 @@ input[type='file'] {
 
 .results {
   display: grid;
-  gap: 10px;
-  margin-top: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  align-items: start;
+  margin-top: 0;
+}
+
+@media (max-width: 420px) {
+  .results {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Full-width row for expanded note details; collapsed notes sit in the tile grid. */
+.results > .note.noteExpanded {
+  grid-column: 1 / -1;
+}
+
+/* Empty / error / full-width messages in the results grid */
+.results > .resultsBanner {
+  grid-column: 1 / -1;
 }
 
 .answerWrap {
@@ -468,19 +599,79 @@ input[type='file'] {
 }
 
 .note {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: none;
   border-radius: 14px;
   padding: 12px;
   background: rgba(0, 0, 0, 0.18);
+  min-width: 0;
+}
+
+/* Collapsed tiles: no outer “card” tint — inner transcript shell keeps its own look. */
+.note.noteCollapsed {
+  background: transparent;
+  padding: 0;
+}
+
+/* Processing notes (no ready-state saved card yet): same boxed look as saved-note shells. */
+.note.noteCollapsed.note--processingInCard {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.note.noteCollapsed.note--processingInCard:hover {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.newNoteTitleHint {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.note.err {
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45);
+  color: rgba(255, 200, 200, 0.95);
 }
 
 .noteSummary {
-  cursor: pointer;
+  cursor: default;
 }
 
 .note.noteCollapsed:hover {
-  background: rgba(0, 0, 0, 0.24);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.08);
+}
+
+/* Ready “saved card” layout: toolbar (meta + collapse + ▼) only when expanded; saved surface is the old inner box. */
+.note.noteCollapsed.note--hasCollapsedShell .noteSummaryToolbar {
+  display: none !important;
+}
+
+.note.noteExpanded.note--hasCollapsedShell .noteSummaryToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.noteToolbarSpacer {
+  flex: 1 1 auto;
+  min-width: 12px;
+}
+
+.noteCollapseActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.noteToolbarDate {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .note.noteExpanded {
@@ -492,12 +683,12 @@ input[type='file'] {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px dashed rgba(255, 255, 255, 0.18);
-  max-height: 420px;
+  max-height: min(62vh, 560px);
   overflow: hidden;
 }
 
 .note.isEditing .noteDetails {
-  max-height: 520px;
+  max-height: min(85vh, 820px);
   overflow: auto;
   scrollbar-width: none; /* Firefox */
 }
@@ -509,6 +700,7 @@ input[type='file'] {
 
 /* Hide scrollbars inside the edit transcript textarea (keep scrolling) */
 .note .editBox .textarea {
+  min-height: min(48vh, 380px);
   scrollbar-width: none; /* Firefox */
 }
 
@@ -583,12 +775,77 @@ input[type='file'] {
   align-self: flex-start;
 }
 
+/* Collapsed cards (legacy layout only): hide chrome; “saved card” layout hides the whole toolbar instead. */
+.note.noteCollapsed:not(.note--hasCollapsedShell) .noteFileMeta,
+.note.noteCollapsed:not(.note--hasCollapsedShell) .noteTitleStamp,
+.note.noteCollapsed:not(.note--hasCollapsedShell) button[data-fav],
+.note.noteCollapsed:not(.note--hasCollapsedShell) .noteStatus.ready,
+.note.noteCollapsed:not(.note--hasCollapsedShell) .noteActionsChevron,
+.note.noteCollapsed:not(.note--hasCollapsedShell) button[data-toggle],
+.note.noteCollapsed:not(.note--hasCollapsedShell) .noteActionsWrap {
+  display: none !important;
+}
+
 .noteBody {
   margin-top: 8px;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.82);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.noteDisplayTitleBlock {
+  font-size: 14px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
+  line-height: 1.35;
+  margin-bottom: 2px;
+}
+
+hr.noteTitleBodyDivider {
+  border: 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.28);
+  margin: 10px 0 12px;
+}
+
+hr.noteTitleBodyDivider.editTitleBodySep {
+  margin: 10px 0 12px;
+}
+
+.noteCollapsedTranscriptShell,
+.noteSavedCard.noteCollapsedTranscriptShell {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+/* Saved card is the primary surface (first in summary); no extra gap above it. */
+.note--hasCollapsedShell .noteSummary > .noteSavedCard.noteCollapsedTranscriptShell {
+  margin-top: 0;
+}
+
+/* Collapsed preview (title + dashed rule + snippet): whole region expands the note like the Expand control. */
+.note.noteCollapsed .noteCollapsedTranscriptShell[data-collapsed-expand='1'],
+.note.noteCollapsed .noteSavedCard[data-collapsed-expand='1'] {
+  cursor: pointer;
+}
+
+.note.noteCollapsed .noteCollapsedTranscriptShell[data-collapsed-expand='1']:focus-visible,
+.note.noteCollapsed .noteSavedCard[data-collapsed-expand='1']:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.65);
+  outline-offset: 2px;
+}
+
+.noteCollapsedBodyPreview {
+  margin-top: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 9.5em;
+  overflow: hidden;
 }
 
 .segRow {
@@ -682,6 +939,11 @@ input[type='file'] {
   align-items: center;
   justify-content: center;
   line-height: 1;
+}
+
+/* New note transcript preview: inline-flex pills omit whitespace between text + child spans — use gap */
+#liveTxStatus.pill {
+  gap: 0.4em;
 }
 
 .timerPill {
@@ -843,6 +1105,10 @@ select.jobsSelect--priority option {
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(0, 0, 0, 0.12);
+}
+
+.noteCollapseActions .noteActionsWrap {
+  margin-left: 0;
 }
 
 .noteActionsWrap .noteActionsChevron {

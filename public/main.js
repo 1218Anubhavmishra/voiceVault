@@ -1,14 +1,17 @@
 const statusEl = document.getElementById('status');
 const btnRecordNote = document.getElementById('btnRecordNote');
-const btnRecordNoteFast = document.getElementById('btnRecordNoteFast');
 const btnStopNote = document.getElementById('btnStopNote');
 const btnSaveNote = document.getElementById('btnSaveNote');
+const newNoteProcessingRowEl = document.getElementById('newNoteProcessingRow');
+const newNoteProcessingTimeEl = document.getElementById('newNoteProcessingTime');
+const newNoteProcLabelEl = document.getElementById('newNoteProcLabel');
 const previewNote = document.getElementById('previewNote');
 const titleEl = document.getElementById('title');
 const noteTimerEl = document.getElementById('noteTimer');
 const noteDetectedLangEl = document.getElementById('noteDetectedLang');
 const noteLanguageEl = document.getElementById('noteLanguage');
-const fastModeDotEl = document.getElementById('fastModeDot');
+const btnSttWhisperEl = document.getElementById('btnSttWhisper');
+const btnSttGoogleEl = document.getElementById('btnSttGoogle');
 const uploadNoteEl = document.getElementById('uploadNote');
 const uploadNoteBtnEl = document.getElementById('uploadNoteBtn');
 const uploadNoteNameEl = document.getElementById('uploadNoteName');
@@ -17,6 +20,80 @@ const liveTranscriptWrapEl = document.getElementById('liveTranscriptWrap');
 const liveTxUpEl = document.getElementById('liveTxUp');
 const liveTxDownEl = document.getElementById('liveTxDown');
 const liveTxStatusEl = document.getElementById('liveTxStatus');
+const liveTxTimeLeftEl = document.getElementById('liveTxTimeLeft');
+const liveTxScrollRowEl = document.getElementById('liveTxScrollRow');
+const newNoteTxStageRowEl = document.getElementById('newNoteTxStageRow');
+const newNoteStageLiveEl = document.getElementById('newNoteStageLive');
+const newNoteStageFullEl = document.getElementById('newNoteStageFull');
+const liveTxPhaseLabelEl = document.getElementById('liveTxPhaseLabel');
+
+/** Resolves when post-record/upload transcription pipeline (live drain + full preview) has finished. */
+let notePostRecordPipelinePromise = null;
+let noteTranscriptionPipelineBusy = false;
+
+function setLiveTxPhaseLabel(text) {
+  if (liveTxPhaseLabelEl) liveTxPhaseLabelEl.textContent = (text ?? '').toString() || '—';
+}
+
+function setNewNoteTranscriptionStages({ live = 'pending', full = 'pending', showRow = true } = {}) {
+  const show =
+    !!showRow &&
+    (!!note.audioBlob || note.isRecording) &&
+    (note.isRecording || live === 'active' || full === 'active' || live === 'done' || full === 'done' || live === 'skipped');
+  if (newNoteTxStageRowEl) newNoteTxStageRowEl.hidden = !show;
+  if (newNoteStageLiveEl) {
+    newNoteStageLiveEl.dataset.state = live;
+    newNoteStageLiveEl.textContent = live === 'skipped' ? 'Live Transcript (n/a — file)' : 'Live Transcript';
+  }
+  if (newNoteStageFullEl) newNoteStageFullEl.dataset.state = full;
+}
+
+async function runNotePostRecordTranscriptionPipeline(source) {
+  // Do not gate on `note.isRecording`: the recorder `stop` handler sets `audioBlob` in the same
+  // turn as `isRecording = false`; an `isRecording` check can race and skip transcription entirely.
+  if (!note.audioBlob) return;
+  noteTranscriptionPipelineBusy = true;
+  try {
+    const afterRecording = source === 'recording_stop';
+    setNewNoteTranscriptionStages({
+      live: afterRecording ? 'active' : 'skipped',
+      full: 'pending',
+      showRow: true
+    });
+    if (afterRecording) {
+      setLiveTxPhaseLabel('Live Transcription');
+      if (liveTxStatusEl) liveTxStatusEl.hidden = false;
+      await note.liveTranscribeTail.catch(() => {});
+      setNewNoteTranscriptionStages({ live: 'done', full: 'pending', showRow: true });
+    }
+    setLiveTxPhaseLabel('Full Transcription');
+    if (liveTxStatusEl) liveTxStatusEl.hidden = false;
+    setNewNoteTranscriptionStages({
+      live: afterRecording ? 'done' : 'skipped',
+      full: 'active',
+      showRow: true
+    });
+    await transcribeFullPreview();
+    setNewNoteTranscriptionStages({
+      live: afterRecording ? 'done' : 'skipped',
+      full: 'done',
+      showRow: true
+    });
+    setLiveTxPhaseLabel('Ready');
+    if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+    syncLiveTxScrollRowVisibility();
+  } finally {
+    noteTranscriptionPipelineBusy = false;
+    syncVisibility();
+  }
+}
+
+function syncLiveTxScrollRowVisibility() {
+  if (!liveTxScrollRowEl || !liveTxStatusEl) return;
+  const processing = !liveTxStatusEl.hidden;
+  const hasText = !!(liveTranscriptEl && String(liveTranscriptEl.value ?? '').trim());
+  liveTxScrollRowEl.hidden = processing || !hasText;
+}
 
 const qEl = document.getElementById('q');
 const btnSearch = document.getElementById('btnSearch');
@@ -24,6 +101,10 @@ const btnRecordQuery = document.getElementById('btnRecordQuery');
 const btnStopQuery = document.getElementById('btnStopQuery');
 const previewQuery = document.getElementById('previewQuery');
 const resultsEl = document.getElementById('results');
+const searchCardEl = document.getElementById('searchCard');
+const searchBodyEl = document.getElementById('searchBody');
+const btnSearchCloseEl = document.getElementById('btnSearchClose');
+const btnFloatSearchEl = document.getElementById('btnFloatSearch');
 const queryTimerEl = document.getElementById('queryTimer');
 const newNoteCardEl = document.getElementById('newNoteCard');
 const btnHelpToggleEl = document.getElementById('btnHelpToggle');
@@ -41,11 +122,11 @@ const newNoteBodyEl = document.getElementById('newNoteBody');
 const mainGridEl = document.getElementById('mainGrid');
 const btnIngestPauseEl = document.getElementById('btnIngestPause');
 const btnIngestResumeEl = document.getElementById('btnIngestResume');
-const btnProcToggleEl = document.getElementById('btnProcToggle');
+const btnProcessesCloseEl = document.getElementById('btnProcessesClose');
 const procBodyEl = document.getElementById('procBody');
 const processCardEl = document.getElementById('processCard');
-const leftColEl = document.getElementById('leftCol');
 const floatDockEl = document.getElementById('floatDock');
+const btnFloatProcessesEl = document.getElementById('btnFloatProcesses');
 const btnFloatNewNoteEl = document.getElementById('btnFloatNewNote');
 const btnFloatHelpEl = document.getElementById('btnFloatHelp');
 const helpCardEl = document.getElementById('helpCard');
@@ -92,15 +173,157 @@ const AUDIO_BITS_PER_SECOND = 64_000; // 64 kbps Opus (WebM); adjust if you want
 const MEDIARECORDER_TIMESLICE_MS = 100; // 0.1s chunks (recording only)
 const LIVE_LANG_DETECT_INTERVAL_MS = 2000; // practical Whisper polling cadence
 const LIVE_TRANSCRIBE_INTERVAL_MS = 3000; // live transcript preview cadence
+/** Min recent-audio blob size before calling live STT (smaller clips still get previews sooner). */
+const LIVE_TRANSCRIBE_MIN_CHUNK_BYTES = 12_000;
+/**
+ * Max wall-clock span represented in one live STT blob (MediaRecorder timeslices are ~100ms).
+ * Capped under 12s: longer sliding windows were dropping the WebM init chunk and breaking decode.
+ */
+const LIVE_TRANSCRIBE_MAX_WINDOW_MS = 11_500;
+/** Shorter window for /api/detect-language polling while recording. */
+const LIVE_LANG_PROBE_MAX_WINDOW_MS = 8000;
+
+/**
+ * WebM from MediaRecorder is an init chunk plus cluster fragments. Using only `chunks.slice(-N)`
+ * drops the EBML/CodecPrivate header once recording exceeds N×timeslice, so ffmpeg/STT get corrupt
+ * input and Whisper returns nonsense. Always keep `chunks[0]` and cap tail length by time window.
+ * @param {{ chunks?: BlobPart[], mediaRecorder?: MediaRecorder|null }} state
+ * @param {number} maxWindowMs
+ * @returns {Blob|null}
+ */
+function buildSlidingWebmBlobForLiveStt(state, maxWindowMs) {
+  const chunks = state.chunks;
+  if (!Array.isArray(chunks) || chunks.length === 0) return null;
+  const mime = state.mediaRecorder?.mimeType || 'audio/webm';
+  const sliceMs = Math.max(1, Number(MEDIARECORDER_TIMESLICE_MS) || 100);
+  const maxPieces = Math.max(2, Math.ceil(Math.max(0, Number(maxWindowMs) || 0) / sliceMs));
+  if (chunks.length <= maxPieces) {
+    return new Blob(chunks, { type: mime });
+  }
+  const head = chunks[0];
+  const tail = chunks.slice(-(maxPieces - 1));
+  return new Blob([head, ...tail], { type: mime });
+}
+
+/** Mirror `server/index.js` `formatTranscript` so preview-bundle validation matches. */
+function vvFormatTranscript(text) {
+  const raw = (text ?? '').toString();
+  if (!raw) return '';
+  return raw
+    .replaceAll('\u201c', '"')
+    .replaceAll('\u201d', '"')
+    .replaceAll('"', '\n"\n')
+    .replace(/([.!?;:,])(?=\s*[\p{L}\p{N}])/gu, '$1\n')
+    .replaceAll('\r\n', '\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Same rules as `sanitizeSegmentsForPersistence` on the server (preview bundle must pass save validation). */
+function vvSanitizePreviewSegments(segments) {
+  if (!Array.isArray(segments)) return [];
+  const out = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const s = segments[i];
+    const start = Number(s?.start);
+    const end = Number(s?.end);
+    const text = (s?.text ?? '').toString().trim();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) continue;
+    out.push({ start, end, text });
+    if (out.length >= 8000) break;
+  }
+  return out;
+}
+
+function vvTranscriptFromSegments(segments) {
+  if (!Array.isArray(segments)) return '';
+  return segments
+    .map((s) => (s?.text ?? '').toString().trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
 
 /** Wall-clock STT vs recording length (very approximate; GPU/local Whisper varies). Used only for UI estimate. */
 const PROCESSING_TIME_ESTIMATE_RATIO = 0.45;
 
+const NOTE_STT_ENGINE_KEY = 'vv_note_stt_engine';
+
+function loadSavedNoteSttEngine() {
+  try {
+    const v = (localStorage.getItem(NOTE_STT_ENGINE_KEY) ?? '').toString().trim().toLowerCase();
+    return v === 'google' ? 'google' : 'whisper';
+  } catch {
+    return 'whisper';
+  }
+}
+
+function saveNoteSttEngine(v) {
+  try {
+    localStorage.setItem(NOTE_STT_ENGINE_KEY, v === 'google' ? 'google' : 'whisper');
+  } catch {
+    // ignore
+  }
+}
+
+function getNewNoteSttProvider() {
+  return loadSavedNoteSttEngine();
+}
+
+/** Align with server `normalizeSttProvider` (whisper | google). */
+function sttProviderFromRaw(raw) {
+  const s = (raw ?? '').toString().trim().toLowerCase();
+  return s === 'google' || s === 'chirp' ? 'google' : 'whisper';
+}
+
+function syncNewNoteSttUi() {
+  const p = getNewNoteSttProvider();
+  if (btnSttWhisperEl instanceof HTMLButtonElement) {
+    btnSttWhisperEl.classList.toggle('primary', p === 'whisper');
+    btnSttWhisperEl.setAttribute('aria-pressed', p === 'whisper' ? 'true' : 'false');
+  }
+  if (btnSttGoogleEl instanceof HTMLButtonElement) {
+    btnSttGoogleEl.classList.toggle('primary', p === 'google');
+    btnSttGoogleEl.setAttribute('aria-pressed', p === 'google' ? 'true' : 'false');
+  }
+}
+
+function setNewNoteSttProvider(next) {
+  saveNoteSttEngine(next === 'google' ? 'google' : 'whisper');
+  syncNewNoteSttUi();
+}
+
+/** Restore last language choice from localStorage (empty string = Auto-detect was chosen). */
+function applyStickyNoteLanguageFromStorage() {
+  if (!noteLanguageEl) return;
+  try {
+    const raw = localStorage.getItem('vv_last_note_language');
+    if (raw === null) return;
+    noteLanguageEl.value = (raw ?? '').toString().trim();
+  } catch {
+    // ignore
+  }
+}
+
+/** Before a new recording: re-apply sticky language + reset pill (dropdown keeps last explicit code if any). */
+function resetNewNoteLanguageForRecording() {
+  applyStickyNoteLanguageFromStorage();
+  if (noteDetectedLangEl) {
+    const v = (noteLanguageEl?.value ?? '').toString().trim();
+    noteDetectedLangEl.textContent = v ? `Lang: ${v}` : 'Lang: —';
+    noteDetectedLangEl.hidden = true;
+  }
+}
+
 /** When we have no duration or byte size yet, show a neutral countdown instead of elapsed time. */
 const DEFAULT_PROCESSING_ESTIMATE_MS = 60_000;
 
-/** When the initial estimate reaches 0 but the note is still processing, add this much per bump so the UI keeps counting down. */
-const EXTEND_PROCESSING_ESTIMATE_CHUNK_MS = 45_000;
+/**
+ * Floor for `duration * PROCESSING_TIME_ESTIMATE_RATIO` budgets. Short clips otherwise get a few
+ * seconds of "linear" percent; local STT (ffmpeg + Python + first faster-whisper load) routinely
+ * exceeds that, the percent hits the **1% floor** until the job finishes (no real engine progress signal).
+ */
+const MIN_DURATION_BASED_PROCESSING_ESTIMATE_MS = 18_000;
 
 /** @returns {number|null} estimated processing duration in ms, or null if unknown */
 function estimatedProcessingMsFromAudioDuration(durationMs) {
@@ -124,15 +347,38 @@ function inferredAudioDurationMsForItem(item) {
 }
 
 /**
- * Wall-clock STT time to show as "X left" (replaces raw elapsed). Always a positive number.
+ * Wall-clock STT estimate (ms) used as the denominator for the processing **percent left** proxy.
  */
 function totalProcessingEstimateMsForItem(item) {
   const audioLen = inferredAudioDurationMsForItem(item);
   if (audioLen > 0) {
     const est = estimatedProcessingMsFromAudioDuration(audioLen);
-    if (est != null && est > 0) return est;
+    if (est != null && est > 0) {
+      return Math.max(MIN_DURATION_BASED_PROCESSING_ESTIMATE_MS, est);
+    }
   }
   return DEFAULT_PROCESSING_ESTIMATE_MS;
+}
+
+/** Pending ingestion weight from server (100 ≈ transcribe, 12 ≈ backfill_words); inline retry has no rows → 100. */
+function processingPendingUnitsForItem(item) {
+  if ((item?.status ?? '').toString() !== 'processing') return 0;
+  const u = Number(item?.processing_pending_units ?? NaN);
+  if (Number.isFinite(u) && u > 0) return u;
+  return 100;
+}
+
+function scaledProcessingBudgetFromBaseAndUnits(baseMs, units) {
+  const u = Number.isFinite(Number(units)) && Number(units) > 0 ? Number(units) : 100;
+  const frac = Math.min(1, u / 100);
+  return Math.max(1000, Math.round(baseMs * Math.max(frac, 0.05)));
+}
+
+function scaledProcessingBudgetMsForItem(item) {
+  return scaledProcessingBudgetFromBaseAndUnits(
+    totalProcessingEstimateMsForItem(item),
+    processingPendingUnitsForItem(item)
+  );
 }
 
 let note = makeRecorderState();
@@ -140,6 +386,8 @@ let query = makeRecorderState();
 
 // Keep UI stable across polling refreshes
 const expandedNoteIds = new Set();
+/** Note ids opened automatically for search hit highlighting (`best_match`); cleared when search text is empty. */
+const expandedNoteIdsFromSearchMatch = new Set();
 let procStatusFilter = '';
 
 let gridLayoutMode = 'auto'; // 'auto' | 'equal' | 'searchWide'
@@ -162,46 +410,85 @@ let semanticMode = true;
 let lastSearchItems = [];
 let lastSearchQuery = '';
 
-/** Per-note processing timer: pause freezes remaining (`frozenRemainingMs`) or elapsed (`frozenMs`); resume sets `baseIso`. */
+/** Per-note processing timer: pause freezes percent left (`frozenPercentLeft`) and budget fields; resume sets `baseIso`. */
 const procTimerByNoteId = new Map();
 
-/** Client-side extended budget when initial ETA hits 0 while still transcribing; keyed by noteId + data-processing-since. */
-const procEffectiveEstimateTotalByPass = new Map();
-
-function procPassKey(el, noteId) {
-  const iso = (el?.getAttribute?.('data-processing-since') ?? '').toString();
-  return `${(noteId ?? '').toString()}\t${iso}`;
-}
-
-function clearProcessingEstimateExtensionForNote(noteId) {
-  const p = `${(noteId ?? '').toString()}\t`;
-  for (const k of [...procEffectiveEstimateTotalByPass.keys()]) {
-    if (k.startsWith(p)) procEffectiveEstimateTotalByPass.delete(k);
-  }
-}
-
 /**
- * Keeps `data-estimated-total-ms` in sync when the first estimate runs out but processing continues.
- * @returns {{ remainingMs: number, effectiveTotalMs: number }}
+ * Approximate **percent of transcription left** (100 = start of window, 1 = past-estimate floor).
+ * Not from the STT engine; elapsed vs estimated budget only.
+ *
+ * Previously: (1) crossing `r = elapsed/budget > 1` used a "tail" curve starting at **~15%**, so the
+ * UI jumped **up** right after reaching ~1%. (2) When `locked_at` appeared, elapsed switched from
+ * full wall time to time-since-lock, which could **reset** progress and spike the percent again.
  */
-function resolveProcessingRemainingMs(el, noteId, elapsedMs) {
-  const passKey = procPassKey(el, noteId);
-  const attr = Number(el.getAttribute('data-estimated-total-ms') ?? '') || 0;
-  const floor = attr > 0 ? attr : DEFAULT_PROCESSING_ESTIMATE_MS;
-  const stored = procEffectiveEstimateTotalByPass.get(passKey);
-  let total = Math.max(floor, typeof stored === 'number' ? stored : 0);
-  if (typeof stored === 'number' && stored > floor) {
-    el.setAttribute('data-estimated-total-ms', String(stored));
+function processingProgressFromAttrs({ baseMs, units, lockedAt, elapsedWallMs }) {
+  void lockedAt; // kept for API symmetry / callers; do not reset elapsed when the job locks (avoids jumps)
+  const scaledBudget = scaledProcessingBudgetFromBaseAndUnits(baseMs, units);
+  const elapsedWork = Math.max(0, Number(elapsedWallMs) || 0);
+  const b = scaledBudget > 0 ? scaledBudget : 1;
+  const r = elapsedWork / b;
+  if (r <= 1) {
+    const left = 100 * (1 - r);
+    return { pct: Math.max(1, Math.min(100, Math.round(left))), pastBudget: false };
   }
-  let remainingMs = total - elapsedMs;
-  while (remainingMs <= 0) {
-    total += EXTEND_PROCESSING_ESTIMATE_CHUNK_MS;
-    procEffectiveEstimateTotalByPass.set(passKey, total);
-    el.setAttribute('data-estimated-total-ms', String(total));
-    remainingMs = total - elapsedMs;
-  }
-  return { remainingMs, effectiveTotalMs: total };
+  return { pct: 1, pastBudget: true };
 }
+
+function processingPercentLeftFromAttrs(attrs) {
+  return processingProgressFromAttrs(attrs).pct;
+}
+
+function processingProgressFromElement(el, elapsedWallSinceNoteStart) {
+  const baseMs = Number(el.getAttribute('data-processing-base-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
+  const unitsRaw = Number(el.getAttribute('data-processing-pending-units') ?? '100');
+  const units = Number.isFinite(unitsRaw) && unitsRaw > 0 ? unitsRaw : 100;
+  const lockedAt = (el.getAttribute('data-processing-locked-at') ?? '').toString().trim();
+  const coarseStage = (el.getAttribute('data-processing-stage') ?? '').toString().trim();
+  const retranscribeFallback = (el.getAttribute('data-retranscribe-fallback') ?? '') === '1';
+  const pr = processingProgressFromAttrs({ baseMs, units, lockedAt, elapsedWallMs: elapsedWallSinceNoteStart });
+  return { ...pr, coarseStage, retranscribeFallback };
+}
+
+function processingPercentLeftFromElement(el, elapsedWallSinceNoteStart) {
+  return processingProgressFromElement(el, elapsedWallSinceNoteStart).pct;
+}
+
+function formatProcessingPercentLeftLabel(pct) {
+  const n = Math.round(Number(pct));
+  if (!Number.isFinite(n) || n <= 0) return '…';
+  return `${Math.max(1, Math.min(100, n))}% left`;
+}
+
+/** Human hint from server `processing_coarse_stage` (ingestion_jobs); refreshed with list poll. */
+function coarseStageHint(stage) {
+  const s = (stage ?? '').toString().trim().toLowerCase();
+  if (s === 'queued') return 'in queue';
+  if (s === 'running') return 'running';
+  return '';
+}
+
+/** Past time budget: plain “Transcribing…”; with server stage, append hint in parentheses. */
+function formatProcessingProgressChipText({ pct, pastBudget, coarseStage, retranscribeFallback = false }) {
+  if (pastBudget) {
+    const hint = coarseStageHint(coarseStage);
+    // Re-transcribe cards prefix the row with “ReTranscribing”; avoid repeating it in the chip.
+    if (retranscribeFallback) {
+      return hint ? `(${hint})` : '…';
+    }
+    const base = 'Transcribing…';
+    return hint ? `${base} (${hint})` : base;
+  }
+  return formatProcessingPercentLeftLabel(pct);
+}
+
+/** Note id saved from New note → Save while server transcribes; cleared when that note leaves `processing`. */
+let newNotePendingProcessId = '';
+
+/** Last successful `/api/transcribe` (full preview) for the current note audio; used on Save when still valid. */
+let lastFullPreviewBundle = null;
+
+/** In-flight full preview so Save can await the same run started after recording (avoids queued save when preview is still running). */
+let transcribeFullPreviewInFlight = null;
 
 /** While any note in the current list is processing, poll so transcript appears when STT actually finishes (timer ≠ completion). */
 let processingNotesPollId = null;
@@ -223,16 +510,111 @@ function syncProcessingNotesPoll(items) {
   }, 2500);
 }
 
+function hideNewNoteProcessingStatus() {
+  newNotePendingProcessId = '';
+  if (newNoteProcessingRowEl) newNoteProcessingRowEl.hidden = true;
+  if (newNoteProcessingTimeEl) {
+    newNoteProcessingTimeEl.textContent = '—';
+    newNoteProcessingTimeEl.removeAttribute('data-note-id');
+    newNoteProcessingTimeEl.removeAttribute('data-processing-since');
+    newNoteProcessingTimeEl.removeAttribute('data-estimated-total-ms');
+    newNoteProcessingTimeEl.removeAttribute('data-processing-base-ms');
+    newNoteProcessingTimeEl.removeAttribute('data-processing-pending-units');
+    newNoteProcessingTimeEl.removeAttribute('data-processing-locked-at');
+    newNoteProcessingTimeEl.removeAttribute('data-processing-stage');
+    newNoteProcessingTimeEl.removeAttribute('data-retranscribe-fallback');
+  }
+  if (newNoteProcLabelEl) newNoteProcLabelEl.textContent = 'Processing';
+}
+
+/** Mirrors saved-note cards: same estimate helpers + `noteProcessingTime` class for `startProcessingTimers`. */
+function clearLiveTxPreviewCountdown() {
+  if (!liveTxTimeLeftEl) return;
+  liveTxTimeLeftEl.textContent = '—';
+  liveTxTimeLeftEl.removeAttribute('data-note-id');
+  liveTxTimeLeftEl.removeAttribute('data-processing-since');
+  liveTxTimeLeftEl.removeAttribute('data-estimated-total-ms');
+  liveTxTimeLeftEl.removeAttribute('data-processing-base-ms');
+  liveTxTimeLeftEl.removeAttribute('data-processing-pending-units');
+  liveTxTimeLeftEl.removeAttribute('data-processing-locked-at');
+  liveTxTimeLeftEl.removeAttribute('data-processing-stage');
+}
+
+/** Full-preview + live-chunk transcribe: same ETA pattern as saved-note cards (via `startProcessingTimers`). */
+function armLiveTxPreviewCountdown(pseudoItem) {
+  if (!liveTxTimeLeftEl) return;
+  clearLiveTxPreviewCountdown();
+  const est = totalProcessingEstimateMsForItem(pseudoItem);
+  const processingSinceIso = new Date().toISOString();
+  liveTxTimeLeftEl.setAttribute('data-note-id', '__vv_live_preview');
+  liveTxTimeLeftEl.setAttribute('data-processing-since', processingSinceIso);
+  liveTxTimeLeftEl.setAttribute('data-estimated-total-ms', String(est));
+  liveTxTimeLeftEl.setAttribute('data-processing-base-ms', String(est));
+  liveTxTimeLeftEl.setAttribute('data-processing-pending-units', '100');
+  liveTxTimeLeftEl.setAttribute('data-processing-locked-at', '');
+  liveTxTimeLeftEl.setAttribute('data-processing-stage', '');
+  liveTxTimeLeftEl.textContent = formatProcessingProgressChipText(
+    processingProgressFromElement(liveTxTimeLeftEl, 0)
+  );
+}
+
+function showNewNoteProcessingStatus(noteId, { durationMs = 0, audioBytes = 0, retranscribe = false } = {}) {
+  if (!newNoteProcessingTimeEl || !newNoteProcessingRowEl) return;
+  const id = (noteId ?? '').toString().trim();
+  if (!id) return;
+  newNotePendingProcessId = id;
+  if (newNoteProcLabelEl) newNoteProcLabelEl.textContent = retranscribe ? 'Re-transcribing to save' : 'Processing';
+  const pseudoItem = {
+    duration_ms: durationMs,
+    audio_bytes: audioBytes
+  };
+  const estProcMs = totalProcessingEstimateMsForItem(pseudoItem);
+  const processingSinceIso = new Date().toISOString();
+
+  newNoteProcessingTimeEl.setAttribute('data-note-id', id);
+  newNoteProcessingTimeEl.setAttribute('data-processing-since', processingSinceIso);
+  newNoteProcessingTimeEl.setAttribute('data-estimated-total-ms', String(estProcMs));
+  newNoteProcessingTimeEl.setAttribute('data-processing-base-ms', String(estProcMs));
+  newNoteProcessingTimeEl.setAttribute('data-processing-pending-units', '100');
+  newNoteProcessingTimeEl.setAttribute('data-processing-locked-at', '');
+  newNoteProcessingTimeEl.setAttribute('data-processing-stage', '');
+  newNoteProcessingTimeEl.setAttribute('data-retranscribe-fallback', retranscribe ? '1' : '0');
+  newNoteProcessingTimeEl.textContent = formatProcessingProgressChipText(
+    processingProgressFromElement(newNoteProcessingTimeEl, 0)
+  );
+  newNoteProcessingRowEl.hidden = false;
+}
+
 function syncProcTimerFromServerPaused(noteId, processingSinceIso, procPaused, status, item) {
   const id = (noteId ?? '').toString();
   if ((status ?? '').toString() !== 'processing' || !procPaused || procTimerByNoteId.has(id)) return;
   const base = Date.parse((processingSinceIso ?? '').toString()) || Date.now();
   const elapsed = Math.max(0, Date.now() - base);
-  const est = totalProcessingEstimateMsForItem(item);
+  const est = scaledProcessingBudgetMsForItem(item);
+  const baseProcMs = totalProcessingEstimateMsForItem(item);
+  const units = processingPendingUnitsForItem(item);
+  const locked = (item.processing_running_locked_at ?? '').toString().trim();
+  const stage = (item.processing_coarse_stage ?? '').toString().trim();
+  const frozenProg = processingProgressFromAttrs({
+    baseMs: baseProcMs,
+    units,
+    lockedAt: locked,
+    elapsedWallMs: elapsed
+  });
+  const rtf = (item.transcribe_mode ?? '').toString().trim() === 'retranscribe';
+  const frozenChipText = formatProcessingProgressChipText({
+    ...frozenProg,
+    coarseStage: stage,
+    retranscribeFallback: rtf
+  });
   procTimerByNoteId.set(id, {
     paused: true,
     frozenRemainingMs: Math.max(0, est - elapsed),
-    estimatedMs: est
+    estimatedMs: est,
+    frozenPercentLeft: frozenProg.pct,
+    frozenPastBudget: frozenProg.pastBudget,
+    frozenCoarseStage: stage,
+    frozenChipText
   });
 }
 
@@ -253,6 +635,171 @@ function ensureElementFullyVisible(el, pad = 8) {
     const overflowTop = pad - r.top;
     if (overflowBottom > 0) window.scrollBy({ top: overflowBottom, left: 0, behavior: 'smooth' });
     else if (overflowTop > 0) window.scrollBy({ top: -overflowTop, left: 0, behavior: 'smooth' });
+  } catch {
+    // ignore
+  }
+}
+
+/** Same values as #noteLanguage in index.html (keep in sync when adding languages). */
+const NOTE_LANGUAGE_OPTIONS = [
+  { value: '', label: 'Auto-detect' },
+  { value: 'en', label: 'English (en)' },
+  { value: 'hi', label: 'Hindi (hi)' },
+  { value: 'es', label: 'Spanish (es)' },
+  { value: 'fr', label: 'French (fr)' },
+  { value: 'de', label: 'German (de)' },
+  { value: 'it', label: 'Italian (it)' },
+  { value: 'pt', label: 'Portuguese (pt)' },
+  { value: 'ja', label: 'Japanese (ja)' },
+  { value: 'ko', label: 'Korean (ko)' },
+  { value: 'zh', label: 'Chinese (zh)' }
+];
+
+/** Human-readable language for note toolbar (raw codes like `hi` read like English "hi"). */
+function formatNoteLanguageMeta(langRaw) {
+  const raw = (langRaw ?? '').toString().trim();
+  if (!raw) return '';
+  const norm = raw.replaceAll('_', '-').trim();
+  const primary = (norm.split('-')[0] ?? '').toLowerCase();
+  const opt = NOTE_LANGUAGE_OPTIONS.find((o) => o.value && o.value.toLowerCase() === primary);
+  if (opt?.label) {
+    return opt.label.replace(/\s*\([^)]+\)\s*$/, '').trim() || opt.label;
+  }
+  try {
+    const dn = new Intl.DisplayNames(['en'], { type: 'language' });
+    try {
+      const full = dn.of(norm);
+      if (full && full.toLowerCase() !== norm.toLowerCase()) return full;
+    } catch {
+      // ignore
+    }
+    if (primary.length >= 2 && primary.length <= 3) {
+      const pLabel = dn.of(primary);
+      if (pLabel && pLabel.toLowerCase() !== primary) return pLabel;
+    }
+  } catch {
+    // ignore
+  }
+  return raw;
+}
+
+/**
+ * @param {{ currentLang: string, currentStt?: string }} opts
+ * @param {(payload: { lang: string, stt_provider: 'whisper' | 'google' }) => void | Promise<void>} onApply
+ */
+function openChangeLanguageDialog(opts, onApply) {
+  const currentLang = (opts?.currentLang ?? '').toString();
+  const currentStt = sttProviderFromRaw(opts?.currentStt ?? 'whisper');
+  let sttPick = currentStt;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'vvChangeLangTitle');
+
+  const optsHtml = NOTE_LANGUAGE_OPTIONS.map(
+    (o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`
+  ).join('');
+
+  overlay.innerHTML = `
+    <div class="dialog" style="width:min(440px,96vw)">
+      <div id="vvChangeLangTitle" style="font-weight:850; margin-bottom:12px">Change language</div>
+      <p style="margin:0 0 12px; font-size:13px; color:rgba(255,255,255,0.72); line-height:1.45">
+        Updates the transcription hint for this note and re-runs transcription on the saved audio (same as Reprocess).
+      </p>
+      <label class="label" style="margin-bottom:0">
+        Language
+        <select class="input vvChangeLangSelect" style="margin-top:6px; background:rgba(255,255,255,0.95); color:rgba(0,0,0,0.92); border-color:rgba(255,255,255,0.75)">
+          ${optsHtml}
+        </select>
+      </label>
+      <div class="label" style="margin-top:14px; margin-bottom:0">Transcription engine</div>
+      <p style="margin:6px 0 8px; font-size:12px; color:rgba(255,255,255,0.65); line-height:1.45">
+        Used for this re-transcribe and saved on the note. Google Chirp needs server-side Google Cloud Speech credentials.
+      </p>
+      <div class="row" style="gap:8px; flex-wrap:wrap; margin-top:4px">
+        <button type="button" class="btn vvChangeLangSttWhisper">Whisper (default)</button>
+        <button type="button" class="btn vvChangeLangSttGoogle">Google Chirp</button>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap">
+        <button type="button" class="btn vvChangeLangCancel">Cancel</button>
+        <button type="button" class="btn primary vvChangeLangApply">Apply &amp; re-transcribe</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const sel = overlay.querySelector('.vvChangeLangSelect');
+  if (sel instanceof HTMLSelectElement) {
+    const cur = currentLang.trim();
+    sel.value = NOTE_LANGUAGE_OPTIONS.some((o) => o.value === cur) ? cur : '';
+  }
+
+  const btnWh = overlay.querySelector('.vvChangeLangSttWhisper');
+  const btnGo = overlay.querySelector('.vvChangeLangSttGoogle');
+  const syncSttUi = () => {
+    const p = sttPick === 'google' ? 'google' : 'whisper';
+    sttPick = p;
+    if (btnWh instanceof HTMLButtonElement) {
+      btnWh.classList.toggle('primary', p === 'whisper');
+      btnWh.setAttribute('aria-pressed', p === 'whisper' ? 'true' : 'false');
+    }
+    if (btnGo instanceof HTMLButtonElement) {
+      btnGo.classList.toggle('primary', p === 'google');
+      btnGo.setAttribute('aria-pressed', p === 'google' ? 'true' : 'false');
+    }
+  };
+  syncSttUi();
+  btnWh?.addEventListener('click', () => {
+    sttPick = 'whisper';
+    syncSttUi();
+  });
+  btnGo?.addEventListener('click', () => {
+    sttPick = 'google';
+    syncSttUi();
+  });
+
+  const close = () => {
+    try {
+      overlay.remove();
+    } catch {
+      // ignore
+    }
+  };
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  const onKey = (e) => {
+    if ((e?.key ?? '') === 'Escape') {
+      e.preventDefault();
+      close();
+      document.removeEventListener('keydown', onKey, true);
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+
+  overlay.querySelector('.vvChangeLangCancel')?.addEventListener('click', () => {
+    document.removeEventListener('keydown', onKey, true);
+    close();
+  });
+
+  overlay.querySelector('.vvChangeLangApply')?.addEventListener('click', async () => {
+    const lang = sel instanceof HTMLSelectElement ? sel.value : '';
+    const stt_provider = sttPick === 'google' ? 'google' : 'whisper';
+    document.removeEventListener('keydown', onKey, true);
+    try {
+      await onApply({ lang, stt_provider });
+    } finally {
+      close();
+    }
+  });
+
+  try {
+    overlay.querySelector('.vvChangeLangSelect')?.focus?.();
   } catch {
     // ignore
   }
@@ -325,16 +872,13 @@ function applyMainGridColumns(mode) {
   }
 }
 
-function isDockMode() {
-  // Full-width main column when the Processes side card is not shown.
-  return !(processCardEl && !processCardEl.hidden);
-}
-
 function syncFloatDockVisibility() {
   if (!floatDockEl) return;
+  const showSearchBtn = !!(btnFloatSearchEl && !btnFloatSearchEl.hidden);
+  const showProcBtn = !!(btnFloatProcessesEl && !btnFloatProcessesEl.hidden);
   const showNewNoteBtn = !!(btnFloatNewNoteEl && !btnFloatNewNoteEl.hidden);
   const showHelpBtn = !!(btnFloatHelpEl && !btnFloatHelpEl.hidden);
-  floatDockEl.hidden = !showNewNoteBtn && !showHelpBtn;
+  floatDockEl.hidden = !showSearchBtn && !showProcBtn && !showNewNoteBtn && !showHelpBtn;
 }
 
 function expandAppHintInHelp() {
@@ -412,52 +956,51 @@ function scheduleExpandedNoteScroll(noteEl, isLastNote) {
 
 function updateMainGridLayout({ prefer = 'auto' } = {}) {
   if (!mainGridEl) return;
-  const procCollapsed = !!procBodyEl?.hidden;
-
-  const dock = isDockMode();
-  mainGridEl.classList.toggle('mainGrid--dock', dock);
-  if (leftColEl) leftColEl.hidden = dock;
-  syncFloatDockVisibility();
-
-  mainGridEl.classList.remove('noteCollapsed', 'procCollapsed', 'helpCollapsed');
-  if (procCollapsed) mainGridEl.classList.add('procCollapsed');
-
   if (prefer !== 'auto') gridLayoutMode = prefer;
 
-  if (dock) {
-    applyMainGridColumns('dock');
-  } else {
-    const resolved =
-      gridLayoutMode === 'equal'
-        ? 'equal'
-        : gridLayoutMode === 'searchWide'
-          ? 'searchWide'
-          : procCollapsed
-            ? 'searchWide'
-            : 'equal';
-    applyMainGridColumns(resolved);
-  }
+  mainGridEl.classList.add('mainGrid--dock');
+  syncFloatDockVisibility();
+  applyMainGridColumns('dock');
 
   if (statusEl) {
-    statusEl.title = `layout: dock=${dock}, proc=${procCollapsed ? 'collapsed' : 'open'}, mode=${gridLayoutMode}`;
+    statusEl.title = `layout: dock, mode=${gridLayoutMode}`;
   }
 }
 
-async function expandProcessesSide() {
-  if (procBodyEl) procBodyEl.hidden = false;
-  if (btnProcToggleEl) btnProcToggleEl.textContent = 'Hide';
-  try {
-    await refreshIngestionUi({ toggleList: false, forceShow: true });
-  } catch {
-    // ignore
+/** Only one of Search / Processes / New note / Help may be expanded at a time. */
+function closeAllPanelsExcept(except) {
+  if (except !== 'search') setSearchPanelOpen(false);
+  if (except !== 'newNote') setNewNotePanelOpen(false);
+  if (except !== 'help') setHelpPanelOpen(false);
+  if (except !== 'processes') setProcessesPanelOpen(false);
+}
+
+function expandProcessesSide() {
+  setProcessesPanelOpen(true);
+}
+
+function setProcessesPanelOpen(open) {
+  if (!processCardEl) return;
+  const on = !!open;
+  if (on) closeAllPanelsExcept('processes');
+  processCardEl.hidden = !on;
+  if (btnFloatProcessesEl) {
+    btnFloatProcessesEl.hidden = on;
+    btnFloatProcessesEl.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
-  updateMainGridLayout({ prefer: 'equal' });
-  scheduleScrollPageBottomAfterExpand();
+  if (on && procBodyEl) procBodyEl.hidden = false;
+  updateMainGridLayout({ prefer: 'auto' });
+  if (on) {
+    void refreshIngestionUi({ toggleList: false, forceShow: true }).finally(() => {
+      scheduleScrollPageBottomAfterExpand();
+    });
+  }
 }
 
 function setNewNotePanelOpen(open) {
   if (!newNoteCardEl) return;
   const on = !!open;
+  if (on) closeAllPanelsExcept('newNote');
   newNoteCardEl.hidden = !on;
   if (on && newNoteBodyEl) newNoteBodyEl.hidden = false;
   if (btnFloatNewNoteEl) {
@@ -471,6 +1014,7 @@ function setNewNotePanelOpen(open) {
 function setHelpPanelOpen(open) {
   if (!helpCardEl) return;
   const on = !!open;
+  if (on) closeAllPanelsExcept('help');
   helpCardEl.hidden = !on;
   if (on) expandAppHintInHelp();
   else {
@@ -489,6 +1033,29 @@ function setHelpPanelOpen(open) {
   }
   updateMainGridLayout({ prefer: 'auto' });
   if (on) scheduleScrollPageBottomAfterExpand();
+}
+
+function setSearchPanelOpen(open, { focusQuery = false } = {}) {
+  if (!searchCardEl) return;
+  const on = !!open;
+  if (on) closeAllPanelsExcept('search');
+  searchCardEl.hidden = !on;
+  if (on && searchBodyEl) searchBodyEl.hidden = false;
+  if (btnFloatSearchEl) {
+    btnFloatSearchEl.hidden = on;
+    btnFloatSearchEl.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  updateMainGridLayout({ prefer: 'auto' });
+  if (on) {
+    scheduleScrollPageBottomAfterExpand();
+    if (focusQuery) {
+      try {
+        requestAnimationFrame(() => qEl?.focus?.());
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 function setAdvancedSearchOpen(open) {
@@ -519,7 +1086,7 @@ noteDetectedLangEl?.setAttribute('hidden', '');
 stopTimer(note, noteTimerEl);
 stopTimer(query, queryTimerEl);
 renderBitrateHint();
-setFastMode(true);
+syncNewNoteSttUi();
 
 setStatus('Ready');
 wire();
@@ -545,6 +1112,8 @@ window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
+  applyStickyNoteLanguageFromStorage();
+
   // Saved searches + folder/tag filtering removed.
 
   btnChooseImportZipEl?.addEventListener('click', (e) => {
@@ -587,6 +1156,16 @@ function wire() {
     setHelpPanelOpen(false);
   });
 
+  btnSearchCloseEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setSearchPanelOpen(false);
+  });
+
+  btnFloatSearchEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setSearchPanelOpen(true, { focusQuery: true });
+  });
+
   btnFloatNewNoteEl?.addEventListener('click', (e) => {
     e.preventDefault();
     const willOpen = !!newNoteCardEl?.hidden;
@@ -604,8 +1183,6 @@ function wire() {
       onUi: (s) => {
         btnRecordNote.hidden = s.isRecording;
         btnRecordNote.disabled = s.isRecording;
-        btnRecordNoteFast.hidden = s.isRecording;
-        btnRecordNoteFast.disabled = s.isRecording;
         btnStopNote.hidden = !s.isRecording;
         btnStopNote.disabled = !s.isRecording;
         btnSaveNote.hidden = !s.hasAudio || s.isRecording;
@@ -618,33 +1195,11 @@ function wire() {
     })
   );
 
-  btnRecordNoteFast.addEventListener('click', () => {
-    setFastMode(true);
-    startRecording(note, {
-      onUi: (s) => {
-        btnRecordNote.hidden = s.isRecording;
-        btnRecordNote.disabled = s.isRecording;
-        btnRecordNoteFast.hidden = s.isRecording;
-        btnRecordNoteFast.disabled = s.isRecording;
-        btnStopNote.hidden = !s.isRecording;
-        btnStopNote.disabled = !s.isRecording;
-        btnSaveNote.hidden = !s.hasAudio || s.isRecording;
-        btnSaveNote.disabled = !s.hasAudio || s.isRecording;
-        previewNote.hidden = !s.previewUrl;
-        if (s.previewUrl) previewNote.src = s.previewUrl;
-        if (liveTranscriptEl) liveTranscriptEl.disabled = s.isRecording;
-      },
-      label: 'note'
-    });
-  });
-
   btnStopNote.addEventListener('click', () =>
     stopRecording(note, {
       onUi: (s) => {
         btnRecordNote.hidden = s.isRecording;
         btnRecordNote.disabled = s.isRecording;
-        btnRecordNoteFast.hidden = s.isRecording;
-        btnRecordNoteFast.disabled = s.isRecording;
         btnStopNote.hidden = !s.isRecording;
         btnStopNote.disabled = !s.isRecording;
         btnSaveNote.hidden = !s.hasAudio || s.isRecording;
@@ -666,16 +1221,29 @@ function wire() {
     liveTranscriptEl?.scrollBy({ top: 220, behavior: 'smooth' });
   });
 
+  liveTranscriptEl?.addEventListener('input', () => {
+    syncLiveTxScrollRowVisibility();
+  });
+
   noteLanguageEl?.addEventListener('change', () => {
+    lastFullPreviewBundle = null;
     const v = (noteLanguageEl.value ?? '').toString().trim();
+    try {
+      localStorage.setItem('vv_last_note_language', v);
+    } catch {
+      // ignore
+    }
     if (noteDetectedLangEl) {
       noteDetectedLangEl.hidden = !note.audioBlob && !note.isRecording;
       noteDetectedLangEl.textContent = v ? `Lang: ${v}` : 'Lang: —';
     }
     if (note.audioBlob) {
-      transcribeFullPreview().catch(() => {
-        // ignore
-      });
+      void (async () => {
+        if (notePostRecordPipelinePromise) await notePostRecordPipelinePromise.catch(() => {});
+        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('settings_change').finally(() => {
+          notePostRecordPipelinePromise = null;
+        });
+      })();
     }
   });
 
@@ -699,6 +1267,7 @@ function wire() {
     }
 
     resetRecorder(note);
+    applyStickyNoteLanguageFromStorage();
     note.audioBlob = f;
     note.sourceFilename = f.name;
     note.previewUrl = URL.createObjectURL(f);
@@ -720,18 +1289,18 @@ function wire() {
       // ignore; duration stays 0
     }
 
-    // Use the same style as recorded audio titles, but indicate it was uploaded.
-    titleEl.value = `Upload_${timestampTag()}`;
+    titleEl.value = defaultUploadTitle();
+
+    // Full transcript preview after upload (live stage skipped — no in-session chunks).
+    notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('upload').finally(() => {
+      notePostRecordPipelinePromise = null;
+    });
+
     syncVisibility();
     setStatus(`Loaded audio file: ${f.name}`);
 
     // Detect language for uploaded audio too.
     detectLanguageForNotePreview().catch(() => {
-      // ignore
-    });
-
-    // Show full transcript preview after upload.
-    transcribeFullPreview().catch(() => {
       // ignore
     });
 
@@ -778,13 +1347,32 @@ function wire() {
     });
   });
 
-  fastModeDotEl?.addEventListener('click', () => {
-    setFastMode(!isFastMode());
-    if (note.isRecording) return;
-    if (note.audioBlob) {
-      transcribeFullPreview().catch(() => {
-        // ignore
-      });
+  btnSttWhisperEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (getNewNoteSttProvider() === 'whisper') return;
+    lastFullPreviewBundle = null;
+    setNewNoteSttProvider('whisper');
+    if (!note.isRecording && note.audioBlob) {
+      void (async () => {
+        if (notePostRecordPipelinePromise) await notePostRecordPipelinePromise.catch(() => {});
+        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('settings_change').finally(() => {
+          notePostRecordPipelinePromise = null;
+        });
+      })();
+    }
+  });
+  btnSttGoogleEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (getNewNoteSttProvider() === 'google') return;
+    lastFullPreviewBundle = null;
+    setNewNoteSttProvider('google');
+    if (!note.isRecording && note.audioBlob) {
+      void (async () => {
+        if (notePostRecordPipelinePromise) await notePostRecordPipelinePromise.catch(() => {});
+        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('settings_change').finally(() => {
+          notePostRecordPipelinePromise = null;
+        });
+      })();
     }
   });
 
@@ -853,16 +1441,14 @@ function wire() {
     }
   });
 
-  btnProcToggleEl?.addEventListener('click', async (e) => {
+  btnProcessesCloseEl?.addEventListener('click', (e) => {
     e.preventDefault();
-    if (!procBodyEl) return;
-    const willShow = procBodyEl.hidden;
-    if (willShow) await expandProcessesSide();
-    else {
-      procBodyEl.hidden = true;
-      btnProcToggleEl.textContent = 'Show';
-      updateMainGridLayout({ prefer: 'searchWide' });
-    }
+    setProcessesPanelOpen(false);
+  });
+
+  btnFloatProcessesEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setProcessesPanelOpen(true);
   });
 
   btnJobsApplyEl?.addEventListener('click', async (e) => {
@@ -904,12 +1490,12 @@ function wire() {
     }
   });
 
-  // Default: New note + Help panels closed; Processes body collapsed; Help hint panels collapsed.
+  // Default: Search + Processes collapsed; New note + Help closed; Help hint panels collapsed.
   try {
+    setSearchPanelOpen(false);
+    setProcessesPanelOpen(false);
     setNewNotePanelOpen(false);
     setHelpPanelOpen(false);
-    if (procBodyEl) procBodyEl.hidden = true;
-    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
     const aboutBoxEl = document.getElementById('aboutBox');
     const uiStepsBoxEl = document.getElementById('uiStepsBox');
     const aboutToggleEl = document.getElementById('aboutToggle');
@@ -918,7 +1504,7 @@ function wire() {
     if (uiStepsBoxEl) uiStepsBoxEl.hidden = true;
     if (aboutToggleEl) aboutToggleEl.textContent = 'App hint';
     if (uiStepsToggleEl) uiStepsToggleEl.textContent = 'UI steps';
-    updateMainGridLayout({ prefer: 'searchWide' });
+    updateMainGridLayout({ prefer: 'auto' });
   } catch {
     // ignore
   }
@@ -941,7 +1527,8 @@ function onGlobalKeyDown(e) {
 
   if (e.key === '/') {
     e.preventDefault();
-    qEl?.focus?.();
+    if (searchCardEl?.hidden) setSearchPanelOpen(true, { focusQuery: true });
+    else qEl?.focus?.();
     return;
   }
 
@@ -1161,7 +1748,15 @@ async function startRecording(state, { onUi, label }) {
     state.isRecording = true;
     state.startedAtMs = Date.now();
     startTimer(state, label === 'note' ? noteTimerEl : queryTimerEl);
-    if (label === 'note') ensureAutoTitleFilled();
+    if (label === 'note') {
+      lastFullPreviewBundle = null;
+      state.sourceFilename = '';
+      state.liveTranscribeTail = Promise.resolve();
+      ensureAutoTitleFilled(note);
+      resetNewNoteLanguageForRecording();
+      setNewNoteTranscriptionStages({ live: 'active', full: 'pending', showRow: true });
+      setLiveTxPhaseLabel('Live Transcription');
+    }
     onUi?.(uiState(state));
 
     state.mediaRecorder.addEventListener('dataavailable', (e) => {
@@ -1174,19 +1769,18 @@ async function startRecording(state, { onUi, label }) {
       state.isRecording = false;
       state.durationMs = Math.max(0, Date.now() - (state.startedAtMs || Date.now()));
       stopTimer(state, label === 'note' ? noteTimerEl : queryTimerEl);
+      if (label === 'note') {
+        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('recording_stop').finally(() => {
+          notePostRecordPipelinePromise = null;
+        });
+        detectLanguageForNotePreview().catch(() => {
+          // ignore
+        });
+      }
       onUi?.(uiState(state));
       setStatus(
         `Recorded ${label}: ${(state.audioBlob.size / 1024 / 1024).toFixed(2)} MB`
       );
-
-      if (label === 'note') {
-        detectLanguageForNotePreview().catch(() => {
-          // ignore
-        });
-        transcribeFullPreview().catch(() => {
-          // ignore
-        });
-      }
     });
 
     state.mediaRecorder.start(MEDIARECORDER_TIMESLICE_MS);
@@ -1221,20 +1815,67 @@ function stopRecording(state, { onUi } = {}) {
   }
 }
 
+function currentNoteMatchesFullPreviewBundle(b) {
+  if (!b || !note?.audioBlob) return false;
+  const d = Math.round(note.durationMs || 0);
+  const bytes = Number(note.audioBlob.size) || 0;
+  const hint = (noteLanguageEl?.value ?? '').toString().trim();
+  const stt = getNewNoteSttProvider();
+  return (
+    b.duration_ms === d &&
+    b.audio_bytes === bytes &&
+    (b.language_hint ?? '').toString().trim() === hint &&
+    String(b.stt_provider ?? '') === String(stt)
+  );
+}
+
+function previewBundleJsonForSave() {
+  if (!lastFullPreviewBundle || !currentNoteMatchesFullPreviewBundle(lastFullPreviewBundle)) return '';
+  try {
+    return JSON.stringify({
+      transcript: lastFullPreviewBundle.transcript,
+      segments: lastFullPreviewBundle.segments,
+      detected_language: lastFullPreviewBundle.detected_language,
+      language_hint: lastFullPreviewBundle.language_hint,
+      stt_provider: lastFullPreviewBundle.stt_provider,
+      duration_ms: lastFullPreviewBundle.duration_ms,
+      audio_bytes: lastFullPreviewBundle.audio_bytes
+    });
+  } catch {
+    return '';
+  }
+}
+
 async function saveNote() {
   if (!note.audioBlob) return;
   btnSaveNote.disabled = true;
   setStatus('Saving + transcribing…');
 
   try {
+    const savedDurationMs = Math.round(note.durationMs || 0);
+    const savedAudioBytes = Number(note.audioBlob?.size || 0) || 0;
+
+    if (notePostRecordPipelinePromise) {
+      setStatus('Waiting for in-flight preview to finish…');
+      await notePostRecordPipelinePromise.catch(() => {});
+    }
+
+    // Server always runs full-file authoritative STT on save. Kick off preview in parallel for UX only.
+    if (!previewBundleJsonForSave()) {
+      void transcribeFullPreview().catch(() => {});
+    }
+
     const fd = new FormData();
-    ensureAutoTitleFilled();
+    ensureAutoTitleFilled(note);
+    fd.append('display_title', titleEl.value || '');
     fd.append('title', titleEl.value || '');
     fd.append('duration_ms', Math.round(note.durationMs || 0).toString());
     fd.append('language', (noteLanguageEl?.value ?? '').toString());
-    fd.append('fast_mode', isFastMode() ? '1' : '0');
+    fd.append('stt_provider', getNewNoteSttProvider());
     fd.append('source_filename', (note.sourceFilename ?? '').toString());
     fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
+    const pb = previewBundleJsonForSave();
+    if (pb) fd.append('preview_bundle', pb);
 
     const resp = await fetch('/api/notes', { method: 'POST', body: fd });
     if (!resp.ok) {
@@ -1248,16 +1889,37 @@ async function saveNote() {
     previewNote.hidden = true;
     previewNote.src = '';
     if (noteLanguageEl) noteLanguageEl.value = '';
-    // Keep fast mode enabled by default; 'medium' can be very slow on CPU.
-    setFastMode(true);
+    if (uploadNoteEl) uploadNoteEl.value = '';
+    if (uploadNoteNameEl) uploadNoteNameEl.textContent = 'No file selected';
+    if (noteDetectedLangEl) {
+      noteDetectedLangEl.hidden = true;
+      noteDetectedLangEl.textContent = 'Lang: —';
+    }
+    syncNewNoteSttUi();
     syncVisibility();
 
     const id = (data?.id ?? '').toString().trim();
-    setStatus('Saved. Transcribing offline…');
+    const savedStatus = (data?.status ?? '').toString();
+    if (id && savedStatus === 'processing') {
+      showNewNoteProcessingStatus(id, {
+        durationMs: savedDurationMs,
+        audioBytes: savedAudioBytes,
+        retranscribe: (data?.transcribe_mode ?? '').toString().trim() === 'retranscribe'
+      });
+    }
+    setStatus(
+      savedStatus === 'ready'
+        ? 'Saved.'
+        : 'Saved. Running full transcription on the server (authoritative transcript when ready)…'
+    );
+    expandedNoteIds.clear();
+    expandedNoteIdsFromSearchMatch.clear();
     await refreshResults(qEl.value);
+    setNewNotePanelOpen(false);
     if (id) pollNoteUntilDone(id);
 
-    titleEl.value = defaultRecordingTitle();
+    titleEl.value = defaultNoteTitleFromState(note);
+    lastFullPreviewBundle = null;
   } catch (err) {
     setStatus(`Save/transcribe error: ${err?.message ?? err}`, true);
     btnSaveNote.disabled = false;
@@ -1271,19 +1933,27 @@ async function refreshResults(q = '') {
   resultsEl.innerHTML = '';
   const isSearch = !!(q && q.trim());
   const queryText = (q ?? '').toString().trim();
+
+  if (!isSearch) {
+    for (const id of expandedNoteIdsFromSearchMatch) {
+      expandedNoteIds.delete(id);
+    }
+    expandedNoteIdsFromSearchMatch.clear();
+  }
+
   if (isSearch) recordRecentSearch(queryText);
 
   let items = [];
   if (!isSearch) {
     // Empty query: show saved notes (keyword path).
     const url = new URL('/api/notes', window.location.origin);
-    const resp = await fetch(url.toString());
-    if (!resp.ok) {
-      resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
+  const resp = await fetch(url.toString());
+  if (!resp.ok) {
+      resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
-      return;
-    }
-    const data = await resp.json();
+    return;
+  }
+  const data = await resp.json();
     items = Array.isArray(data?.items) ? data.items : [];
   } else {
     // Hybrid blend: semantic + keyword (FTS).
@@ -1296,7 +1966,7 @@ async function refreshResults(q = '') {
 
     const [semResp, ftsResp] = await Promise.all([fetch(urlSem.toString()), fetch(urlFts.toString())]);
     if (!semResp.ok && !ftsResp.ok) {
-      resultsEl.innerHTML = `<div class="note err">Failed to load notes</div>`;
+      resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
       return;
     }
@@ -1306,6 +1976,36 @@ async function refreshResults(q = '') {
     const ftsItems = Array.isArray(ftsJson?.items) ? ftsJson.items : [];
 
     const byId = new Map();
+    /** Semantic hits are chunk-shaped; merging `{...fts, ...sem}` can overwrite note fields with null/empty from JSON. */
+    function repairHybridMergedNote(fts, merged) {
+      const out = { ...merged };
+      const ftsLang = (fts?.language ?? '').toString().trim();
+      if (!(out.language ?? '').toString().trim() && ftsLang) out.language = fts.language;
+      const ftsBody = (fts?.body ?? '').toString();
+      if (!(out.body ?? '').toString().trim() && ftsBody.trim()) out.body = fts.body;
+      const ftsDt = (fts?.display_title ?? '').toString().trim();
+      if (!(out.display_title ?? '').toString().trim() && ftsDt) out.display_title = fts.display_title;
+      if (!(out?.stt_provider ?? '').toString().trim() && (fts?.stt_provider ?? '').toString().trim()) {
+        out.stt_provider = fts.stt_provider;
+      }
+      if ((out?.status ?? '').toString() === 'processing') {
+        const u = Number(out.processing_pending_units);
+        const ftsU = Number(fts?.processing_pending_units);
+        if (!(Number.isFinite(u) && u > 0) && Number.isFinite(ftsU) && ftsU > 0) {
+          out.processing_pending_units = fts.processing_pending_units;
+        }
+        if (!(out?.processing_running_locked_at ?? '').toString().trim() && (fts?.processing_running_locked_at ?? '').toString().trim()) {
+          out.processing_running_locked_at = fts.processing_running_locked_at;
+        }
+        if (!(out?.processing_coarse_stage ?? '').toString().trim() && (fts?.processing_coarse_stage ?? '').toString().trim()) {
+          out.processing_coarse_stage = fts.processing_coarse_stage;
+        }
+        if (!(out?.transcribe_mode ?? '').toString().trim() && (fts?.transcribe_mode ?? '').toString().trim()) {
+          out.transcribe_mode = fts.transcribe_mode;
+        }
+      }
+      return out;
+    }
     for (const it of semItems) {
       const id = (it?.id ?? '').toString();
       if (!id) continue;
@@ -1320,7 +2020,8 @@ async function refreshResults(q = '') {
         byId.set(id, { ...it, _vvSort: 1000 - i });
       } else {
         const cur = byId.get(id);
-        byId.set(id, { ...it, ...cur, matches: cur?.matches ?? it?.matches ?? [], _vvSort: cur?._vvSort ?? 0 });
+        const merged = { ...it, ...cur, matches: cur?.matches ?? it?.matches ?? [], _vvSort: cur?._vvSort ?? 0 };
+        byId.set(id, repairHybridMergedNote(it, merged));
       }
     }
     items = Array.from(byId.values());
@@ -1329,10 +2030,28 @@ async function refreshResults(q = '') {
       const { _vvSort, ...rest } = x || {};
       return rest;
     });
+
+    // Only show notes that appear in both retrieval paths when both succeeded—drops
+    // semantic-only or keyword-only hits so tiles match the combined relevance intent.
+    if (semResp.ok && ftsResp.ok && semItems.length > 0 && ftsItems.length > 0) {
+      const semIds = new Set(semItems.map((x) => (x?.id ?? '').toString()).filter(Boolean));
+      const ftsIds = new Set(ftsItems.map((x) => (x?.id ?? '').toString()).filter(Boolean));
+      items = items.filter((it) => {
+        const id = (it?.id ?? '').toString();
+        return id && semIds.has(id) && ftsIds.has(id);
+      });
+    }
   }
 
   lastSearchItems = Array.isArray(items) ? items : [];
   lastSearchQuery = isSearch ? queryText : '';
+  if (newNotePendingProcessId) {
+    const match = lastSearchItems.find((it) => (it?.id ?? '').toString() === newNotePendingProcessId);
+    if (match) {
+      const st = (match?.status ?? '').toString();
+      if (st && st !== 'processing') hideNewNoteProcessingStatus();
+    }
+  }
   // Don't auto-render Quick answer. It should only appear when Quick answer is pressed.
   if (answerWrapEl) {
     answerWrapEl.hidden = true;
@@ -1345,7 +2064,7 @@ async function refreshResults(q = '') {
   // Advanced search UI removed.
 
   if (items.length === 0) {
-    resultsEl.innerHTML = `<div class="note"><div class="pill">No results</div></div>`;
+    resultsEl.innerHTML = `<div class="note resultsBanner"><div class="pill">No results</div></div>`;
     syncProcessingNotesPoll([]);
     return;
   }
@@ -1353,9 +2072,7 @@ async function refreshResults(q = '') {
   // Auto-expand Processes when any note is in error.
   const hasErrorNote = items.some((it) => (it?.status ?? '').toString() === 'error');
   if (hasErrorNote) {
-    expandProcessesSide().catch(() => {
-      // ignore
-    });
+    expandProcessesSide();
   }
 
   const hideReprocessWhileBusy = items.some((it) => (it?.status ?? '').toString() === 'processing');
@@ -1364,7 +2081,6 @@ async function refreshResults(q = '') {
     const item = items[idx];
     const isLastNote = idx === items.length - 1;
     const note = document.createElement('div');
-    note.className = 'note noteCollapsed';
 
     const created = new Date(item.created_at).toLocaleString();
     const createdAtIso = (item.created_at ?? '').toString();
@@ -1375,15 +2091,37 @@ async function refreshResults(q = '') {
     if (status !== 'processing') {
       const nid = (item.id ?? '').toString();
       procTimerByNoteId.delete(nid);
-      clearProcessingEstimateExtensionForNote(nid);
     }
     const errText = (item.error ?? '').toString().trim();
     const durationMs = Number(item.duration_ms ?? 0) || 0;
-    const lang = (item.language ?? '').toString().trim();
+    const lang = formatNoteLanguageMeta(item.language ?? '');
     const fav = Number(item.is_favorite ?? 0) ? true : false;
     const procPaused = Number(item.processing_paused ?? 0) ? true : false;
-    const title = escapeHtml(item.title || 'Untitled');
+    const displayTitleRaw = (item.display_title ?? '').toString().trim();
+    const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
+    const listHeadline = escapeHtml(displayTitleRaw || (item.title ?? '').toString().trim() || 'Untitled');
+    const titleBodySepHtml = displayTitleEsc
+      ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
+      : '';
     const body = escapeHtml(item.body || '');
+    const collapsedBodyPreview =
+      status === 'ready' && (item.body ?? '').toString().trim()
+        ? escapeHtml(truncateNotePreviewPlain(item.body || '', 280))
+        : '';
+    const savedCardInnerHtml =
+      status === 'ready' && (displayTitleEsc || collapsedBodyPreview)
+        ? `${titleBodySepHtml}${
+            collapsedBodyPreview ? `<div class="noteCollapsedBodyPreview">${collapsedBodyPreview}</div>` : ''
+          }`
+        : '';
+    const collapsedTranscriptHtml = savedCardInnerHtml
+      ? `<div class="noteSavedCard noteCollapsedTranscriptShell" data-collapsed-expand="1" role="button" tabindex="0" aria-label="Expand note">${savedCardInnerHtml}</div>`
+      : '';
+
+    const hasCollapsedShell = !!collapsedTranscriptHtml;
+    note.className = `note noteCollapsed${hasCollapsedShell ? ' note--hasCollapsedShell' : ''}${
+      status === 'processing' && !hasCollapsedShell ? ' note--processingInCard' : ''
+    }`;
 
     const metaParts = [];
     if (durationMs > 0) metaParts.push(formatMs(durationMs));
@@ -1394,85 +2132,69 @@ async function refreshResults(q = '') {
 
     syncProcTimerFromServerPaused(item.id, processingSinceIso, procPaused, status, item);
     const timerAttrIso = timerAttrIsoForNote(item.id, processingSinceIso);
-    const estProcMs = totalProcessingEstimateMsForItem(item);
-    const estProcAttr = String(estProcMs);
+    const baseProcMs = totalProcessingEstimateMsForItem(item);
+    const procPendingUnits = status === 'processing' ? processingPendingUnitsForItem(item) : 0;
+    const procLockedAt =
+      status === 'processing' ? (item.processing_running_locked_at ?? '').toString().trim() : '';
+    const scaledProcMs = status === 'processing' ? scaledProcessingBudgetMsForItem(item) : baseProcMs;
+    const estProcAttr = String(scaledProcMs);
     const sinceT = Date.parse(processingSinceIso) || Date.now();
     const elapsed0 = Math.max(0, Date.now() - sinceT);
-    const initialProcTxt = `${formatMs(Math.max(0, estProcMs - elapsed0))} left`;
+    const procStage = (item.processing_coarse_stage ?? '').toString().trim();
+    const isRetranscribeQueue =
+      status === 'processing' && (item.transcribe_mode ?? '').toString().trim() === 'retranscribe';
+    const procHeadLabel = isRetranscribeQueue ? 'Re-transcribing to save' : 'Processing';
+    const initProcProg =
+      status === 'processing'
+        ? processingProgressFromAttrs({
+            baseMs: baseProcMs,
+            units: procPendingUnits,
+            lockedAt: procLockedAt,
+            elapsedWallMs: elapsed0
+          })
+        : { pct: 100, pastBudget: false };
+    const procChipTxt = formatProcessingProgressChipText({
+      ...initProcProg,
+      coarseStage: procStage,
+      retranscribeFallback: isRetranscribeQueue
+    });
 
-    note.innerHTML = `
-      <div class="noteSummary">
-        <div class="noteTitleRow">
-          <div class="noteTitleCluster">
-            <div class="noteTitle">${title}</div>
-            ${fileMetaHtml}
-          </div>
-          <div class="noteMeta noteTitleStamp">${created}</div>
-        </div>
-        <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
-          <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
-          ${
-            status
-              ? status === 'ready'
-                ? `<span class="noteStatus ready">Ready</span>`
-                : status === 'processing'
-                  ? `<span class="noteStatus">Processing <span class="noteProcessingTime" data-note-id="${escapeHtml(
-                      String(item.id)
-                    )}" data-processing-since="${escapeHtml(
-                      timerAttrIso
-                    )                    }" data-estimated-total-ms="${escapeHtml(estProcAttr)}" title="Approx. time left. If the first guess hits 0:00 and work is still running, the estimate is extended so you can see it is still processing.">${escapeHtml(
-                      initialProcTxt
-                    )}</span></span>`
-                  : status === 'error'
-                    ? `<span class="noteStatus err">Error</span>`
-                    : `<span class="noteStatus">${escapeHtml(status)}</span>`
-              : ''
-          }
-          ${
-            status === 'ready'
-              ? `<button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
-                 <div class="noteActionsWrap" data-actions-wrap="${item.id}">
-                   <button class="btn noteActionsChevron" data-actions-toggle="${item.id}" aria-label="Toggle actions">▼</button>
-                   <div class="noteActions" data-actions-menu="${item.id}" hidden>
-                     <div class="noteActionsList">
+    const actionsListHtml = `
                        <button class="btn" data-play="${item.id}">Play Audio</button>
                        <button class="btn" data-dl-audio="${item.id}">Download Audio</button>
                        <button class="btn" data-dl-text="${item.id}">Download Transcript</button>
                        ${
                          hideReprocessWhileBusy
                            ? ''
-                           : `<button class="btn" data-reprocess="${item.id}" type="button" title="Re-run transcription (e.g. fix missing language)">Reprocess</button>`
+                           : `<button class="btn" data-reprocess="${item.id}" type="button" title="Re-run transcription (e.g. fix missing language)">Reprocess</button>
+                              <button class="btn" data-change-lang="${item.id}" type="button" title="Set transcription language hint and re-run">Change language</button>`
                        }
                        <button class="btn" data-edit="${item.id}">Edit</button>
-                       <button class="btn" data-delete="${item.id}">Delete Note</button>
-                     </div>
-                   </div>
-                 </div>`
-              : ''
-          }
-          ${
-            status === 'processing'
-              ? `<button class="btn ${procPaused ? 'primary' : ''}" data-proc-toggle="${item.id}" type="button" title="Pause/resume jobs for this note">${procPaused ? 'Resume processing' : 'Pause processing'}</button>
-                 <button class="btn err" data-proc-stop="${item.id}" type="button" title="Stop transcription for this note">Stop</button>`
-              : ''
-          }
+                       <button class="btn" data-delete="${item.id}">Delete Note</button>`;
+
+    const readyActionsStackHtml = `
+                 <div class="noteActionsWrap" data-actions-wrap="${item.id}">
+                   <button class="btn noteActionsChevron" data-actions-toggle="${item.id}" aria-label="Toggle actions">▼</button>
+                   <div class="noteActions" data-actions-menu="${item.id}" hidden>
+                     <div class="noteActionsList">
+                       ${actionsListHtml}
         </div>
-
       </div>
+                 </div>`;
 
+    const noteDetailsHtml = `
       <div class="noteDetails" hidden>
         <div class="noteTranscript">
           <div class="noteBody">${
             status === 'processing'
-              ? `<span class="pill">Transcribing…</span>`
+              ? `<span class="pill">${isRetranscribeQueue ? 'Re-transcribing to save…' : 'Transcribing…'}</span>`
               : status === 'error'
-                ? `<div class="pill err">Transcription failed</div><div style="margin-top:8px">${escapeHtml(
+                ? `${titleBodySepHtml}<div class="pill err">Transcription failed</div><div style="margin-top:8px">${escapeHtml(
                     errText || 'Unknown error'
                   )}</div>`
-                : body
+                : `${titleBodySepHtml}${body}`
           }</div>
         </div>
-        <div class="noteScrollHint" hidden>More transcript below</div>
 
         <div class="row notePlaybackRow" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap">
           <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
@@ -1495,10 +2217,12 @@ async function refreshResults(q = '') {
             Title
             <input class="input editTitle" />
           </label>
+          <hr class="noteTitleBodyDivider editTitleBodySep" />
           <label class="label">
             Transcript
-            <textarea class="textarea editBody" rows="8"></textarea>
+            <textarea class="textarea editBody" rows="16"></textarea>
           </label>
+          <div class="noteScrollHint" style="margin-bottom:12px" hidden>More transcript below</div>
           <div class="row" style="margin-bottom:0">
             <button class="btn primary" data-save="${item.id}">Save</button>
             <button class="btn" data-cancel="${item.id}">Cancel</button>
@@ -1507,16 +2231,103 @@ async function refreshResults(q = '') {
       </div>
     `;
 
+    if (hasCollapsedShell) {
+      note.innerHTML = `
+      <div class="noteSummary">
+        ${collapsedTranscriptHtml}
+        <div class="noteSummaryToolbar">
+          <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
+          <span class="noteStatus ready">Ready</span>
+          ${fileMetaHtml}
+          <span class="noteToolbarDate noteMeta">${escapeHtml(created)}</span>
+          <span class="noteToolbarSpacer" aria-hidden="true"></span>
+          <div class="noteCollapseActions">
+            <button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
+            ${readyActionsStackHtml}
+          </div>
+        </div>
+      </div>
+      ${noteDetailsHtml}
+    `;
+    } else {
+      note.innerHTML = `
+      <div class="noteSummary">
+        <div class="noteTitleRow">
+          <div class="noteTitleCluster">
+            <div class="noteTitle">${listHeadline}</div>
+            ${fileMetaHtml}
+          </div>
+          <div class="noteMeta noteTitleStamp">${created}</div>
+        </div>
+        <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+          <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
+          ${
+            status
+              ? status === 'ready'
+                ? `<span class="noteStatus ready">Ready</span>`
+                : status === 'processing'
+                  ? `<span class="noteStatus">${escapeHtml(procHeadLabel)} <span class="noteProcessingTime" data-note-id="${escapeHtml(
+                      String(item.id)
+                    )}" data-processing-since="${escapeHtml(
+                      timerAttrIso
+                    )}" data-estimated-total-ms="${escapeHtml(estProcAttr)}" data-processing-base-ms="${escapeHtml(
+                      String(baseProcMs)
+                    )}" data-processing-pending-units="${escapeHtml(
+                      String(procPendingUnits)
+                    )}" data-processing-locked-at="${escapeHtml(
+                      procLockedAt
+                    )}" data-processing-stage="${escapeHtml(
+                      procStage
+                    )}" data-retranscribe-fallback="${isRetranscribeQueue ? '1' : '0'}" title="Until the time estimate is used up: approximate % from audio length vs elapsed. After that: working… plus queue/running when the server reports it (refreshes with this list).">${escapeHtml(
+                      procChipTxt
+                    )}</span></span>`
+                  : status === 'error'
+                    ? `<span class="noteStatus err">Error</span>`
+                    : `<span class="noteStatus">${escapeHtml(status)}</span>`
+              : ''
+          }
+          ${
+            status === 'ready'
+              ? `<button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
+                 ${readyActionsStackHtml}`
+              : ''
+          }
+          ${
+            status === 'processing'
+              ? `<span class="noteProcActions" style="display:inline-flex; gap:10px; align-items:center; flex-wrap:nowrap; flex-shrink:0"><button class="btn ${procPaused ? 'primary' : ''}" data-proc-toggle="${item.id}" type="button" title="Pause/resume jobs for this note">${procPaused ? 'Resume processing' : 'Pause processing'}</button><button class="btn err" data-proc-stop="${item.id}" type="button" title="Stop transcription for this note">Stop</button></span>`
+              : ''
+          }
+        </div>
+
+        ${collapsedTranscriptHtml}
+
+      </div>
+
+      ${noteDetailsHtml}
+    `;
+    }
+
     const summary = note.querySelector('.noteSummary');
     const actionsMenu = note.querySelector(`[data-actions-menu="${CSS.escape(String(item.id))}"]`);
     const details = note.querySelector('.noteDetails');
     const scrollHint = note.querySelector('.noteScrollHint');
+
+    const syncCollapsedTranscriptShell = () => {
+      const shell = note.querySelector('.noteCollapsedTranscriptShell');
+      if (!shell) return;
+      shell.hidden = !note.classList.contains('noteCollapsed');
+    };
+
+    const editBox = note.querySelector('.editBox');
+    const transcriptBox = note.querySelector('.noteTranscript');
+    const editBody = note.querySelector('.editBody');
 
     const btnToggle = note.querySelector('button[data-toggle]');
     if (btnToggle) {
       // If this is a search and the server provided a best-match segment, auto-expand.
       if (isSearch && item?.best_match && status === 'ready') {
         expandedNoteIds.add(item.id);
+        expandedNoteIdsFromSearchMatch.add(item.id);
       }
 
       if (expandedNoteIds.has(item.id)) {
@@ -1535,6 +2346,7 @@ async function refreshResults(q = '') {
           .finally(() => {
             scheduleExpandedNoteScroll(note, isLastNote);
           });
+        syncCollapsedTranscriptShell();
       }
       btnToggle.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1544,10 +2356,15 @@ async function refreshResults(q = '') {
         note.classList.toggle('noteCollapsed', isOpen);
         btnToggle.textContent = isOpen ? 'Expand' : 'Collapse';
         if (isOpen) expandedNoteIds.add(item.id);
-        else expandedNoteIds.delete(item.id);
+        else {
+          expandedNoteIds.delete(item.id);
+          expandedNoteIdsFromSearchMatch.delete(item.id);
+        }
         if (!isOpen) {
           scheduleExpandedNoteScroll(note, isLastNote);
-          requestAnimationFrame(() => updateScrollHint(transcriptBox, scrollHint));
+          requestAnimationFrame(() => {
+            if (editBox && !editBox.hidden) updateScrollHint(editBody, scrollHint);
+          });
           loadNoteSegmentsIntoUi(item.id, note, {
             highlight: item?.best_match ?? null,
             autoPlayMatch: false
@@ -1559,8 +2376,11 @@ async function refreshResults(q = '') {
               scheduleExpandedNoteScroll(note, isLastNote);
             });
         }
+        syncCollapsedTranscriptShell();
       });
     }
+
+    syncCollapsedTranscriptShell();
 
     const btnActionsToggle = note.querySelector('button[data-actions-toggle]');
     if (btnActionsToggle && actionsMenu) {
@@ -1664,10 +2484,31 @@ async function refreshResults(q = '') {
               Number(span?.getAttribute('data-estimated-total-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
             const t0 = Date.parse(iso) || Date.now();
             const elapsed = Math.max(0, Date.now() - t0);
+            const baseMs = Number(span?.getAttribute('data-processing-base-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
+            const unitsRaw = Number(span?.getAttribute('data-processing-pending-units') ?? '100');
+            const units = Number.isFinite(unitsRaw) && unitsRaw > 0 ? unitsRaw : 100;
+            const lockedAt = (span?.getAttribute('data-processing-locked-at') ?? '').toString().trim();
+            const stage = (span?.getAttribute('data-processing-stage') ?? '').toString().trim();
+            const frozenProg = processingProgressFromAttrs({
+              baseMs,
+              units,
+              lockedAt,
+              elapsedWallMs: elapsed
+            });
+            const rtf = (span?.getAttribute('data-retranscribe-fallback') ?? '') === '1';
+            const frozenChipText = formatProcessingProgressChipText({
+              ...frozenProg,
+              coarseStage: stage,
+              retranscribeFallback: rtf
+            });
             procTimerByNoteId.set(nid, {
               paused: true,
               frozenRemainingMs: Math.max(0, estTotal - elapsed),
-              estimatedMs: estTotal
+              estimatedMs: estTotal,
+              frozenPercentLeft: frozenProg.pct,
+              frozenPastBudget: frozenProg.pastBudget,
+              frozenCoarseStage: stage,
+              frozenChipText
             });
             await fetch(`/api/notes/${encodeURIComponent(nid)}/pause-processing`, { method: 'POST' });
           }
@@ -1689,7 +2530,6 @@ async function refreshResults(q = '') {
         try {
           await fetch(`/api/notes/${encodeURIComponent(nid)}/stop-processing`, { method: 'POST' });
           procTimerByNoteId.delete(nid);
-          clearProcessingEstimateExtensionForNote(nid);
           setStatus('Processing stopped');
           await refreshResults(qEl.value);
         } catch {
@@ -1706,49 +2546,46 @@ async function refreshResults(q = '') {
     const audio = note.querySelector('audio');
     // Ready notes expose Play/Downloads/Edit in the summary actions; processing/error notes omit those controls.
     if (btn && audio) {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const src = `/api/notes/${encodeURIComponent(item.id)}/audio`;
-        const isPlaying = !audio.paused && !audio.ended && audio.currentTime > 0;
-        if (isPlaying) {
-          try {
-            audio.pause();
-            audio.currentTime = 0;
-          } catch {
-            // ignore
-          }
-          btn.textContent = 'Play Audio';
-          return;
-        }
-
-        audio.hidden = false;
-        if (audio.src !== new URL(src, window.location.origin).toString()) {
-          audio.src = src;
-        }
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const src = `/api/notes/${encodeURIComponent(item.id)}/audio`;
+      const isPlaying = !audio.paused && !audio.ended && audio.currentTime > 0;
+      if (isPlaying) {
         try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          // ignore
+        }
+        btn.textContent = 'Play Audio';
+        return;
+      }
+
+      audio.hidden = false;
+      if (audio.src !== new URL(src, window.location.origin).toString()) {
+        audio.src = src;
+      }
+      try {
           try {
             audio.playbackRate = playbackRate || 1;
           } catch {
             // ignore
           }
-          await audio.play();
+        await audio.play();
           // If segments are rendered (word spans exist), follow along while playing full audio.
           startWordFollowAll(audio, note.querySelector('.noteBody'));
-          btn.textContent = 'Stop Audio';
-        } catch {
-          // ignore autoplay restrictions
-        }
-      });
+        btn.textContent = 'Stop Audio';
+      } catch {
+        // ignore autoplay restrictions
+      }
+    });
 
-      audio.addEventListener('ended', () => {
-        btn.textContent = 'Play Audio';
-      });
+    audio.addEventListener('ended', () => {
+      btn.textContent = 'Play Audio';
+    });
     }
 
-    const editBox = note.querySelector('.editBox');
-    const transcriptBox = note.querySelector('.noteTranscript');
     const editTitle = note.querySelector('.editTitle');
-    const editBody = note.querySelector('.editBody');
     const btnEdit = note.querySelector('button[data-edit]');
     const btnDelete = note.querySelector('button[data-delete]');
     const btnRemove = note.querySelector('button[data-remove]');
@@ -1757,8 +2594,25 @@ async function refreshResults(q = '') {
     const btnSave = note.querySelector('button[data-save]');
     const btnCancel = note.querySelector('button[data-cancel]');
 
-    transcriptBox?.addEventListener('scroll', () => updateScrollHint(transcriptBox, scrollHint));
-    updateScrollHint(transcriptBox, scrollHint);
+    const refreshEditScrollHint = () => updateScrollHint(editBody, scrollHint);
+    editBody?.addEventListener('scroll', refreshEditScrollHint);
+    editBody?.addEventListener('input', refreshEditScrollHint);
+
+    const collapsedExpandShell = note.querySelector('[data-collapsed-expand="1"]');
+    if (collapsedExpandShell && btnToggle) {
+      const expandFromCollapsedShell = (e) => {
+      e.stopPropagation();
+        if (!note.classList.contains('noteCollapsed')) return;
+        btnToggle.click();
+      };
+      collapsedExpandShell.addEventListener('click', expandFromCollapsedShell);
+      collapsedExpandShell.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          expandFromCollapsedShell(e);
+        }
+      });
+    }
 
     const syncEditMenuBtn = () => {
       if (btnEdit) btnEdit.hidden = note.classList.contains('isEditing');
@@ -1767,7 +2621,7 @@ async function refreshResults(q = '') {
 
     if (btnEdit) {
       btnEdit.addEventListener('click', async (e) => {
-        e.stopPropagation();
+      e.stopPropagation();
         // Close the actions dropdown when entering edit mode.
         if (actionsMenu && !actionsMenu.hidden) {
           actionsMenu.hidden = true;
@@ -1781,6 +2635,7 @@ async function refreshResults(q = '') {
           if (btnToggle) btnToggle.textContent = 'Collapse';
           expandedNoteIds.add(item.id);
           scheduleExpandedNoteScroll(note, isLastNote);
+          syncCollapsedTranscriptShell();
         }
         const willShow = !!editBox.hidden;
         editBox.hidden = !willShow;
@@ -1792,14 +2647,15 @@ async function refreshResults(q = '') {
             const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
             const full = await safeJson(resp);
             if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
-            editTitle.value = (full?.title ?? item.title ?? '').toString();
+            editTitle.value = (full?.display_title ?? full?.title ?? item.display_title ?? item.title ?? '').toString();
             editBody.value = (full?.body ?? item.body ?? '').toString();
           } catch {
-            editTitle.value = (item.title ?? '').toString();
-            editBody.value = (item.body ?? '').toString();
+            editTitle.value = (item.display_title ?? item.title ?? '').toString();
+      editBody.value = (item.body ?? '').toString();
           }
+          requestAnimationFrame(refreshEditScrollHint);
         }
-      });
+    });
     }
 
     btnCancel.addEventListener('click', (e) => {
@@ -1819,7 +2675,7 @@ async function refreshResults(q = '') {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            title: editTitle.value || '',
+            display_title: editTitle.value || '',
             body: editBody.value || ''
           })
         });
@@ -1841,27 +2697,27 @@ async function refreshResults(q = '') {
     });
 
     if (btnDelete) {
-      btnDelete.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const ok = confirm('Delete this note permanently?');
-        if (!ok) return;
-        btnDelete.disabled = true;
-        setStatus('Deleting…');
-        try {
-          const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
-            method: 'DELETE'
-          });
-          if (!resp.ok) {
-            const msg = await safeJson(resp);
-            throw new Error(msg?.error || `Delete failed (${resp.status})`);
-          }
-          setStatus('Deleted');
-          await refreshResults(qEl.value);
-        } catch (e) {
-          setStatus(`Delete error: ${e?.message ?? e}`, true);
-          btnDelete.disabled = false;
+    btnDelete.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = confirm('Delete this note permanently?');
+      if (!ok) return;
+      btnDelete.disabled = true;
+      setStatus('Deleting…');
+      try {
+        const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
+          method: 'DELETE'
+        });
+        if (!resp.ok) {
+          const msg = await safeJson(resp);
+          throw new Error(msg?.error || `Delete failed (${resp.status})`);
         }
-      });
+        setStatus('Deleted');
+        await refreshResults(qEl.value);
+      } catch (e) {
+        setStatus(`Delete error: ${e?.message ?? e}`, true);
+        btnDelete.disabled = false;
+      }
+    });
     }
 
     btnRemove?.addEventListener('click', async (e) => {
@@ -1887,15 +2743,15 @@ async function refreshResults(q = '') {
     });
 
     if (btnDlAudio) {
-      btnDlAudio.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const a = document.createElement('a');
-        a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
-        a.download = `${sanitizeFilename((item.title || 'recording').toString()) || 'recording'}.webm`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
+    btnDlAudio.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const a = document.createElement('a');
+      a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
+        a.download = `${sanitizeFilename((item.display_title || item.title || 'recording').toString()) || 'recording'}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
     }
 
     const btnReprocess = note.querySelector('button[data-reprocess]');
@@ -1913,7 +2769,6 @@ async function refreshResults(q = '') {
         try {
           const nid = (item.id ?? '').toString();
           procTimerByNoteId.delete(nid);
-          clearProcessingEstimateExtensionForNote(nid);
           const resp = await fetch(`/api/notes/${encodeURIComponent(nid)}/retry`, { method: 'POST' });
           const j = await safeJson(resp);
           if (!resp.ok) throw new Error(j?.error || `Reprocess failed (${resp.status})`);
@@ -1927,20 +2782,61 @@ async function refreshResults(q = '') {
       });
     }
 
-    if (btnDlText) {
-      btnDlText.addEventListener('click', (e) => {
+    const btnChangeLang = note.querySelector(`button[data-change-lang="${CSS.escape(String(item.id))}"]`);
+    if (btnChangeLang) {
+      btnChangeLang.addEventListener('click', (e) => {
         e.stopPropagation();
-        const text = (item.body ?? '').toString();
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${sanitizeFilename((item.title || 'transcript').toString()) || 'transcript'}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        closeAllActionMenus();
+        if (btnActionsToggle) btnActionsToggle.textContent = '▼';
+        const nid = (item.id ?? '').toString();
+        const cur = (item.language ?? '').toString().trim();
+        const curStt = (item.stt_provider ?? '').toString();
+        openChangeLanguageDialog({ currentLang: cur, currentStt: curStt }, async ({ lang, stt_provider }) => {
+          setStatus('Updating language…');
+          try {
+            const load = await fetch(`/api/notes/${encodeURIComponent(nid)}`);
+            const full = await safeJson(load);
+            if (!load.ok) throw new Error(full?.error || `Load failed (${load.status})`);
+            const patch = await fetch(`/api/notes/${encodeURIComponent(nid)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                display_title: (full?.display_title ?? full?.title ?? item.display_title ?? item.title ?? '').toString(),
+                body: (full?.body ?? item.body ?? '').toString(),
+                language: lang,
+                stt_provider
+              })
+            });
+            const pj = await safeJson(patch);
+            if (!patch.ok) throw new Error(pj?.error || `Update failed (${patch.status})`);
+            procTimerByNoteId.delete(nid);
+            setStatus('Re-transcribing with new language…');
+            const retry = await fetch(`/api/notes/${encodeURIComponent(nid)}/retry`, { method: 'POST' });
+            const rj = await safeJson(retry);
+            if (!retry.ok) throw new Error(rj?.error || `Reprocess failed (${retry.status})`);
+            await refreshResults(qEl.value);
+            setStatus('Reprocessing…');
+          } catch (err) {
+            setStatus(`Change language error: ${err?.message ?? err}`, true);
+          }
+        });
       });
+    }
+
+    if (btnDlText) {
+    btnDlText.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = (item.body ?? '').toString();
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+        a.download = `${sanitizeFilename((item.display_title || item.title || 'transcript').toString()) || 'transcript'}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     }
 
     resultsEl.appendChild(note);
@@ -2034,8 +2930,28 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
 
   const headerText = extractUploadedFilenameHeader(data);
 
+  try {
+    const metaEl = noteEl.querySelector('.noteFileMeta');
+    if (metaEl) {
+      const durationMs = Number(data?.duration_ms ?? 0) || 0;
+      const parts = [];
+      if (durationMs > 0) parts.push(formatMs(durationMs));
+      const langShown = formatNoteLanguageMeta((data?.language ?? '').toString());
+      if (langShown) parts.push(langShown);
+      metaEl.textContent = parts.length ? parts.join(' · ') : '';
+    }
+  } catch {
+    // ignore
+  }
+
+  const displayTitleRaw = (data?.display_title ?? '').toString().trim();
+  const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
+  const titleBodySepHtml = displayTitleEsc
+    ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
+    : '';
+
   // Replace transcript with clickable timestamped segments.
-  bodyEl.innerHTML = renderSegmentsHtml(segments, { highlight, headerText });
+  bodyEl.innerHTML = titleBodySepHtml + renderSegmentsHtml(segments, { highlight, headerText });
 
   // Delegate clicks to Play buttons (text is not clickable).
   bodyEl.addEventListener('click', (e) => {
@@ -2225,23 +3141,6 @@ function renderSegmentsHtml(segments, { highlight = null, headerText = '' } = {}
       (h) => Math.abs(Number(h.start) - start) < 0.001 && Math.abs(Number(h.end) - end) < 0.001
     );
 
-    const words = Array.isArray(s?.words) ? s.words : [];
-    const wordHtml =
-      words.length > 0
-        ? words
-            .map((w) => {
-              const ws = Number(w?.start);
-              const we = Number(w?.end);
-              const ww = (w?.word ?? '').toString();
-              if (!Number.isFinite(ws) || !Number.isFinite(we) || we <= ws || !ww.trim()) return '';
-              return `<span class="word" data-ws="${escapeHtml(String(ws))}" data-we="${escapeHtml(
-                String(we)
-              )}">${escapeHtml(ww)}</span>`;
-            })
-            .filter(Boolean)
-            .join(' ')
-        : '';
-
     safe.push(`
       <div class="segRow${isMatch ? ' match' : ''}" data-seg-start="${escapeHtml(
       String(start)
@@ -2252,7 +3151,7 @@ function renderSegmentsHtml(segments, { highlight = null, headerText = '' } = {}
       `${formatClock(start)}–${formatClock(end)}`
     )}">Play</button>
         <span class="segTime">${escapeHtml(`${formatClock(start)}–${formatClock(end)}`)}</span>
-        <span class="segText">${wordHtml || escapeHtml(text)}</span>
+        <span class="segText">${escapeHtml(text)}</span>
       </div>
     `.trim());
   }
@@ -2275,19 +3174,35 @@ function normalizeHighlightList(highlight) {
   return [{ start, end }];
 }
 
+function firstLineLooksLikeUploadedSourceFilename(line) {
+  const s = (line ?? '').toString().trim();
+  if (!s || s.length > 200) return false;
+
+  // Natural-language transcripts often contain spaces; do not treat "has whitespace" as a filename signal.
+  const letterish = s.replace(/[\s\d\p{M}\p{P}\p{S}]/gu, '');
+  if (letterish.length) {
+    let nonLatin = 0;
+    for (const ch of letterish) {
+      if (!/^[\p{Script=Latin}]$/u.test(ch)) nonLatin += 1;
+    }
+    if (nonLatin / letterish.length > 0.12) return false;
+  }
+
+  if (/\.[a-z0-9]{1,8}$/i.test(s)) return true;
+  if (/^Upload_\d{4}-\d{2}-\d{2}_/i.test(s)) return true;
+  if (/^Recording_\d{4}-\d{2}-\d{2}_/i.test(s)) return true;
+  return /^[A-Za-z0-9][A-Za-z0-9._\-]{0,180}\.[A-Za-z0-9]{1,8}$/.test(s);
+}
+
 function extractUploadedFilenameHeader(noteJson) {
-  const title = (noteJson?.title ?? '').toString().trim();
+  const headline = (noteJson?.display_title ?? noteJson?.title ?? '').toString().trim();
   const body = (noteJson?.body ?? '').toString();
   const firstLine = (body.split('\n')[0] ?? '').toString().trim();
   if (!firstLine) return '';
 
   // Heuristic: if we prefixed the transcript with source_filename, it will be the first line.
   // Only show it when it looks like a filename and the note title is an Upload_*.
-  const looksLikeFilename =
-    firstLine.length <= 140 &&
-    (/\.[a-z0-9]{1,8}$/i.test(firstLine) || /[_-]/.test(firstLine) || /\s/.test(firstLine));
-
-  if (title.startsWith('Upload_') && looksLikeFilename) return firstLine;
+  if (headline.startsWith('Upload_') && firstLineLooksLikeUploadedSourceFilename(firstLine)) return firstLine;
   return '';
 }
 
@@ -2536,17 +3451,27 @@ function startProcessingTimers() {
       const tm = id ? procTimerByNoteId.get(id) : null;
 
       if (tm?.paused) {
-        let remainingMs = Infinity;
-        if (typeof tm.frozenRemainingMs === 'number') {
-          remainingMs = tm.frozenRemainingMs;
-          el.textContent = `${formatMs(Math.max(0, remainingMs))} left`;
-        } else if (typeof tm.frozenMs === 'number') {
-          const passKey = procPassKey(el, id);
-          const attr = Number(el.getAttribute('data-estimated-total-ms') ?? '') || 0;
-          const floor = attr > 0 ? attr : DEFAULT_PROCESSING_ESTIMATE_MS;
-          const cap = Math.max(floor, procEffectiveEstimateTotalByPass.get(passKey) ?? 0);
-          remainingMs = Math.max(0, cap - tm.frozenMs);
-          el.textContent = `${formatMs(remainingMs)} left`;
+        if (typeof tm.frozenChipText === 'string') {
+          el.textContent = tm.frozenChipText;
+        } else {
+          let pct = NaN;
+          if (typeof tm.frozenPercentLeft === 'number') {
+            pct = tm.frozenPercentLeft;
+          } else if (typeof tm.frozenRemainingMs === 'number') {
+            const est = Number(tm.estimatedMs) || Number(el.getAttribute('data-estimated-total-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
+            pct = Math.max(1, Math.min(100, Math.round((100 * Math.max(0, tm.frozenRemainingMs)) / Math.max(1, est))));
+          } else if (typeof tm.frozenMs === 'number') {
+            const cap =
+              Number(el.getAttribute('data-estimated-total-ms') ?? '') || DEFAULT_PROCESSING_ESTIMATE_MS;
+            pct = Math.max(1, Math.min(100, Math.round((100 * Math.max(0, cap - tm.frozenMs)) / Math.max(1, cap))));
+          }
+          const stage = (tm.frozenCoarseStage ?? el.getAttribute('data-processing-stage') ?? '').toString().trim();
+          el.textContent = formatProcessingProgressChipText({
+            pct,
+            pastBudget: !!tm.frozenPastBudget,
+            coarseStage: stage,
+            retranscribeFallback: (el.getAttribute('data-retranscribe-fallback') ?? '') === '1'
+          });
         }
         continue;
       }
@@ -2555,8 +3480,13 @@ function startProcessingTimers() {
       const t = Date.parse(iso);
       if (!Number.isFinite(t)) continue;
       const elapsed = Math.max(0, now - t);
-      const { remainingMs } = resolveProcessingRemainingMs(el, id, elapsed);
-      el.textContent = `${formatMs(remainingMs)} left`;
+      const prog = processingProgressFromElement(el, elapsed);
+      el.textContent = formatProcessingProgressChipText({
+        pct: prog.pct,
+        pastBudget: prog.pastBudget,
+        coarseStage: prog.coarseStage,
+        retranscribeFallback: prog.retranscribeFallback
+      });
     }
   }, 1000);
 }
@@ -2567,38 +3497,64 @@ function startLiveTranscript(state) {
   if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
   liveTranscriptEl.value = '';
   if (liveTxStatusEl) liveTxStatusEl.hidden = false;
+  setLiveTxPhaseLabel('Live Transcription');
+  syncLiveTxScrollRowVisibility();
 
   state.liveTxTimerId = setInterval(() => {
     if (!state.isRecording) return;
     if (state.liveTxInFlight) return;
-    if (!state.chunks || state.chunks.length < 5) return;
+    if (!state.chunks || state.chunks.length < 2) return;
 
-    const recent = state.chunks.slice(-50); // ~5 seconds worth at 0.1s
-    const blob = new Blob(recent, { type: state.mediaRecorder?.mimeType || 'audio/webm' });
-    if (blob.size < 18_000) return;
+    const blob = buildSlidingWebmBlobForLiveStt(state, LIVE_TRANSCRIBE_MAX_WINDOW_MS);
+    if (!blob || blob.size < LIVE_TRANSCRIBE_MIN_CHUNK_BYTES) return;
 
     state.liveTxInFlight = true;
+    armLiveTxPreviewCountdown({
+      duration_ms: audioDurationMsFromBytes(blob.size),
+      audio_bytes: blob.size
+    });
     const fd = new FormData();
     fd.append('language', (noteLanguageEl?.value ?? '').toString());
+    fd.append('stt_provider', getNewNoteSttProvider());
     fd.append('audio', blob, guessFilename(blob.type));
 
-    fetch('/api/live-transcribe', { method: 'POST', body: fd })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        const t = (data?.transcript ?? '').toString().trim();
+    state.liveTranscribeTail = state.liveTranscribeTail.then(async () => {
+      setLiveTxPhaseLabel('Live Transcription');
+      try {
+        const r = await fetch('/api/live-transcribe', { method: 'POST', body: fd });
+        if (!r.ok) return;
+        let data = await r.json();
+        let t = vvFormatTranscript(data?.transcript ?? '').trim();
+        const hint = (noteLanguageEl?.value ?? '').toString().trim();
+        if (!t && hint) {
+          const fd2 = new FormData();
+          fd2.append('language', '');
+          fd2.append('stt_provider', getNewNoteSttProvider());
+          fd2.append('audio', blob, guessFilename(blob.type));
+          try {
+            const r2 = await fetch('/api/live-transcribe', { method: 'POST', body: fd2 });
+            if (r2.ok) {
+              data = await r2.json();
+              t = vvFormatTranscript(data?.transcript ?? '').trim();
+            }
+          } catch {
+            // ignore
+          }
+        }
         if (!liveTranscriptEl) return;
         if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
         if (t) {
           liveTranscriptEl.value = t;
-          if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+          if (liveTxStatusEl && state.isRecording) liveTxStatusEl.hidden = true;
+          syncLiveTxScrollRowVisibility();
         }
-      })
-      .catch(() => {
+      } catch {
         // ignore
-      })
-      .finally(() => {
+      } finally {
+        clearLiveTxPreviewCountdown();
         state.liveTxInFlight = false;
-      });
+      }
+    });
   }, LIVE_TRANSCRIBE_INTERVAL_MS);
 }
 
@@ -2607,9 +3563,13 @@ function stopLiveTranscript(state) {
     clearInterval(state.liveTxTimerId);
     state.liveTxTimerId = null;
   }
-  if (state) state.liveTxInFlight = false;
+  // Do not clear liveTxInFlight here — an in-flight fetch may still be running; its `finally` clears it.
   // Keep the last preview visible after stopping.
-  if (state === note && liveTxStatusEl) liveTxStatusEl.hidden = true;
+  if (state === note) {
+    clearLiveTxPreviewCountdown();
+    if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+    syncLiveTxScrollRowVisibility();
+  }
 }
 
 function startLiveQueryTranscript(state) {
@@ -2620,15 +3580,15 @@ function startLiveQueryTranscript(state) {
   state.liveTxTimerId = setInterval(() => {
     if (!state.isRecording) return;
     if (state.liveTxInFlight) return;
-    if (!state.chunks || state.chunks.length < 5) return;
+    if (!state.chunks || state.chunks.length < 2) return;
 
-    const recent = state.chunks.slice(-50); // ~5 seconds worth at 0.1s
-    const blob = new Blob(recent, { type: state.mediaRecorder?.mimeType || 'audio/webm' });
-    if (blob.size < 18_000) return;
+    const blob = buildSlidingWebmBlobForLiveStt(state, LIVE_TRANSCRIBE_MAX_WINDOW_MS);
+    if (!blob || blob.size < LIVE_TRANSCRIBE_MIN_CHUNK_BYTES) return;
 
     state.liveTxInFlight = true;
     const fd = new FormData();
     fd.append('language', ''); // always auto-detect for search
+    fd.append('stt_provider', 'whisper');
     fd.append('audio', blob, guessFilename(blob.type));
 
     fetch('/api/live-transcribe', { method: 'POST', body: fd })
@@ -2657,35 +3617,80 @@ function stopLiveQueryTranscript(state) {
 }
 
 async function transcribeFullPreview() {
+  if (transcribeFullPreviewInFlight) return transcribeFullPreviewInFlight;
+  transcribeFullPreviewInFlight = transcribeFullPreviewImpl().finally(() => {
+    transcribeFullPreviewInFlight = null;
+  });
+  return transcribeFullPreviewInFlight;
+}
+
+async function transcribeFullPreviewImpl() {
   if (!note.audioBlob) return;
   if (!liveTranscriptEl) return;
 
+  lastFullPreviewBundle = null;
+
   if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
-  liveTranscriptEl.value = '';
+  // UX: keep last live-chunk transcript visible until the full-file result returns (do not blank here).
+  const priorLiveText = (liveTranscriptEl.value ?? '').toString();
   if (liveTxStatusEl) liveTxStatusEl.hidden = false;
+  setLiveTxPhaseLabel('Full Transcription');
+  syncLiveTxScrollRowVisibility();
+  armLiveTxPreviewCountdown({
+    duration_ms: Math.round(note.durationMs || 0),
+    audio_bytes: Number(note.audioBlob?.size || 0) || 0
+  });
 
   const fd = new FormData();
   fd.append('language', (noteLanguageEl?.value ?? '').toString());
-  fd.append('fast_mode', isFastMode() ? '1' : '0');
+  fd.append('stt_provider', getNewNoteSttProvider());
   fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
 
-  const resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
-  if (!resp.ok) {
-    liveTranscriptEl.value = '(failed to generate preview)';
-    if (liveTxStatusEl) liveTxStatusEl.hidden = true;
-    return;
-  }
-  const data = await safeJson(resp);
-  const t = (data?.transcript ?? '').toString().trim();
-  liveTranscriptEl.value = t;
-  if (liveTxStatusEl) liveTxStatusEl.hidden = true;
-}
-
-function applyProcessesCardVisibility(hasFailures) {
-  if (processCardEl) processCardEl.hidden = !hasFailures;
-  if (!hasFailures) {
-    if (procBodyEl) procBodyEl.hidden = true;
-    if (btnProcToggleEl) btnProcToggleEl.textContent = 'Show';
+  try {
+    const resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const stt = getNewNoteSttProvider();
+      const hint =
+        stt === 'google'
+          ? 'Full preview failed (Google Chirp). Check server GOOGLE_APPLICATION_CREDENTIALS / project, or switch to Whisper.'
+          : 'Full preview failed — live transcript above is unchanged.';
+      setStatus(hint, true);
+      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+      setLiveTxPhaseLabel('Full Transcription failed');
+      syncLiveTxScrollRowVisibility();
+      return;
+    }
+    const data = await safeJson(resp);
+    const rawFromApi = (data?.transcript ?? '').toString();
+    const segRaw = Array.isArray(data?.segments) ? data.segments : [];
+    const segments = vvSanitizePreviewSegments(segRaw);
+    const transcriptForBundle = rawFromApi.trim()
+      ? rawFromApi
+      : vvTranscriptFromSegments(segments.length ? segments : segRaw);
+    const formatted = vvFormatTranscript(transcriptForBundle).trim();
+    // Replace with full-file transcript; if still empty, keep prior live text so the box does not flash blank.
+    liveTranscriptEl.value = formatted || priorLiveText;
+    if (!noteTranscriptionPipelineBusy) {
+      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+      setLiveTxPhaseLabel('Ready');
+    }
+    syncLiveTxScrollRowVisibility();
+    // Do not store a preview bundle the server would reject (avoids useless queue + misleading "ready" path).
+    if (!formatted || segments.length === 0) {
+      lastFullPreviewBundle = null;
+    } else {
+      lastFullPreviewBundle = {
+        transcript: transcriptForBundle,
+        segments,
+        detected_language: (data?.language ?? '').toString().trim(),
+        language_hint: (noteLanguageEl?.value ?? '').toString().trim(),
+        stt_provider: getNewNoteSttProvider(),
+        duration_ms: Math.round(note.durationMs || 0),
+        audio_bytes: Number(note.audioBlob?.size || 0) || 0
+      };
+    }
+  } finally {
+    clearLiveTxPreviewCountdown();
   }
 }
 
@@ -2695,7 +3700,6 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     !btnIngestPauseEl ||
     !btnIngestResumeEl ||
     !jobsListEl ||
-    !btnProcToggleEl ||
     !jobsPausedPillEl ||
     !jobsSummaryEl ||
     !jobsFiltersEl ||
@@ -2707,8 +3711,6 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     !btnJobsRetryAllEl ||
     !btnJobsUnlockNowEl
   ) {
-    // Fail-safe: keep Processes hidden if ingestion UI is incomplete (avoid stuck visible panel).
-    applyProcessesCardVisibility(false);
     return;
   }
 
@@ -2716,13 +3718,10 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
   try {
     const summaryResp = await fetch('/api/processes/summary');
     if (!summaryResp.ok) {
-      applyProcessesCardVisibility(false);
       return;
     }
     summary = await summaryResp.json();
   } catch {
-    // Network / Safari ITP / HTTPS quirks: never leave Processes visible without a valid summary.
-    applyProcessesCardVisibility(false);
     return;
   }
   const paused = !!summary?.paused;
@@ -2736,12 +3735,6 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
 
   const jobs = summary?.jobs ?? {};
   const notes = summary?.notes ?? {};
-  const hasFailures = Number(jobs?.error ?? 0) > 0 || Number(notes?.error ?? 0) > 0;
-
-  // Hide the Processes card entirely unless there are failures.
-  // If failures appear later, it will show again and can auto-open.
-  applyProcessesCardVisibility(hasFailures);
-  if (!hasFailures) return;
   const delayed = Number(summary?.jobs_delayed_queued ?? 0) || 0;
   const lastUnlockAt = (summary?.jobs_last_stale_unlock_at ?? '').toString().trim();
   const lastUnlockCount = Number(summary?.jobs_last_stale_unlock_count ?? 0) || 0;
@@ -2765,9 +3758,8 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     }
   `.trim();
 
-  // If processes panel is collapsed, don't show inner content.
-  if (procBodyEl?.hidden) return;
-  if (btnProcToggleEl) btnProcToggleEl.textContent = 'Hide';
+  // Do not skip jobs refetch when forcing refresh (e.g. open panel, apply filters, or after removing a job row).
+  if (processCardEl?.hidden && forceShow !== true) return;
 
   const nextHidden =
     forceShow === true ? false : forceShow === false ? true : toggleList ? !jobsListEl.hidden : jobsListEl.hidden;
@@ -2814,6 +3806,11 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
                     ? `<button class="btn" data-job-retry="${escapeHtml(id)}" type="button">Retry</button>`
                     : ''}
                   ${canCancel ? `<button class="btn err" data-job-cancel="${escapeHtml(id)}" type="button">Cancel</button>` : ''}
+                  ${
+                    st !== 'running'
+                      ? `<button class="btn err" data-proc-delete-job="${escapeHtml(id)}" type="button" title="Remove this job and delete its note from the library (if the note still exists)">Delete process</button>`
+                      : ''
+                  }
                 </div>
               </div>
             `.trim();
@@ -2873,6 +3870,57 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
           await refreshIngestionUi();
         } catch (err2) {
           setStatus(`Cancel error: ${err2?.message ?? err2}`, true);
+        } finally {
+          b.disabled = false;
+        }
+      });
+    });
+
+    jobsListEl.querySelectorAll('button[data-proc-delete-job]').forEach((b) => {
+      b.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const jobId = (b.getAttribute('data-proc-delete-job') ?? '').toString().trim();
+        if (!jobId) return;
+        if (
+          !confirm(
+            'Delete this process and remove its note from your library? If the note was already deleted, only the job row is removed.'
+          )
+        ) {
+          return;
+        }
+        b.disabled = true;
+        try {
+          let resp2 = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/remove`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+          if (resp2.status === 404) {
+            resp2 = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+          }
+          const data2 = await safeJson(resp2);
+          if (!resp2.ok) throw new Error(data2?.error || `Remove failed (${resp2.status})`);
+          try {
+            b.closest('.jobItem')?.remove();
+          } catch {
+            // ignore
+          }
+          const nid = (data2?.note_id ?? '').toString().trim();
+          if (nid && data2?.note_deleted) {
+            if (newNotePendingProcessId === nid) hideNewNoteProcessingStatus();
+            procTimerByNoteId.delete(nid);
+            expandedNoteIds.delete(nid);
+            expandedNoteIdsFromSearchMatch.delete(nid);
+          }
+          setStatus(data2?.note_deleted ? 'Note and process removed' : 'Process removed');
+          await refreshIngestionUi({ toggleList: false, forceShow: true });
+          if (nid && data2?.note_deleted) {
+            await refreshResults((qEl?.value ?? '').toString()).catch(() => {
+              // ignore
+            });
+          }
+        } catch (err2) {
+          setStatus(`Remove error: ${err2?.message ?? err2}`, true);
         } finally {
           b.disabled = false;
         }
@@ -3014,6 +4062,7 @@ function pollNoteUntilDone(id) {
   const started = Date.now();
   const timeoutMs = 45_000;
   const intervalMs = 1500;
+  const nid = (id ?? '').toString().trim();
 
   const timer = setInterval(async () => {
     if (Date.now() - started > timeoutMs) {
@@ -3027,12 +4076,45 @@ function pollNoteUntilDone(id) {
       const status = (n?.status ?? '').toString();
       if (status === 'ready' || status === 'error') {
         clearInterval(timer);
+        if (nid && newNotePendingProcessId === nid) hideNewNoteProcessingStatus();
       }
       await refreshResults(qEl.value);
     } catch {
       // ignore transient errors
     }
   }, intervalMs);
+}
+
+function buildSearchTranscribeForm(audioBlob) {
+  const fd = new FormData();
+  fd.append('audio', audioBlob, guessFilename(audioBlob.type));
+  fd.append('stt_provider', 'whisper');
+  fd.append('language', '');
+  return fd;
+}
+
+async function postTranscribeSearch(audioBlob) {
+  const attemptFetch = () =>
+    fetch('/api/transcribe', { method: 'POST', body: buildSearchTranscribeForm(audioBlob) });
+
+  let resp = await attemptFetch();
+  // Transient gateway timeouts while STT runs are common; retry once after a short wait.
+  if (resp.status === 502 || resp.status === 503 || resp.status === 504) {
+    await new Promise((r) => setTimeout(r, 900));
+    resp = await attemptFetch();
+  }
+
+  if (!resp.ok) {
+    const msg = await safeJson(resp);
+    const detail = (msg?.details ?? msg?.error ?? '').toString().trim();
+    const base = msg?.error || `Transcribe failed (${resp.status})`;
+    const hint =
+      resp.status === 502 || resp.status === 503 || resp.status === 504
+        ? ' Server or proxy timed out—try a shorter clip, or ask the host to raise proxy_read_timeout for /api/transcribe.'
+        : '';
+    throw new Error(detail ? `${base}: ${detail}${hint}` : `${base}${hint}`);
+  }
+  return safeJson(resp);
 }
 
 async function runAudioSearch() {
@@ -3047,14 +4129,7 @@ async function runAudioSearch() {
   setStatus('Transcribing search…');
 
   try {
-    const fd = new FormData();
-    fd.append('audio', query.audioBlob, guessFilename(query.audioBlob.type));
-    const resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
-    if (!resp.ok) {
-      const msg = await safeJson(resp);
-      throw new Error(msg?.error || `Transcribe failed (${resp.status})`);
-    }
-    const data = await safeJson(resp);
+    const data = await postTranscribeSearch(query.audioBlob);
     const transcript = (data?.transcript ?? '').toString().trim();
     qEl.value = transcript;
 
@@ -3064,6 +4139,7 @@ async function runAudioSearch() {
 
     setStatus(transcript ? `Searching: "${transcript}"` : 'Search transcript empty');
     await refreshResults(transcript);
+    syncVisibility();
   } catch (err) {
     setStatus(`Search error: ${err?.message ?? err}`, true);
     btnSearch.disabled = false;
@@ -3107,6 +4183,13 @@ function escapeHtml(s) {
         return ch;
     }
   });
+}
+
+function truncateNotePreviewPlain(raw, maxLen) {
+  const n = Math.max(40, Number(maxLen) || 280);
+  const t = (raw ?? '').toString().replace(/\s+/g, ' ').trim();
+  if (t.length <= n) return t;
+  return `${t.slice(0, n - 1)}…`;
 }
 
 function sanitizeFilename(name) {
@@ -3156,6 +4239,8 @@ function makeRecorderState() {
     liveLangInFlight: false,
     liveTxTimerId: null,
     liveTxInFlight: false,
+    /** Chains in-session live `/api/live-transcribe` calls so full preview waits for the last chunk to finish. */
+    liveTranscribeTail: Promise.resolve(),
     sourceFilename: ''
   };
 }
@@ -3189,6 +4274,12 @@ function resetRecorder(state) {
     if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = true;
     liveTranscriptEl.value = '';
     liveTranscriptEl.disabled = false;
+  }
+  if (state === note) {
+    lastFullPreviewBundle = null;
+    note.liveTranscribeTail = Promise.resolve();
+    notePostRecordPipelinePromise = null;
+    setNewNoteTranscriptionStages({ live: 'pending', full: 'pending', showRow: false });
   }
 }
 
@@ -3237,16 +4328,13 @@ function renderBitrateHint() {
   if (aboutBox) {
     aboutBox.innerHTML = `
       <div>Audio is recorded at <strong>${kbps} kbps</strong>. Maximum length is about <strong>100 minutes</strong> per note.</div>
-      <div style="margin-top:6px">Transcription uses a local <strong>Whisper</strong>-style pipeline; saving runs <strong>offline</strong> indexing for search.</div>
-      <div style="margin-top:6px">
-        <strong>Fast mode</strong> (green dot) trades a little accuracy for speed — turn it off in New note when you want higher quality.
-      </div>
+      <div style="margin-top:6px">Transcription uses <strong>Whisper</strong> locally by default, or <strong>Google Chirp</strong> when you pick it in New note (requires server credentials). Saving runs <strong>offline</strong> indexing for search.</div>
       <div style="margin-top:6px">
         Notes store <strong>timestamped segments</strong>; use each segment’s <strong>Play</strong> for a clip, or full <strong>Play Audio</strong> for the whole file.
       </div>
-      <div style="margin-top:6px">
+        <div style="margin-top:6px">
         <strong>Search</strong> blends keyword matching with local <strong>semantic</strong> retrieval over segments. Type normally or use filters like <strong>today</strong>, <strong>yesterday</strong>, or a calendar date.
-      </div>
+        </div>
       <div style="margin-top:6px">
         <strong>Processing:</strong> the note shows an <strong>approximate time left</strong> (from clip length). If it reaches <strong>0:00</strong> and transcription is still running, the estimate <strong>extends</strong> so you can see work is ongoing. The results list <strong>refreshes</strong> when a note becomes Ready. <strong>Pause</strong> / <strong>Stop</strong> apply only to that note.
       </div>
@@ -3254,7 +4342,7 @@ function renderBitrateHint() {
         <strong>Reprocess</strong> (Ready → ▼) runs transcription again with <strong>automatic language detection</strong>. While <strong>any</strong> note is still processing, Reprocess is hidden on other notes to avoid overlapping runs.
       </div>
       <div style="margin-top:6px">
-        <strong>Layout:</strong> <strong>Search</strong> and results are at the top. <strong>New note</strong> and <strong>Help</strong> open from <strong>+</strong> / <strong>Help</strong> under that column (panels sit above the buttons). <strong>Processes</strong> appears beside Search when jobs need attention.
+        <strong>Layout:</strong> <strong>Saved notes</strong> (results) are on top. <strong>Search</strong>, <strong>Processes</strong>, <strong>+</strong> (new note), and <strong>Help</strong> are quick actions at the bottom—only <strong>one</strong> panel is open at a time. Each opens in the stack under the list; <strong>×</strong> closes it. No side-by-side split.
       </div>
       <div style="margin-top:6px">
         In Help, <strong>App hint</strong> and <strong>UI steps</strong> only show one at a time; <strong>Hide …</strong> on either closes the whole Help card.
@@ -3264,33 +4352,33 @@ function renderBitrateHint() {
 
   if (uiStepsBox) {
     uiStepsBox.innerHTML = `
-      <div style="margin-top:6px">
-        1) Tap <strong>+</strong> (under Search) to open <strong>New note</strong>. Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> — change it if you like.
-      </div>
-      <div style="margin-top:4px">
-        2) Optional: <strong>Choose file</strong> to upload audio, or tap <strong>Record note</strong> / <strong>Record with fast mode</strong>, speak, then <strong>Stop</strong>.
-      </div>
-      <div style="margin-top:4px">
+        <div style="margin-top:6px">
+        1) Tap <strong>+</strong> in the quick-action bar to open <strong>New note</strong> (it closes any other open panel). Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> for mic audio or <strong>Upload_YYYY-MM-DD_HH-MM-SS</strong> after <strong>Choose Audio File</strong> — change it if you like.
+        </div>
+        <div style="margin-top:4px">
+        2) Optional: <strong>Choose Audio File</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>. Choose <strong>Whisper</strong> or <strong>Google Chirp</strong> under Transcription engine before preview/save.
+        </div>
+        <div style="margin-top:4px">
         3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>. Edit the <strong>Transcript preview</strong> after it finishes processing.
-      </div>
-      <div style="margin-top:4px">
-        4) Tap <strong>Save</strong>. Status moves through <strong>Processing</strong> → <strong>Ready</strong>. While processing, an <strong>approximate time left</strong> is shown; if it hits <strong>0:00</strong> early, the estimate <strong>extends</strong> until work finishes. Use <strong>Pause processing</strong> / <strong>Stop</strong> only for that note.
-      </div>
-      <div style="margin-top:4px">
-        5) <strong>Search:</strong> type and press <strong>Enter</strong>, or <strong>Record search</strong> → <strong>Stop</strong> → <strong>Search</strong>.
-      </div>
-      <div style="margin-top:4px">
+        </div>
+        <div style="margin-top:4px">
+        4) Tap <strong>Save Note</strong>. Status moves through <strong>Processing</strong> → <strong>Ready</strong>. While processing, an approximate <strong>percent left</strong> is shown (from audio length and elapsed time, not a byte meter from the engine). Use <strong>Pause processing</strong> / <strong>Stop</strong> only for that note.
+        </div>
+        <div style="margin-top:4px">
+        5) <strong>Search:</strong> open the Search card from the quick-action <strong>Search</strong> button, then type and press <strong>Enter</strong>, or use the <strong>mic</strong> (record) → <strong>Stop</strong> → <strong>find</strong> (search) buttons. <strong>×</strong> collapses Search again.
+        </div>
+        <div style="margin-top:4px">
         6) In results, <strong>Expand</strong> a note for transcript + audio. When <strong>Ready</strong>, <strong>▼</strong> includes <strong>Reprocess</strong> (re-run transcription + language detection), <strong>Play Audio</strong>, downloads, <strong>Edit</strong>, <strong>Delete</strong>. While <strong>another</strong> note is still processing, <strong>Reprocess</strong> is hidden on other notes. (<strong>Edit</strong> hides in that menu while you’re already editing that note.)
-      </div>
-      <div style="margin-top:4px">
+        </div>
+        <div style="margin-top:4px">
         7) Expanded notes: per-segment <strong>Play</strong> for clips; adjust <strong>Speed</strong> / <strong>Loop segment</strong> as needed. Expanding scrolls the row into view; only the <strong>last</strong> result uses a full scroll to the bottom of the page.
-      </div>
-      <div style="margin-top:4px">
+        </div>
+        <div style="margin-top:4px">
         8) Tap <strong>Help</strong> for this panel. <strong>App hint</strong> vs <strong>UI steps</strong> toggle each other off; <strong>Hide …</strong> closes Help entirely.
-      </div>
-      <div style="margin-top:4px">
-        9) If <strong>Processes</strong> appears beside Search (failures/jobs), use <strong>Show</strong>/<strong>Hide</strong> there — it does not close New note or Help.
-      </div>
+        </div>
+        <div style="margin-top:4px">
+        9) <strong>Processes</strong> opens the jobs / ingestion panel. Opening it closes Search, New note, and Help; only one of the four panels stays open.
+        </div>
       <div style="margin-top:4px">
         Tip: Try queries like <strong>yesterday</strong> or <strong>between 2026-04-20 and 2026-04-22</strong> with your search text.
       </div>
@@ -3336,13 +4424,13 @@ function syncVisibility() {
   // Note buttons
   btnRecordNote.hidden = note.isRecording;
   btnRecordNote.disabled = note.isRecording;
-  btnRecordNoteFast.hidden = note.isRecording;
-  btnRecordNoteFast.disabled = note.isRecording;
   btnStopNote.hidden = !note.isRecording;
   btnStopNote.disabled = !note.isRecording;
   btnSaveNote.hidden = !note.audioBlob || note.isRecording;
-  btnSaveNote.disabled = !note.audioBlob || note.isRecording;
+  btnSaveNote.disabled = !note.audioBlob || note.isRecording || noteTranscriptionPipelineBusy;
   if (noteDetectedLangEl) noteDetectedLangEl.hidden = note.isRecording || !note.audioBlob;
+  if (btnSttWhisperEl) btnSttWhisperEl.disabled = !!note.isRecording;
+  if (btnSttGoogleEl) btnSttGoogleEl.disabled = !!note.isRecording;
 
   // Search buttons
   btnRecordQuery.hidden = query.isRecording;
@@ -3352,16 +4440,6 @@ function syncVisibility() {
   btnSearch.disabled = hideSearch;
 
   // Removed: Quick answer button
-}
-
-function isFastMode() {
-  return fastModeDotEl?.classList?.contains('isOn') ?? true;
-}
-
-function setFastMode(on) {
-  if (!fastModeDotEl) return;
-  fastModeDotEl.classList.toggle('isOn', !!on);
-  fastModeDotEl.setAttribute('aria-pressed', on ? 'true' : 'false');
 }
 
 function isSemanticMode() {
@@ -3416,11 +4494,10 @@ function startLiveLanguageDetection(state) {
   state.liveLangTimerId = setInterval(() => {
     if (!state.isRecording) return;
     if (state.liveLangInFlight) return;
-    if (!state.chunks || state.chunks.length < 3) return;
+    if (!state.chunks || state.chunks.length < 2) return;
 
-    const recent = state.chunks.slice(-30); // ~last few seconds worth of 0.1s chunks
-    const blob = new Blob(recent, { type: state.mediaRecorder?.mimeType || 'audio/webm' });
-    if (blob.size < 12_000) return; // wait for enough audio
+    const blob = buildSlidingWebmBlobForLiveStt(state, LIVE_LANG_PROBE_MAX_WINDOW_MS);
+    if (!blob || blob.size < 12_000) return; // wait for enough audio
 
     state.liveLangInFlight = true;
     const fd = new FormData();
@@ -3454,17 +4531,26 @@ function stopLiveLanguageDetection(state) {
 function bootstrapAutoTitle() {
   // Only auto-fill if empty on first load.
   if (!titleEl.value.trim()) {
-    titleEl.value = defaultRecordingTitle();
+    titleEl.value = defaultNoteTitleFromState(note);
   }
 }
 
-function ensureAutoTitleFilled() {
+function ensureAutoTitleFilled(state = note) {
   if (titleEl.value.trim()) return;
-  titleEl.value = defaultRecordingTitle();
+  titleEl.value = defaultNoteTitleFromState(state);
 }
 
 function defaultRecordingTitle() {
   return `Recording_${timestampTag()}`;
+}
+
+function defaultUploadTitle() {
+  return `Upload_${timestampTag()}`;
+}
+
+function defaultNoteTitleFromState(state) {
+  if ((state?.sourceFilename ?? '').toString().trim()) return defaultUploadTitle();
+  return defaultRecordingTitle();
 }
 
 // (Removed auto-incrementing Recording counter; titles are timestamp-based now.)
