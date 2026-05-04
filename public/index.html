@@ -143,8 +143,11 @@
           </div>
 
           <label class="label" id="liveTranscriptWrap" hidden>
-            Transcript preview (editable)
-            <span id="liveTxStatus" class="pill" style="margin-left:10px" hidden>
+            <span class="liveTxHeaderRow" style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px">
+              <span>Transcript preview (read-only until full preview is generated)</span>
+              <span id="liveTxLangStatus" class="pill" hidden>Detecting language…</span>
+            </span>
+            <span id="liveTxStatus" class="pill" style="margin-left: 0" hidden>
               <span id="liveTxPhaseLabel" class="liveTxProcessingLabel">Live Transcription</span>
               <span
                 id="liveTxTimeLeft"
@@ -173,8 +176,8 @@
             </div>
           </label>
 
-          <label class="label">
-            Language (Auto-detect by default)
+          <div id="noteLanguageWrap" class="label" hidden>
+            Language (shown after the first detection; you can change it while recording)
             <select
               id="noteLanguage"
               class="input"
@@ -192,20 +195,18 @@
               <option value="ko">Korean (ko)</option>
               <option value="zh">Chinese (zh)</option>
             </select>
-          </label>
-
-          <div class="label">
-            Transcription engine
-            <div class="row sttEngineRow" style="margin-top: 8px; margin-bottom: 0">
-              <button type="button" class="btn primary" id="btnSttWhisper" data-stt="whisper" aria-pressed="true">
-                Whisper (default)
-              </button>
-              <button type="button" class="btn" id="btnSttGoogle" data-stt="google" aria-pressed="false">Google Chirp</button>
-            </div>
-            <span class="newNoteTitleHint" style="margin-top: 6px; display: block"
-              >Google Chirp uses your server&apos;s Google Cloud Speech credentials. Whisper runs locally.</span
-            >
           </div>
+
+          <div class="row" style="margin-top: 8px">
+            <button type="button" id="btnGenerateFullPreview" class="btn primary" hidden>
+              Generate full transcript
+            </button>
+          </div>
+
+          <p class="newNoteTitleHint" style="margin: 0 0 8px">
+            Transcription runs on the server with <strong>Whisper</strong> (faster-whisper); see <code>.env.example</code> for
+            model and device options.
+          </p>
 
           <div class="row">
             <button id="btnSaveNote" class="btn" disabled hidden>Save Note</button>

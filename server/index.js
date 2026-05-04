@@ -130,6 +130,12 @@ if ((process.env.VOICEVAULT_CLEAN_EPHEMERAL ?? '1').toString().trim() !== '0') {
     console.warn('[voicevault] ephemeral cache cleanup failed:', e?.message ?? e);
   }
 }
+try {
+  pruneExpiredNoteDrafts(db, blobsDir);
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.warn('[voicevault] note draft prune failed:', e?.message ?? e);
+}
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const pinecone =
   process.env.PINECONE_API_KEY && process.env.PINECONE_INDEX
@@ -142,6 +148,59 @@ const upload = multer({
     fileSize: 50 * 1024 * 1024
   }
 });
+
+function writeBlobIfMissing(blobId, buffer) {
+  const bid = (blobId ?? '').toString().trim();
+  if (!bid || !buffer?.length) return;
+  const blobPath = path.join(blobsDir, bid);
+  try {
+    if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, buffer);
+  } catch {
+    // ignore; notes row still carries inline audio_blob when needed
+  }
+}
+
+function countBlobRefs(dbInst, blobId) {
+  const b = (blobId ?? '').toString().trim();
+  if (!b) return { notes: 999, drafts: 999 };
+  const n1 = Number(dbInst.prepare(`SELECT count(1) AS c FROM notes WHERE audio_blob_id = ?`).get(b)?.c ?? 0) || 0;
+  const n2 = Number(dbInst.prepare(`SELECT count(1) AS c FROM note_drafts WHERE audio_blob_id = ?`).get(b)?.c ?? 0) || 0;
+  return { notes: n1, drafts: n2 };
+}
+
+function maybeUnlinkBlob(dbInst, blobDirPath, blobId) {
+  const b = (blobId ?? '').toString().trim();
+  if (!b) return;
+  const { notes, drafts } = countBlobRefs(dbInst, b);
+  if (notes > 0 || drafts > 0) return;
+  try {
+    fs.unlinkSync(path.join(blobDirPath, b));
+  } catch {
+    // ignore
+  }
+}
+
+function pruneExpiredNoteDrafts(dbInst, blobDirPath) {
+  const hours = Math.max(1, Number(process.env.VOICEVAULT_NOTE_DRAFT_MAX_AGE_H ?? '72') || 72);
+  const cutoff = new Date(Date.now() - hours * 3600_000).toISOString();
+  let rows = [];
+  try {
+    rows = dbInst.prepare(`SELECT id, audio_blob_id FROM note_drafts WHERE updated_at < ?`).all(cutoff);
+  } catch {
+    rows = [];
+  }
+  for (const r of rows) {
+    const id = (r?.id ?? '').toString().trim();
+    const oldBid = (r?.audio_blob_id ?? '').toString().trim();
+    if (!id) continue;
+    try {
+      dbInst.prepare(`DELETE FROM note_drafts WHERE id = ?`).run(id);
+    } catch {
+      // ignore
+    }
+    maybeUnlinkBlob(dbInst, blobDirPath, oldBid);
+  }
+}
 
 const uploadZip = multer({
   storage: multer.diskStorage({
@@ -262,19 +321,13 @@ function persistedNoteLanguage(hint, detected) {
   return h || d;
 }
 
-/** New-note / reprocess engine: `whisper` (local) or `google` (Chirp). */
-function normalizeSttProvider(raw) {
-  const s = (raw ?? '').toString().trim().toLowerCase();
-  if (s === 'google' || s === 'chirp') return 'google';
+/** Server transcription is Whisper-only; legacy rows may still say `google`. */
+function normalizeSttProvider(_raw) {
   return 'whisper';
 }
 
-/** Optional override for queued / authoritative transcription (not live preview). */
-function sttProviderForAuthoritativeFinal(rowSttRaw) {
-  const o = (process.env.VOICEVAULT_SERVER_FINAL_STT_PROVIDER ?? '').toString().trim().toLowerCase();
-  if (o === 'google' || o === 'chirp') return 'google';
-  if (o === 'whisper') return 'whisper';
-  return normalizeSttProvider(rowSttRaw);
+function sttProviderForAuthoritativeFinal(_rowSttRaw) {
+  return 'whisper';
 }
 
 function whisperModelForPipeline() {
@@ -291,7 +344,7 @@ function normalizeDetectedLanguage(raw) {
 }
 
 /**
- * Re-run STT to fill `notes.language` where it is empty (uses current pipeline: Whisper or Google Chirp via env).
+ * Re-run STT to fill `notes.language` where it is empty (local Whisper).
  * Body: { limit?: number, dry_run?: boolean, language_hint?: string } — hint is passed to transcribe (empty = auto-detect).
  */
 app.post('/api/debug/backfill-note-languages', async (req, res) => {
@@ -1197,12 +1250,124 @@ app.post('/api/jobs/:id/retry', (req, res) => {
   res.json({ ok: true, id, status: 'queued' });
 });
 
+app.post('/api/note-drafts', upload.single('audio'), (req, res) => {
+  try {
+    const audio = req.file;
+    if (!audio?.buffer?.length) return res.status(400).json({ error: 'Missing audio file' });
+    const id = nanoid(12);
+    const blobId = sha256Hex(audio.buffer);
+    writeBlobIfMissing(blobId, audio.buffer);
+    const now = new Date().toISOString();
+    const dm = clampInt(req.body?.duration_ms, 0, 24 * 60 * 60 * 1000, 0);
+    db.prepare(
+      `INSERT INTO note_drafts (id, audio_blob_id, audio_mime, audio_bytes, duration_ms, created_at, updated_at)
+       VALUES (@id, @audio_blob_id, @audio_mime, @audio_bytes, @duration_ms, @created_at, @updated_at)`
+    ).run({
+      id,
+      audio_blob_id: blobId,
+      audio_mime: audio.mimetype || 'application/octet-stream',
+      audio_bytes: audio.size,
+      duration_ms: dm,
+      created_at: now,
+      updated_at: now
+    });
+    res.status(201).json({ id, audio_bytes: audio.size });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.put('/api/note-drafts/:id', upload.single('audio'), (req, res) => {
+  try {
+    const id = (req.params?.id ?? '').toString().trim();
+    const audio = req.file;
+    if (!id) return res.status(400).json({ error: 'Missing draft id' });
+    if (!audio?.buffer?.length) return res.status(400).json({ error: 'Missing audio file' });
+    const existing = db.prepare(`SELECT id, audio_blob_id FROM note_drafts WHERE id = ?`).get(id);
+    if (!existing) return res.status(404).json({ error: 'Draft not found' });
+    const oldBid = (existing?.audio_blob_id ?? '').toString().trim();
+    const blobId = sha256Hex(audio.buffer);
+    writeBlobIfMissing(blobId, audio.buffer);
+    const now = new Date().toISOString();
+    const dm = clampInt(req.body?.duration_ms, 0, 24 * 60 * 60 * 1000, 0);
+    db.prepare(
+      `UPDATE note_drafts SET audio_blob_id = @audio_blob_id, audio_mime = @audio_mime, audio_bytes = @audio_bytes,
+       duration_ms = @duration_ms, updated_at = @updated_at WHERE id = @id`
+    ).run({
+      id,
+      audio_blob_id: blobId,
+      audio_mime: audio.mimetype || 'application/octet-stream',
+      audio_bytes: audio.size,
+      duration_ms: dm,
+      updated_at: now
+    });
+    if (oldBid && oldBid !== blobId) maybeUnlinkBlob(db, blobsDir, oldBid);
+    res.json({ id, audio_bytes: audio.size });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.get('/api/note-drafts/:id', (req, res) => {
+  const id = (req.params?.id ?? '').toString().trim();
+  if (!id) return res.status(400).json({ error: 'Missing draft id' });
+  try {
+    const row = db
+      .prepare(`SELECT id, audio_bytes, audio_mime, duration_ms, updated_at FROM note_drafts WHERE id = ?`)
+      .get(id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true, ...row });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
+app.delete('/api/note-drafts/:id', (req, res) => {
+  const id = (req.params?.id ?? '').toString().trim();
+  if (!id) return res.status(400).json({ error: 'Missing draft id' });
+  try {
+    const row = db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE id = ?`).get(id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    const bid = (row.audio_blob_id ?? '').toString().trim();
+    db.prepare(`DELETE FROM note_drafts WHERE id = ?`).run(id);
+    maybeUnlinkBlob(db, blobsDir, bid);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
 app.post('/api/notes', upload.single('audio'), async (req, res) => {
   try {
-    const { title, display_title, duration_ms, language, stt_provider, source_filename } = req.body ?? {};
+    const { title, display_title, duration_ms, language, stt_provider, source_filename, draft_id } = req.body ?? {};
     const audio = req.file;
+    const draftId = (draft_id ?? '').toString().trim();
 
-    if (!audio) return res.status(400).json({ error: 'Missing audio file' });
+    let audioBuffer = null;
+    let audioMime = 'application/octet-stream';
+    let audioSize = 0;
+
+    if (audio?.buffer?.length) {
+      audioBuffer = audio.buffer;
+      audioMime = audio.mimetype || audioMime;
+      audioSize = audio.size || audioBuffer.length;
+    } else if (draftId) {
+      const row = db.prepare(`SELECT audio_blob_id, audio_mime, audio_bytes FROM note_drafts WHERE id = ?`).get(draftId);
+      const bid = (row?.audio_blob_id ?? '').toString().trim();
+      const bytes = Number(row?.audio_bytes ?? 0) || 0;
+      if (bid && bytes > 0) {
+        const blobPath = path.join(blobsDir, bid);
+        if (fs.existsSync(blobPath)) {
+          audioBuffer = fs.readFileSync(blobPath);
+          audioMime = (row?.audio_mime ?? '').toString().trim() || audioMime;
+          audioSize = bytes;
+        }
+      }
+    }
+
+    if (!audioBuffer?.length) {
+      return res.status(400).json({ error: 'Missing audio file (upload audio or a valid draft_id)' });
+    }
 
     const safeDisplayTitle = (display_title ?? title ?? '').toString().trim();
     const safeDurationMs = clampInt(duration_ms, 0, 24 * 60 * 60 * 1000, 0);
@@ -1214,13 +1379,13 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
     const ftsTitle = computeFtsTitle(initialDisplayTitle, '');
 
     const id = nanoid(12);
-    const ext = mimeToExt(audio.mimetype) ?? 'webm';
+    const ext = mimeToExt(audioMime) ?? 'webm';
     const audioFilename = `${id}.${ext}`;
 
-    const blobId = sha256Hex(audio.buffer);
+    const blobId = sha256Hex(audioBuffer);
     const blobPath = path.join(blobsDir, blobId);
     try {
-      if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, audio.buffer);
+      if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, audioBuffer);
     } catch {
       // ignore blob store failures; we still have audio_blob in SQLite.
     }
@@ -1237,9 +1402,9 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
       segments_json: '',
       audio_filename: audioFilename,
       audio_blob_id: blobId,
-      audio_mime: audio.mimetype || 'application/octet-stream',
-      audio_bytes: audio.size,
-      audio_blob: audio.buffer,
+      audio_mime: audioMime || 'application/octet-stream',
+      audio_bytes: audioSize,
+      audio_blob: audioBuffer,
       duration_ms: safeDurationMs,
       language: safeLanguage,
       stt_provider: safeStt,
@@ -1249,11 +1414,55 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
       error: ''
     });
 
-    // Authoritative transcript always comes from a server-side pass on the full uploaded blob
-    // (same path as retry). Client `preview_bundle` is not used for persisted body/segments.
-    db.prepare(`UPDATE notes SET transcribe_mode = 'retranscribe' WHERE id = ?`).run(id);
-    res.status(201).json({ id, status: 'processing', transcribe_mode: 'retranscribe' });
-    enqueueJob(db, { job_type: 'transcribe_note', note_id: id });
+    if (draftId) {
+      try {
+        const dr = db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE id = ?`).get(draftId);
+        const oldDraftBid = (dr?.audio_blob_id ?? '').toString().trim();
+        db.prepare(`DELETE FROM note_drafts WHERE id = ?`).run(draftId);
+        if (oldDraftBid && oldDraftBid !== blobId) maybeUnlinkBlob(db, blobsDir, oldDraftBid);
+      } catch {
+        // ignore
+      }
+    }
+
+    const previewBundleRaw = (req.body?.preview_bundle ?? '').toString();
+    const preview = tryParseValidPreviewBundle(previewBundleRaw);
+    const finalTranscriptRaw = (req.body?.final_transcript ?? '').toString();
+    const clientFinal = !preview ? tryParseClientFinalTranscript(finalTranscriptRaw, safeDurationMs) : null;
+
+    if (preview) {
+      const rowAfter = db
+        .prepare(
+          `SELECT id, title, display_title, body, segments_json, language, stt_provider
+           FROM notes WHERE id = ?`
+        )
+        .get(id);
+      await finalizeNoteFromSttOutput(db, id, rowAfter, {
+        transcriptRaw: preview.transcript,
+        segments: preview.segments,
+        detectedLang: preview.detectedLang,
+        transcribe_mode: ''
+      });
+      res.status(201).json({ id, status: 'ready', transcribe_mode: '', preview_applied: true });
+    } else if (clientFinal) {
+      const rowAfter = db
+        .prepare(
+          `SELECT id, title, display_title, body, segments_json, language, stt_provider
+           FROM notes WHERE id = ?`
+        )
+        .get(id);
+      await finalizeNoteFromSttOutput(db, id, rowAfter, {
+        transcriptRaw: clientFinal.transcript,
+        segments: clientFinal.segments,
+        detectedLang: '',
+        transcribe_mode: ''
+      });
+      res.status(201).json({ id, status: 'ready', transcribe_mode: '', preview_applied: true, client_text_applied: true });
+    } else {
+      db.prepare(`UPDATE notes SET transcribe_mode = 'retranscribe' WHERE id = ?`).run(id);
+      res.status(201).json({ id, status: 'processing', transcribe_mode: 'retranscribe', preview_applied: false });
+      enqueueJob(db, { job_type: 'transcribe_note', note_id: id });
+    }
   } catch (e) {
     if (!res.headersSent) res.status(500).json({ error: e?.message ?? String(e) });
   }
@@ -2362,6 +2571,62 @@ function formatTranscript(text) {
     .trim();
 }
 
+/** Same caps as client `vvSanitizePreviewSegments` / `sanitizeSegmentsForPersistence`. */
+function sanitizePreviewSegmentsForSave(segments) {
+  if (!Array.isArray(segments)) return [];
+  const out = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const s = segments[i];
+    const start = Number(s?.start);
+    const end = Number(s?.end);
+    const text = (s?.text ?? '').toString().trim();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) continue;
+    out.push({ start, end, text });
+    if (out.length >= 8000) break;
+  }
+  return out;
+}
+
+/**
+ * @returns {null | { transcript: string, segments: Array<{start:number,end:number,text:string}>, detectedLang: string, languageHint: string }}
+ */
+function tryParseValidPreviewBundle(previewBundleRaw) {
+  const raw = (previewBundleRaw ?? '').toString().trim();
+  if (!raw) return null;
+  let j;
+  try {
+    j = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const segments = sanitizePreviewSegmentsForSave(j?.segments);
+  const transcriptRaw = (j?.transcript ?? '').toString();
+  const transcript = formatTranscript(transcriptRaw).trim();
+  if (!transcript || segments.length === 0) return null;
+  return {
+    transcript,
+    segments,
+    detectedLang: (j?.detected_language ?? '').toString().trim(),
+    languageHint: (j?.language_hint ?? '').toString().trim()
+  };
+}
+
+const FINAL_TRANSCRIPT_MAX_CHARS = 400_000;
+
+/**
+ * When the user edited the full preview, the client may send `final_transcript` instead of a preview bundle.
+ * We persist one synthetic segment spanning the note duration so chunks/FTS still have a timeline anchor.
+ */
+function tryParseClientFinalTranscript(finalTranscriptRaw, durationMs) {
+  const t = formatTranscript((finalTranscriptRaw ?? '').toString()).trim();
+  if (!t || t.length > FINAL_TRANSCRIPT_MAX_CHARS) return null;
+  const dm = Number(durationMs) || 0;
+  const endSec = Math.max(0.001, dm > 0 ? dm / 1000 : 60);
+  const oneLine = t.replace(/\s+/g, ' ').trim();
+  const segments = [{ start: 0, end: endSec, text: oneLine }];
+  return { transcript: t, segments };
+}
+
 /**
  * If the UI sent a language hint and STT returns no usable text (wrong locale for multilingual speech is common),
  * retry once with auto-detect (empty language string). Matches client-side live/full preview fallback.
@@ -2832,7 +3097,8 @@ function getIngestionMaxParallel(db) {
 }
 
 function startIngestionWorkerImpl(getDb, { blobsDir }) {
-  const tickMs = 1200;
+  // Pick up new `queued` jobs quickly so the UI does not sit on `processing_coarse_stage=queued` for ~1s+ on every save.
+  const tickMs = Math.max(200, Math.min(5000, Number(process.env.VOICEVAULT_INGESTION_TICK_MS ?? '450') || 450));
   let active = 0;
   const timer = setInterval(() => {
     const db = getDb?.();

@@ -345,5 +345,20 @@ function migrate(db) {
   } catch {
     // ignore
   }
+
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS note_drafts (
+      id TEXT PRIMARY KEY,
+      audio_blob_id TEXT NOT NULL DEFAULT '',
+      audio_mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+      audio_bytes INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_note_drafts_updated_at ON note_drafts(updated_at)`);
+  } catch {
+    // ignore
+  }
 }
 

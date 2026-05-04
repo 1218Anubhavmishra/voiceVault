@@ -1,7 +1,6 @@
 import { spawn, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { transcribeWithGoogleChirp } from './transcribe-google-chirp.js';
 
 let _ffmpegBin;
 
@@ -82,23 +81,6 @@ function writeSilentPcmWav16kMono(outPath, durationSec) {
   fs.writeFileSync(outPath, buf);
 }
 
-/** When `provider` is omitted, optional env default (server-wide) for legacy callers. */
-function envDefaultSttProvider() {
-  const v = (process.env.VOICEVAULT_STT_PROVIDER ?? '').toString().trim().toLowerCase();
-  return v === 'google' || v === 'chirp' ? 'google' : 'whisper';
-}
-
-/**
- * @param {string} [explicit] - `whisper`, `google`, `chirp`, or empty
- * @returns {'whisper'|'google'}
- */
-function resolveTranscribeProvider(explicit) {
-  const e = (explicit ?? '').toString().trim().toLowerCase();
-  if (e === 'google' || e === 'chirp') return 'google';
-  if (e === 'whisper') return 'whisper';
-  return envDefaultSttProvider();
-}
-
 export async function transcribeAudioFile(audioPath, { model = 'small', language = '', provider = '' } = {}) {
   const scriptPath = path.resolve(process.cwd(), 'server', 'transcribe.py');
   const venvPythonWin = path.resolve(process.cwd(), '.venv', 'Scripts', 'python.exe');
@@ -158,22 +140,7 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
   }
 
   const audioForStt = fs.existsSync(preprocessedPath) ? preprocessedPath : audioPath;
-
-  if (resolveTranscribeProvider(provider) === 'google') {
-    try {
-      return await transcribeWithGoogleChirp(audioForStt, { language });
-    } catch (e) {
-      const err = new Error(e?.message ?? String(e));
-      err.code = 'TRANSCRIBE_FAILED';
-      throw err;
-    } finally {
-      try {
-        if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);
-      } catch {
-        // ignore
-      }
-    }
-  }
+  void provider;
 
   const args = [
     scriptPath,
@@ -244,7 +211,7 @@ export function whisperFinalModelFromEnv() {
 
 /**
  * Load faster-whisper once at startup so the first user note pays less cold-start latency.
- * Set `VOICEVAULT_WHISPER_WARMUP=0` to skip (e.g. CI or Google-only hosts).
+ * Set `VOICEVAULT_WHISPER_WARMUP=0` to skip (e.g. CI).
  */
 export async function warmupWhisperPipeline() {
   const off = (process.env.VOICEVAULT_WHISPER_WARMUP ?? '').toString().trim() === '0';

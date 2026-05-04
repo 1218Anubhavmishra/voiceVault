@@ -9,9 +9,9 @@ const previewNote = document.getElementById('previewNote');
 const titleEl = document.getElementById('title');
 const noteTimerEl = document.getElementById('noteTimer');
 const noteDetectedLangEl = document.getElementById('noteDetectedLang');
+const noteLanguageWrapEl = document.getElementById('noteLanguageWrap');
 const noteLanguageEl = document.getElementById('noteLanguage');
-const btnSttWhisperEl = document.getElementById('btnSttWhisper');
-const btnSttGoogleEl = document.getElementById('btnSttGoogle');
+const btnGenerateFullPreviewEl = document.getElementById('btnGenerateFullPreview');
 const uploadNoteEl = document.getElementById('uploadNote');
 const uploadNoteBtnEl = document.getElementById('uploadNoteBtn');
 const uploadNoteNameEl = document.getElementById('uploadNoteName');
@@ -26,6 +26,7 @@ const newNoteTxStageRowEl = document.getElementById('newNoteTxStageRow');
 const newNoteStageLiveEl = document.getElementById('newNoteStageLive');
 const newNoteStageFullEl = document.getElementById('newNoteStageFull');
 const liveTxPhaseLabelEl = document.getElementById('liveTxPhaseLabel');
+const liveTxLangStatusEl = document.getElementById('liveTxLangStatus');
 
 /** Resolves when post-record/upload transcription pipeline (live drain + full preview) has finished. */
 let notePostRecordPipelinePromise = null;
@@ -50,40 +51,36 @@ function setNewNoteTranscriptionStages({ live = 'pending', full = 'pending', sho
 
 async function runNotePostRecordTranscriptionPipeline(source) {
   // Do not gate on `note.isRecording`: the recorder `stop` handler sets `audioBlob` in the same
-  // turn as `isRecording = false`; an `isRecording` check can race and skip transcription entirely.
+  // turn as `isRecording = false`; an `isRecording` check can race and skip work entirely.
   if (!note.audioBlob) return;
   noteTranscriptionPipelineBusy = true;
   try {
     const afterRecording = source === 'recording_stop';
-    setNewNoteTranscriptionStages({
-      live: afterRecording ? 'active' : 'skipped',
-      full: 'pending',
-      showRow: true
-    });
+    const fromUpload = source === 'upload';
+
     if (afterRecording) {
+      setNewNoteTranscriptionStages({
+        live: 'active',
+        full: 'pending',
+        showRow: true
+      });
       setLiveTxPhaseLabel('Live Transcription');
       if (liveTxStatusEl) liveTxStatusEl.hidden = false;
       await note.liveTranscribeTail.catch(() => {});
       setNewNoteTranscriptionStages({ live: 'done', full: 'pending', showRow: true });
+    } else if (fromUpload) {
+      setNewNoteTranscriptionStages({ live: 'skipped', full: 'pending', showRow: true });
     }
-    setLiveTxPhaseLabel('Full Transcription');
-    if (liveTxStatusEl) liveTxStatusEl.hidden = false;
-    setNewNoteTranscriptionStages({
-      live: afterRecording ? 'done' : 'skipped',
-      full: 'active',
-      showRow: true
-    });
-    await transcribeFullPreview();
-    setNewNoteTranscriptionStages({
-      live: afterRecording ? 'done' : 'skipped',
-      full: 'done',
-      showRow: true
-    });
-    setLiveTxPhaseLabel('Ready');
+
+    clearLiveTxPreviewCountdown();
     if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+    setLiveTxPhaseLabel('Language');
+    await detectLanguageForNotePreview();
+    updateGenerateFullPreviewButtonVisibility();
     syncLiveTxScrollRowVisibility();
   } finally {
     noteTranscriptionPipelineBusy = false;
+    scheduleServerNoteDraftBackup();
     syncVisibility();
   }
 }
@@ -247,50 +244,8 @@ function vvTranscriptFromSegments(segments) {
 /** Wall-clock STT vs recording length (very approximate; GPU/local Whisper varies). Used only for UI estimate. */
 const PROCESSING_TIME_ESTIMATE_RATIO = 0.45;
 
-const NOTE_STT_ENGINE_KEY = 'vv_note_stt_engine';
-
-function loadSavedNoteSttEngine() {
-  try {
-    const v = (localStorage.getItem(NOTE_STT_ENGINE_KEY) ?? '').toString().trim().toLowerCase();
-    return v === 'google' ? 'google' : 'whisper';
-  } catch {
-    return 'whisper';
-  }
-}
-
-function saveNoteSttEngine(v) {
-  try {
-    localStorage.setItem(NOTE_STT_ENGINE_KEY, v === 'google' ? 'google' : 'whisper');
-  } catch {
-    // ignore
-  }
-}
-
 function getNewNoteSttProvider() {
-  return loadSavedNoteSttEngine();
-}
-
-/** Align with server `normalizeSttProvider` (whisper | google). */
-function sttProviderFromRaw(raw) {
-  const s = (raw ?? '').toString().trim().toLowerCase();
-  return s === 'google' || s === 'chirp' ? 'google' : 'whisper';
-}
-
-function syncNewNoteSttUi() {
-  const p = getNewNoteSttProvider();
-  if (btnSttWhisperEl instanceof HTMLButtonElement) {
-    btnSttWhisperEl.classList.toggle('primary', p === 'whisper');
-    btnSttWhisperEl.setAttribute('aria-pressed', p === 'whisper' ? 'true' : 'false');
-  }
-  if (btnSttGoogleEl instanceof HTMLButtonElement) {
-    btnSttGoogleEl.classList.toggle('primary', p === 'google');
-    btnSttGoogleEl.setAttribute('aria-pressed', p === 'google' ? 'true' : 'false');
-  }
-}
-
-function setNewNoteSttProvider(next) {
-  saveNoteSttEngine(next === 'google' ? 'google' : 'whisper');
-  syncNewNoteSttUi();
+  return 'whisper';
 }
 
 /** Restore last language choice from localStorage (empty string = Auto-detect was chosen). */
@@ -305,12 +260,82 @@ function applyStickyNoteLanguageFromStorage() {
   }
 }
 
-/** Before a new recording: re-apply sticky language + reset pill (dropdown keeps last explicit code if any). */
-function resetNewNoteLanguageForRecording() {
-  applyStickyNoteLanguageFromStorage();
+function primaryLanguageCode(raw) {
+  const s = (raw ?? '').toString().trim().toLowerCase();
+  if (!s || s === 'und' || s === 'unknown') return '';
+  const p = s.replaceAll('_', '-').split('-')[0] ?? '';
+  return p.slice(0, 3);
+}
+
+function mapApiLanguageToSelectValue(raw) {
+  const p = primaryLanguageCode(raw);
+  if (!p) return '';
+  const opt = NOTE_LANGUAGE_OPTIONS.find((o) => o.value && o.value === p);
+  return opt ? opt.value : '';
+}
+
+function revealNoteLanguageWrap() {
+  if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = false;
+}
+
+/** Sync pill + dropdown from `/api/detect-language` (or live probe) result. */
+function applyDetectedLanguageToPillAndSelect(apiLang) {
+  const raw = (apiLang ?? '').toString().trim();
+  if (!raw) return;
+  const selectVal = mapApiLanguageToSelectValue(raw);
+  const meta = formatNoteLanguageMeta(raw) || selectVal || raw;
   if (noteDetectedLangEl) {
-    const v = (noteLanguageEl?.value ?? '').toString().trim();
-    noteDetectedLangEl.textContent = v ? `Lang: ${v}` : 'Lang: —';
+    noteDetectedLangEl.hidden = false;
+    noteDetectedLangEl.textContent = meta ? `Lang: ${meta}` : 'Lang: —';
+  }
+  revealNoteLanguageWrap();
+  if (noteLanguageEl) {
+    noteLangProgrammatic = true;
+    noteLanguageEl.value = selectVal;
+    noteLangProgrammatic = false;
+    try {
+      localStorage.setItem('vv_last_note_language', selectVal);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/** True after full-file `detectLanguageForNotePreview` finishes for the current blob (Generate + header pill). */
+let noteLangDetectionComplete = false;
+
+function syncLiveTxLangHeader() {
+  if (!liveTxLangStatusEl) return;
+  if (liveTranscriptWrapEl?.hidden) {
+    liveTxLangStatusEl.hidden = true;
+    return;
+  }
+  const show =
+    !noteLangDetectionComplete &&
+    (note.isRecording || !!note.audioBlob) &&
+    !noteFullPreviewGateOk;
+  liveTxLangStatusEl.hidden = !show;
+  if (show) liveTxLangStatusEl.textContent = 'Detecting language…';
+}
+
+function updateGenerateFullPreviewButtonVisibility() {
+  if (!btnGenerateFullPreviewEl) return;
+  btnGenerateFullPreviewEl.hidden =
+    !note.audioBlob || note.isRecording || noteFullPreviewGateOk || !noteLangDetectionComplete;
+  syncLiveTxLangHeader();
+}
+
+/** Before a new mic session: hide language row, clear hint, reset pill until detection runs. */
+function resetNewNoteLanguageForRecording() {
+  noteUserOverrodeLanguage = false;
+  if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = true;
+  if (noteLanguageEl) {
+    noteLangProgrammatic = true;
+    noteLanguageEl.value = '';
+    noteLangProgrammatic = false;
+  }
+  if (noteDetectedLangEl) {
+    noteDetectedLangEl.textContent = 'Lang: —';
     noteDetectedLangEl.hidden = true;
   }
 }
@@ -383,6 +408,68 @@ function scaledProcessingBudgetMsForItem(item) {
 
 let note = makeRecorderState();
 let query = makeRecorderState();
+
+let noteDraftDebounceTimer = null;
+let noteDraftUploadSeq = 0;
+
+function scheduleServerNoteDraftBackup() {
+  if (!note?.audioBlob || note.audioBlob.size < 32) return;
+  if (noteDraftDebounceTimer) clearTimeout(noteDraftDebounceTimer);
+  noteDraftDebounceTimer = setTimeout(() => {
+    noteDraftDebounceTimer = null;
+    void flushServerNoteDraftBackup();
+  }, 700);
+}
+
+async function flushServerNoteDraftBackup() {
+  if (!note?.audioBlob || note.audioBlob.size < 32) return;
+  noteDraftUploadSeq += 1;
+  const seq = noteDraftUploadSeq;
+  try {
+    const fd = new FormData();
+    fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
+    fd.append('duration_ms', String(Math.round(note.durationMs || 0)));
+    const hasId = !!(note.serverDraftId ?? '').toString().trim();
+    const url = hasId
+      ? `/api/note-drafts/${encodeURIComponent(note.serverDraftId)}`
+      : '/api/note-drafts';
+    const method = hasId ? 'PUT' : 'POST';
+    const resp = await fetch(url, { method, body: fd });
+    if (seq !== noteDraftUploadSeq) return;
+    if (!resp.ok) return;
+    const data = await safeJson(resp);
+    if (seq !== noteDraftUploadSeq) return;
+    if (!hasId && data?.id) note.serverDraftId = String(data.id);
+    try {
+      if (note.serverDraftId) sessionStorage.setItem('vv_active_note_draft_id', note.serverDraftId);
+    } catch {
+      // ignore
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function abandonServerNoteDraft() {
+  const id = (note.serverDraftId ?? '').toString().trim();
+  note.serverDraftId = '';
+  noteDraftUploadSeq += 1;
+  if (noteDraftDebounceTimer) {
+    clearTimeout(noteDraftDebounceTimer);
+    noteDraftDebounceTimer = null;
+  }
+  try {
+    sessionStorage.removeItem('vv_active_note_draft_id');
+  } catch {
+    // ignore
+  }
+  if (!id) return;
+  try {
+    await fetch(`/api/note-drafts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  } catch {
+    // ignore
+  }
+}
 
 // Keep UI stable across polling refreshes
 const expandedNoteIds = new Set();
@@ -462,7 +549,8 @@ function formatProcessingPercentLeftLabel(pct) {
 /** Human hint from server `processing_coarse_stage` (ingestion_jobs); refreshed with list poll. */
 function coarseStageHint(stage) {
   const s = (stage ?? '').toString().trim().toLowerCase();
-  if (s === 'queued') return 'in queue';
+  // `queued` here almost always means “worker has not claimed the job yet”, not “other users ahead of you”.
+  if (s === 'queued') return 'starting';
   if (s === 'running') return 'running';
   return '';
 }
@@ -486,6 +574,18 @@ let newNotePendingProcessId = '';
 
 /** Last successful `/api/transcribe` (full preview) for the current note audio; used on Save when still valid. */
 let lastFullPreviewBundle = null;
+
+/** True after a successful full-file preview for the current audio + language hint (Save stays gated until then). */
+let noteFullPreviewGateOk = false;
+
+/** Ignore `#noteLanguage` synthetic updates from auto-detect sync. */
+let noteLangProgrammatic = false;
+
+/** Current blob came from the mic (vs upload) — drives stage labels. */
+let noteUsedMicForCurrentBlob = false;
+
+/** Once the user changes `#noteLanguage` manually, auto-detect must not overwrite their choice. */
+let noteUserOverrodeLanguage = false;
 
 /** In-flight full preview so Save can await the same run started after recording (avoids queued save when preview is still running). */
 let transcribeFullPreviewInFlight = null;
@@ -684,13 +784,11 @@ function formatNoteLanguageMeta(langRaw) {
 }
 
 /**
- * @param {{ currentLang: string, currentStt?: string }} opts
- * @param {(payload: { lang: string, stt_provider: 'whisper' | 'google' }) => void | Promise<void>} onApply
+ * @param {{ currentLang: string }} opts
+ * @param {(payload: { lang: string }) => void | Promise<void>} onApply
  */
 function openChangeLanguageDialog(opts, onApply) {
   const currentLang = (opts?.currentLang ?? '').toString();
-  const currentStt = sttProviderFromRaw(opts?.currentStt ?? 'whisper');
-  let sttPick = currentStt;
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
@@ -714,14 +812,6 @@ function openChangeLanguageDialog(opts, onApply) {
           ${optsHtml}
         </select>
       </label>
-      <div class="label" style="margin-top:14px; margin-bottom:0">Transcription engine</div>
-      <p style="margin:6px 0 8px; font-size:12px; color:rgba(255,255,255,0.65); line-height:1.45">
-        Used for this re-transcribe and saved on the note. Google Chirp needs server-side Google Cloud Speech credentials.
-      </p>
-      <div class="row" style="gap:8px; flex-wrap:wrap; margin-top:4px">
-        <button type="button" class="btn vvChangeLangSttWhisper">Whisper (default)</button>
-        <button type="button" class="btn vvChangeLangSttGoogle">Google Chirp</button>
-      </div>
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap">
         <button type="button" class="btn vvChangeLangCancel">Cancel</button>
         <button type="button" class="btn primary vvChangeLangApply">Apply &amp; re-transcribe</button>
@@ -736,30 +826,6 @@ function openChangeLanguageDialog(opts, onApply) {
     const cur = currentLang.trim();
     sel.value = NOTE_LANGUAGE_OPTIONS.some((o) => o.value === cur) ? cur : '';
   }
-
-  const btnWh = overlay.querySelector('.vvChangeLangSttWhisper');
-  const btnGo = overlay.querySelector('.vvChangeLangSttGoogle');
-  const syncSttUi = () => {
-    const p = sttPick === 'google' ? 'google' : 'whisper';
-    sttPick = p;
-    if (btnWh instanceof HTMLButtonElement) {
-      btnWh.classList.toggle('primary', p === 'whisper');
-      btnWh.setAttribute('aria-pressed', p === 'whisper' ? 'true' : 'false');
-    }
-    if (btnGo instanceof HTMLButtonElement) {
-      btnGo.classList.toggle('primary', p === 'google');
-      btnGo.setAttribute('aria-pressed', p === 'google' ? 'true' : 'false');
-    }
-  };
-  syncSttUi();
-  btnWh?.addEventListener('click', () => {
-    sttPick = 'whisper';
-    syncSttUi();
-  });
-  btnGo?.addEventListener('click', () => {
-    sttPick = 'google';
-    syncSttUi();
-  });
 
   const close = () => {
     try {
@@ -789,10 +855,9 @@ function openChangeLanguageDialog(opts, onApply) {
 
   overlay.querySelector('.vvChangeLangApply')?.addEventListener('click', async () => {
     const lang = sel instanceof HTMLSelectElement ? sel.value : '';
-    const stt_provider = sttPick === 'google' ? 'google' : 'whisper';
     document.removeEventListener('keydown', onKey, true);
     try {
-      await onApply({ lang, stt_provider });
+      await onApply({ lang });
     } finally {
       close();
     }
@@ -1086,7 +1151,11 @@ noteDetectedLangEl?.setAttribute('hidden', '');
 stopTimer(note, noteTimerEl);
 stopTimer(query, queryTimerEl);
 renderBitrateHint();
-syncNewNoteSttUi();
+try {
+  localStorage.removeItem('vv_note_stt_engine');
+} catch {
+  // ignore
+}
 
 setStatus('Ready');
 wire();
@@ -1112,7 +1181,12 @@ window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
-  applyStickyNoteLanguageFromStorage();
+  if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = true;
+  if (noteLanguageEl) {
+    noteLangProgrammatic = true;
+    noteLanguageEl.value = '';
+    noteLangProgrammatic = false;
+  }
 
   // Saved searches + folder/tag filtering removed.
 
@@ -1185,11 +1259,13 @@ function wire() {
         btnRecordNote.disabled = s.isRecording;
         btnStopNote.hidden = !s.isRecording;
         btnStopNote.disabled = !s.isRecording;
-        btnSaveNote.hidden = !s.hasAudio || s.isRecording;
-        btnSaveNote.disabled = !s.hasAudio || s.isRecording;
         previewNote.hidden = !s.previewUrl;
         if (s.previewUrl) previewNote.src = s.previewUrl;
-        if (liveTranscriptEl) liveTranscriptEl.disabled = s.isRecording;
+        if (liveTranscriptEl) {
+          liveTranscriptEl.disabled = false;
+          liveTranscriptEl.readOnly = s.isRecording || !noteFullPreviewGateOk;
+        }
+        syncVisibility();
       },
       label: 'note'
     })
@@ -1202,15 +1278,24 @@ function wire() {
         btnRecordNote.disabled = s.isRecording;
         btnStopNote.hidden = !s.isRecording;
         btnStopNote.disabled = !s.isRecording;
-        btnSaveNote.hidden = !s.hasAudio || s.isRecording;
-        btnSaveNote.disabled = !s.hasAudio || s.isRecording;
         previewNote.hidden = !s.previewUrl;
         if (s.previewUrl) previewNote.src = s.previewUrl;
-        if (liveTranscriptEl) liveTranscriptEl.disabled = s.isRecording;
+        if (liveTranscriptEl) {
+          liveTranscriptEl.disabled = false;
+          liveTranscriptEl.readOnly = !noteFullPreviewGateOk;
+        }
+        syncVisibility();
       }
     })
   );
   btnSaveNote.addEventListener('click', saveNote);
+
+  btnGenerateFullPreviewEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!note.audioBlob || note.isRecording) return;
+    await transcribeFullPreview();
+    syncVisibility();
+  });
 
   liveTxUpEl?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -1226,25 +1311,26 @@ function wire() {
   });
 
   noteLanguageEl?.addEventListener('change', () => {
+    if (noteLangProgrammatic) return;
+    noteUserOverrodeLanguage = true;
     lastFullPreviewBundle = null;
+    noteFullPreviewGateOk = false;
     const v = (noteLanguageEl.value ?? '').toString().trim();
     try {
       localStorage.setItem('vv_last_note_language', v);
     } catch {
       // ignore
     }
-    if (noteDetectedLangEl) {
-      noteDetectedLangEl.hidden = !note.audioBlob && !note.isRecording;
-      noteDetectedLangEl.textContent = v ? `Lang: ${v}` : 'Lang: —';
+    if (noteDetectedLangEl && note.audioBlob) {
+      noteDetectedLangEl.hidden = false;
+      const label = v ? formatNoteLanguageMeta(v) || v : '—';
+      noteDetectedLangEl.textContent = v ? `Lang: ${label}` : 'Lang: —';
     }
-    if (note.audioBlob) {
-      void (async () => {
-        if (notePostRecordPipelinePromise) await notePostRecordPipelinePromise.catch(() => {});
-        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('settings_change').finally(() => {
-          notePostRecordPipelinePromise = null;
-        });
-      })();
+    if (liveTranscriptEl && note.audioBlob) {
+      liveTranscriptEl.readOnly = true;
     }
+    updateGenerateFullPreviewButtonVisibility();
+    syncVisibility();
   });
 
   uploadNoteBtnEl?.addEventListener('click', (e) => {
@@ -1267,7 +1353,8 @@ function wire() {
     }
 
     resetRecorder(note);
-    applyStickyNoteLanguageFromStorage();
+    resetNewNoteLanguageForRecording();
+    noteUsedMicForCurrentBlob = false;
     note.audioBlob = f;
     note.sourceFilename = f.name;
     note.previewUrl = URL.createObjectURL(f);
@@ -1291,20 +1378,18 @@ function wire() {
 
     titleEl.value = defaultUploadTitle();
 
-    // Full transcript preview after upload (live stage skipped — no in-session chunks).
     notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('upload').finally(() => {
       notePostRecordPipelinePromise = null;
     });
 
     syncVisibility();
     setStatus(`Loaded audio file: ${f.name}`);
+    scheduleServerNoteDraftBackup();
 
-    // Detect language for uploaded audio too.
-    detectLanguageForNotePreview().catch(() => {
-      // ignore
-    });
-
-    if (liveTranscriptEl) liveTranscriptEl.disabled = false;
+    if (liveTranscriptEl) {
+      liveTranscriptEl.disabled = false;
+      liveTranscriptEl.readOnly = true;
+    }
   });
 
   btnRecordQuery.addEventListener('click', () =>
@@ -1345,35 +1430,6 @@ function wire() {
     refreshResults(qEl.value).catch(() => {
       // ignore
     });
-  });
-
-  btnSttWhisperEl?.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (getNewNoteSttProvider() === 'whisper') return;
-    lastFullPreviewBundle = null;
-    setNewNoteSttProvider('whisper');
-    if (!note.isRecording && note.audioBlob) {
-      void (async () => {
-        if (notePostRecordPipelinePromise) await notePostRecordPipelinePromise.catch(() => {});
-        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('settings_change').finally(() => {
-          notePostRecordPipelinePromise = null;
-        });
-      })();
-    }
-  });
-  btnSttGoogleEl?.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (getNewNoteSttProvider() === 'google') return;
-    lastFullPreviewBundle = null;
-    setNewNoteSttProvider('google');
-    if (!note.isRecording && note.audioBlob) {
-      void (async () => {
-        if (notePostRecordPipelinePromise) await notePostRecordPipelinePromise.catch(() => {});
-        notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('settings_change').finally(() => {
-          notePostRecordPipelinePromise = null;
-        });
-      })();
-    }
   });
 
   qEl.addEventListener('input', () => {
@@ -1737,6 +1793,7 @@ async function startRecording(state, { onUi, label }) {
   }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (label === 'note') void abandonServerNoteDraft();
     const mimeType = pickMimeType();
     state.mediaRecorder = new MediaRecorder(stream, {
       mimeType,
@@ -1750,12 +1807,27 @@ async function startRecording(state, { onUi, label }) {
     startTimer(state, label === 'note' ? noteTimerEl : queryTimerEl);
     if (label === 'note') {
       lastFullPreviewBundle = null;
+      noteFullPreviewGateOk = false;
+      noteUsedMicForCurrentBlob = true;
       state.sourceFilename = '';
       state.liveTranscribeTail = Promise.resolve();
       ensureAutoTitleFilled(note);
       resetNewNoteLanguageForRecording();
+      if (liveTranscriptEl) {
+        liveTranscriptEl.readOnly = true;
+        liveTranscriptEl.disabled = false;
+      }
+      noteLangDetectionComplete = false;
+      updateGenerateFullPreviewButtonVisibility();
+      state.liveTxStartedAfterLang = false;
+      if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
+      if (liveTranscriptEl) {
+        liveTranscriptEl.value = '';
+      }
+      clearLiveTxPreviewCountdown();
+      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
       setNewNoteTranscriptionStages({ live: 'active', full: 'pending', showRow: true });
-      setLiveTxPhaseLabel('Live Transcription');
+      setLiveTxPhaseLabel('Detecting language');
     }
     onUi?.(uiState(state));
 
@@ -1773,9 +1845,7 @@ async function startRecording(state, { onUi, label }) {
         notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('recording_stop').finally(() => {
           notePostRecordPipelinePromise = null;
         });
-        detectLanguageForNotePreview().catch(() => {
-          // ignore
-        });
+        scheduleServerNoteDraftBackup();
       }
       onUi?.(uiState(state));
       setStatus(
@@ -1786,7 +1856,6 @@ async function startRecording(state, { onUi, label }) {
     state.mediaRecorder.start(MEDIARECORDER_TIMESLICE_MS);
     if (label === 'note') {
       startLiveLanguageDetection(state);
-      startLiveTranscript(state);
     } else if (label === 'search') {
       startLiveQueryTranscript(state);
     }
@@ -1851,18 +1920,19 @@ async function saveNote() {
   btnSaveNote.disabled = true;
   setStatus('Saving + transcribing…');
 
+  const draftIdForSave = (note.serverDraftId ?? '').toString().trim();
+
   try {
     const savedDurationMs = Math.round(note.durationMs || 0);
     const savedAudioBytes = Number(note.audioBlob?.size || 0) || 0;
 
     if (notePostRecordPipelinePromise) {
-      setStatus('Waiting for in-flight preview to finish…');
+      setStatus('Waiting for post-record steps to finish…');
       await notePostRecordPipelinePromise.catch(() => {});
     }
-
-    // Server always runs full-file authoritative STT on save. Kick off preview in parallel for UX only.
-    if (!previewBundleJsonForSave()) {
-      void transcribeFullPreview().catch(() => {});
+    if (transcribeFullPreviewInFlight) {
+      setStatus('Waiting for full transcript preview…');
+      await transcribeFullPreviewInFlight.catch(() => {});
     }
 
     const fd = new FormData();
@@ -1873,18 +1943,37 @@ async function saveNote() {
     fd.append('language', (noteLanguageEl?.value ?? '').toString());
     fd.append('stt_provider', getNewNoteSttProvider());
     fd.append('source_filename', (note.sourceFilename ?? '').toString());
+    if (draftIdForSave) fd.append('draft_id', draftIdForSave);
     fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
     const pb = previewBundleJsonForSave();
-    if (pb) fd.append('preview_bundle', pb);
+    const editedFmt = vvFormatTranscript(liveTranscriptEl?.value ?? '').trim();
+    const bundleFmt = lastFullPreviewBundle
+      ? vvFormatTranscript(lastFullPreviewBundle.transcript ?? '').trim()
+      : '';
+    const unchangedFromBundle = !!(pb && editedFmt && editedFmt === bundleFmt);
+    if (pb && unchangedFromBundle) fd.append('preview_bundle', pb);
+    else if (noteFullPreviewGateOk && editedFmt) {
+      fd.append('final_transcript', (liveTranscriptEl?.value ?? '').toString());
+    }
 
     const resp = await fetch('/api/notes', { method: 'POST', body: fd });
     if (!resp.ok) {
       const msg = await safeJson(resp);
-      throw new Error(msg?.error || `Upload failed (${resp.status})`);
+      const hint =
+        draftIdForSave && (resp.status >= 500 || resp.status === 0)
+          ? ' A copy of this audio may already be on the server — fix the connection and tap Save again.'
+          : '';
+      throw new Error((msg?.error || `Upload failed (${resp.status})`) + hint);
     }
     const data = await safeJson(resp);
 
     titleEl.value = '';
+    note.serverDraftId = '';
+    try {
+      sessionStorage.removeItem('vv_active_note_draft_id');
+    } catch {
+      // ignore
+    }
     resetRecorder(note);
     previewNote.hidden = true;
     previewNote.src = '';
@@ -1895,7 +1984,6 @@ async function saveNote() {
       noteDetectedLangEl.hidden = true;
       noteDetectedLangEl.textContent = 'Lang: —';
     }
-    syncNewNoteSttUi();
     syncVisibility();
 
     const id = (data?.id ?? '').toString().trim();
@@ -1921,7 +2009,10 @@ async function saveNote() {
     titleEl.value = defaultNoteTitleFromState(note);
     lastFullPreviewBundle = null;
   } catch (err) {
-    setStatus(`Save/transcribe error: ${err?.message ?? err}`, true);
+    const backupHint = draftIdForSave
+      ? ' Try Save again — a server-side backup of the audio may be available.'
+      : '';
+    setStatus(`Save/transcribe error: ${err?.message ?? err}${backupHint}`, true);
     btnSaveNote.disabled = false;
   }
 }
@@ -2278,7 +2369,7 @@ async function refreshResults(q = '') {
                       procLockedAt
                     )}" data-processing-stage="${escapeHtml(
                       procStage
-                    )}" data-retranscribe-fallback="${isRetranscribeQueue ? '1' : '0'}" title="Until the time estimate is used up: approximate % from audio length vs elapsed. After that: working… plus queue/running when the server reports it (refreshes with this list).">${escapeHtml(
+                    )}" data-retranscribe-fallback="${isRetranscribeQueue ? '1' : '0'}" title="Until the time estimate is used up: approximate % from audio length vs elapsed. After that: working… When the server reports starting/running on the job queue (refreshes with this list).">${escapeHtml(
                       procChipTxt
                     )}</span></span>`
                   : status === 'error'
@@ -2790,8 +2881,7 @@ async function refreshResults(q = '') {
         if (btnActionsToggle) btnActionsToggle.textContent = '▼';
         const nid = (item.id ?? '').toString();
         const cur = (item.language ?? '').toString().trim();
-        const curStt = (item.stt_provider ?? '').toString();
-        openChangeLanguageDialog({ currentLang: cur, currentStt: curStt }, async ({ lang, stt_provider }) => {
+        openChangeLanguageDialog({ currentLang: cur }, async ({ lang }) => {
           setStatus('Updating language…');
           try {
             const load = await fetch(`/api/notes/${encodeURIComponent(nid)}`);
@@ -2804,7 +2894,7 @@ async function refreshResults(q = '') {
                 display_title: (full?.display_title ?? full?.title ?? item.display_title ?? item.title ?? '').toString(),
                 body: (full?.body ?? item.body ?? '').toString(),
                 language: lang,
-                stt_provider
+                stt_provider: 'whisper'
               })
             });
             const pj = await safeJson(patch);
@@ -3568,6 +3658,9 @@ function stopLiveTranscript(state) {
   if (state === note) {
     clearLiveTxPreviewCountdown();
     if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+    if (liveTranscriptEl && !state.liveTxStartedAfterLang) {
+      liveTranscriptEl.value = '';
+    }
     syncLiveTxScrollRowVisibility();
   }
 }
@@ -3629,6 +3722,7 @@ async function transcribeFullPreviewImpl() {
   if (!liveTranscriptEl) return;
 
   lastFullPreviewBundle = null;
+  noteFullPreviewGateOk = false;
 
   if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
   // UX: keep last live-chunk transcript visible until the full-file result returns (do not blank here).
@@ -3649,15 +3743,18 @@ async function transcribeFullPreviewImpl() {
   try {
     const resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
     if (!resp.ok) {
-      const stt = getNewNoteSttProvider();
-      const hint =
-        stt === 'google'
-          ? 'Full preview failed (Google Chirp). Check server GOOGLE_APPLICATION_CREDENTIALS / project, or switch to Whisper.'
-          : 'Full preview failed — live transcript above is unchanged.';
-      setStatus(hint, true);
+      setStatus('Full preview failed — live transcript above is unchanged.', true);
       if (liveTxStatusEl) liveTxStatusEl.hidden = true;
       setLiveTxPhaseLabel('Full Transcription failed');
+      noteFullPreviewGateOk = false;
+      if (liveTranscriptEl) liveTranscriptEl.readOnly = true;
+      setNewNoteTranscriptionStages({
+        live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
+        full: 'pending',
+        showRow: true
+      });
       syncLiveTxScrollRowVisibility();
+      updateGenerateFullPreviewButtonVisibility();
       return;
     }
     const data = await safeJson(resp);
@@ -3670,14 +3767,13 @@ async function transcribeFullPreviewImpl() {
     const formatted = vvFormatTranscript(transcriptForBundle).trim();
     // Replace with full-file transcript; if still empty, keep prior live text so the box does not flash blank.
     liveTranscriptEl.value = formatted || priorLiveText;
-    if (!noteTranscriptionPipelineBusy) {
-      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
-      setLiveTxPhaseLabel('Ready');
-    }
+    if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+    setLiveTxPhaseLabel('Ready');
     syncLiveTxScrollRowVisibility();
     // Do not store a preview bundle the server would reject (avoids useless queue + misleading "ready" path).
     if (!formatted || segments.length === 0) {
       lastFullPreviewBundle = null;
+      noteFullPreviewGateOk = false;
     } else {
       lastFullPreviewBundle = {
         transcript: transcriptForBundle,
@@ -3688,7 +3784,15 @@ async function transcribeFullPreviewImpl() {
         duration_ms: Math.round(note.durationMs || 0),
         audio_bytes: Number(note.audioBlob?.size || 0) || 0
       };
+      noteFullPreviewGateOk = currentNoteMatchesFullPreviewBundle(lastFullPreviewBundle);
     }
+    if (liveTranscriptEl) liveTranscriptEl.readOnly = !noteFullPreviewGateOk;
+    setNewNoteTranscriptionStages({
+      live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
+      full: lastFullPreviewBundle ? 'done' : 'pending',
+      showRow: true
+    });
+    updateGenerateFullPreviewButtonVisibility();
   } finally {
     clearLiveTxPreviewCountdown();
   }
@@ -4239,13 +4343,18 @@ function makeRecorderState() {
     liveLangInFlight: false,
     liveTxTimerId: null,
     liveTxInFlight: false,
+    /** After first live `/api/detect-language` round-trip while recording, we start `/api/live-transcribe` polling. */
+    liveTxStartedAfterLang: false,
     /** Chains in-session live `/api/live-transcribe` calls so full preview waits for the last chunk to finish. */
     liveTranscribeTail: Promise.resolve(),
-    sourceFilename: ''
+    sourceFilename: '',
+    /** Server-side pre-save audio backup (`POST/PUT /api/note-drafts`). */
+    serverDraftId: ''
   };
 }
 
 function resetRecorder(state) {
+  if (state === note) void abandonServerNoteDraft();
   try {
     if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   } catch {
@@ -4274,13 +4383,38 @@ function resetRecorder(state) {
     if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = true;
     liveTranscriptEl.value = '';
     liveTranscriptEl.disabled = false;
+    liveTranscriptEl.readOnly = true;
   }
   if (state === note) {
     lastFullPreviewBundle = null;
+    noteFullPreviewGateOk = false;
+    noteLangDetectionComplete = false;
+    noteUserOverrodeLanguage = false;
+    noteUsedMicForCurrentBlob = false;
     note.liveTranscribeTail = Promise.resolve();
     notePostRecordPipelinePromise = null;
     setNewNoteTranscriptionStages({ live: 'pending', full: 'pending', showRow: false });
+    if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = true;
+    if (noteLanguageEl) {
+      noteLangProgrammatic = true;
+      noteLanguageEl.value = '';
+      noteLangProgrammatic = false;
+    }
+    updateGenerateFullPreviewButtonVisibility();
+    state.liveTxStartedAfterLang = false;
   }
+}
+
+/** Start live STT polling only after the first in-session language probe has finished (avoids overlapping UI). */
+function beginLiveTranscriptAfterLanguage(state) {
+  if (state !== note) return;
+  if (!state.isRecording || state.liveTxStartedAfterLang) return;
+  state.liveTxStartedAfterLang = true;
+  clearLiveTxPreviewCountdown();
+  if (liveTranscriptEl) liveTranscriptEl.value = '';
+  if (liveTxStatusEl) liveTxStatusEl.hidden = false;
+  setLiveTxPhaseLabel('Live Transcription');
+  startLiveTranscript(state);
 }
 
 function uiState(state) {
@@ -4328,7 +4462,8 @@ function renderBitrateHint() {
   if (aboutBox) {
     aboutBox.innerHTML = `
       <div>Audio is recorded at <strong>${kbps} kbps</strong>. Maximum length is about <strong>100 minutes</strong> per note.</div>
-      <div style="margin-top:6px">Transcription uses <strong>Whisper</strong> locally by default, or <strong>Google Chirp</strong> when you pick it in New note (requires server credentials). Saving runs <strong>offline</strong> indexing for search.</div>
+      <div style="margin-top:6px">Transcription runs on the server with <strong>Whisper</strong> (faster-whisper). Saving runs <strong>offline</strong> indexing for search.</div>
+      <div style="margin-top:6px">After you stop recording or pick a file, the app <strong>backs up audio to the server</strong> in the background so a failed <strong>Save</strong> is easier to recover from (tap Save again).</div>
       <div style="margin-top:6px">
         Notes store <strong>timestamped segments</strong>; use each segment’s <strong>Play</strong> for a clip, or full <strong>Play Audio</strong> for the whole file.
       </div>
@@ -4356,7 +4491,7 @@ function renderBitrateHint() {
         1) Tap <strong>+</strong> in the quick-action bar to open <strong>New note</strong> (it closes any other open panel). Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> for mic audio or <strong>Upload_YYYY-MM-DD_HH-MM-SS</strong> after <strong>Choose Audio File</strong> — change it if you like.
         </div>
         <div style="margin-top:4px">
-        2) Optional: <strong>Choose Audio File</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>. Choose <strong>Whisper</strong> or <strong>Google Chirp</strong> under Transcription engine before preview/save.
+        2) Optional: <strong>Choose Audio File</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>.
         </div>
         <div style="margin-top:4px">
         3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>. Edit the <strong>Transcript preview</strong> after it finishes processing.
@@ -4427,10 +4562,12 @@ function syncVisibility() {
   btnStopNote.hidden = !note.isRecording;
   btnStopNote.disabled = !note.isRecording;
   btnSaveNote.hidden = !note.audioBlob || note.isRecording;
-  btnSaveNote.disabled = !note.audioBlob || note.isRecording || noteTranscriptionPipelineBusy;
-  if (noteDetectedLangEl) noteDetectedLangEl.hidden = note.isRecording || !note.audioBlob;
-  if (btnSttWhisperEl) btnSttWhisperEl.disabled = !!note.isRecording;
-  if (btnSttGoogleEl) btnSttGoogleEl.disabled = !!note.isRecording;
+  const textOk = !!(liveTranscriptEl && vvFormatTranscript(liveTranscriptEl.value ?? '').trim());
+  const saveBusy = !!transcribeFullPreviewInFlight || noteTranscriptionPipelineBusy;
+  btnSaveNote.disabled =
+    !note.audioBlob || note.isRecording || !noteFullPreviewGateOk || !textOk || saveBusy;
+  updateGenerateFullPreviewButtonVisibility();
+  if (noteDetectedLangEl) noteDetectedLangEl.hidden = !note.isRecording && !note.audioBlob;
 
   // Search buttons
   btnRecordQuery.hidden = query.isRecording;
@@ -4466,23 +4603,46 @@ function setSemanticMode(on) {
 }
 
 async function detectLanguageForNotePreview() {
-  if (!note.audioBlob) return;
-  if (!noteDetectedLangEl) return;
-
-  noteDetectedLangEl.hidden = false;
-  noteDetectedLangEl.textContent = 'Lang: detecting…';
-
-  const fd = new FormData();
-  fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
-
-  const resp = await fetch('/api/detect-language', { method: 'POST', body: fd });
-  if (!resp.ok) {
-    noteDetectedLangEl.textContent = 'Lang: —';
+  if (!note.audioBlob) {
+    noteLangDetectionComplete = true;
+    syncLiveTxLangHeader();
+    updateGenerateFullPreviewButtonVisibility();
     return;
   }
-  const data = await safeJson(resp);
-  const lang = (data?.language ?? '').toString().trim();
-  noteDetectedLangEl.textContent = lang ? `Lang: ${lang}` : 'Lang: —';
+
+  noteLangDetectionComplete = false;
+  syncLiveTxLangHeader();
+  updateGenerateFullPreviewButtonVisibility();
+
+  try {
+    if (!noteDetectedLangEl) return;
+
+    noteDetectedLangEl.hidden = false;
+    noteDetectedLangEl.textContent = 'Lang: detecting…';
+
+    const fd = new FormData();
+    fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
+
+    const resp = await fetch('/api/detect-language', { method: 'POST', body: fd });
+    if (!resp.ok) {
+      noteDetectedLangEl.textContent = 'Lang: —';
+      revealNoteLanguageWrap();
+      return;
+    }
+    const data = await safeJson(resp);
+    const lang = (data?.language ?? '').toString().trim();
+    if (!lang) {
+      noteDetectedLangEl.textContent = 'Lang: —';
+      revealNoteLanguageWrap();
+      return;
+    }
+    if (!noteUserOverrodeLanguage) applyDetectedLanguageToPillAndSelect(lang);
+    else revealNoteLanguageWrap();
+  } finally {
+    noteLangDetectionComplete = true;
+    syncLiveTxLangHeader();
+    updateGenerateFullPreviewButtonVisibility();
+  }
 }
 
 function startLiveLanguageDetection(state) {
@@ -4508,7 +4668,15 @@ function startLiveLanguageDetection(state) {
       .then((data) => {
         const lang = (data?.language ?? '').toString().trim();
         if (noteDetectedLangEl && state.isRecording) {
-          noteDetectedLangEl.textContent = lang ? `Lang: ${lang}` : 'Lang: —';
+          if (!lang) {
+            noteDetectedLangEl.textContent = 'Lang: —';
+            return;
+          }
+          if (!noteUserOverrodeLanguage) applyDetectedLanguageToPillAndSelect(lang);
+          else {
+            const meta = formatNoteLanguageMeta(lang) || lang;
+            noteDetectedLangEl.textContent = meta ? `Lang: ${meta}` : 'Lang: —';
+          }
         }
       })
       .catch(() => {
@@ -4516,6 +4684,9 @@ function startLiveLanguageDetection(state) {
       })
       .finally(() => {
         state.liveLangInFlight = false;
+        if (state === note && state.isRecording && !state.liveTxStartedAfterLang) {
+          beginLiveTranscriptAfterLanguage(state);
+        }
       });
   }, LIVE_LANG_DETECT_INTERVAL_MS);
 }
