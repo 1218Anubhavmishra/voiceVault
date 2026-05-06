@@ -14,6 +14,7 @@ import {
   whisperModelFromEnv,
   whisperFinalModelFromEnv
 } from './transcribe.js';
+import { normalizeSttProvider, sttProviderForAuthoritativeFinal, defaultSttProviderFromEnv } from './stt-providers.js';
 import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic.js';
 import { embedTexts, bufferToFloat32, cosineSim } from './embeddings.js';
 import OpenAI from 'openai';
@@ -243,6 +244,11 @@ app.get('/api/debug/paths', (_req, res) => {
   }
 });
 
+/** Non-secret UI hints (e.g. default STT provider from env). */
+app.get('/api/client-config', (_req, res) => {
+  res.json({ stt_provider: defaultSttProviderFromEnv() });
+});
+
 app.get('/api/debug/embeddings', (_req, res) => {
   try {
     const chunks = Number(db.prepare(`SELECT count(1) AS c FROM note_chunks`).get()?.c ?? 0) || 0;
@@ -321,15 +327,6 @@ function persistedNoteLanguage(hint, detected) {
   return h || d;
 }
 
-/** Server transcription is Whisper-only; legacy rows may still say `google`. */
-function normalizeSttProvider(_raw) {
-  return 'whisper';
-}
-
-function sttProviderForAuthoritativeFinal(_rowSttRaw) {
-  return 'whisper';
-}
-
 function whisperModelForPipeline() {
   return whisperModelFromEnv();
 }
@@ -394,7 +391,8 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
         fs.writeFileSync(tmpPath, fs.readFileSync(blobPath));
         const out = await transcribeAudioFile(tmpPath, {
           model,
-          language: languageHint || ''
+          language: languageHint || '',
+          provider: normalizeSttProvider('')
         });
         const detected = (out?.language ?? '').toString().trim();
         const hint = (row.language ?? '').toString().trim();
@@ -1514,7 +1512,7 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     }
 });
 
-app.post('/api/detect-language', upload.single('audio'), (req, res) => {
+app.post('/api/detect-language', upload.single('audio'), async (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
 
@@ -1523,29 +1521,36 @@ app.post('/api/detect-language', upload.single('audio'), (req, res) => {
   const tmpPath = path.join(audioDir, `__lang_${id}.${ext}`);
   fs.writeFileSync(tmpPath, audio.buffer);
 
-  (async () => {
-    try {
-      const out = await transcribeAudioFile(tmpPath, {
-        model: whisperModelFromEnv(),
-        language: '' // force auto-detect
-      });
-      res.json({ language: out?.language ?? '' });
-    } catch (e) {
+  try {
+    req.socket.setTimeout(0);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const out = await transcribeAudioFile(tmpPath, {
+      model: whisperModelFromEnv(),
+      language: '', // force auto-detect
+      provider: normalizeSttProvider(req.body?.stt_provider)
+    });
+    res.json({ language: out?.language ?? '' });
+  } catch (e) {
+    if (!res.headersSent) {
       res.status(500).json({
         error: 'Language detection failed',
         details: e?.message ?? String(e)
       });
-    } finally {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore
-      }
     }
-  })();
+  } finally {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+  }
 });
 
-app.post('/api/live-transcribe', upload.single('audio'), (req, res) => {
+app.post('/api/live-transcribe', upload.single('audio'), async (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
   const safeLanguage = (req.body?.language ?? '').toString().trim();
@@ -1556,30 +1561,36 @@ app.post('/api/live-transcribe', upload.single('audio'), (req, res) => {
   const tmpPath = path.join(audioDir, `__live_${id}.${ext}`);
   fs.writeFileSync(tmpPath, audio.buffer);
 
-  (async () => {
-    try {
-      const out = await transcribeWithLanguageHintFallback(tmpPath, {
-        model: whisperModelForPipeline(),
-        language: safeLanguage,
-        provider: safeStt
-      });
-      res.json({
-        transcript: formatTranscript(out?.transcript ?? ''),
-        language: out?.language ?? ''
-      });
-    } catch (e) {
+  try {
+    req.socket.setTimeout(0);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const out = await transcribeWithLanguageHintFallback(tmpPath, {
+      model: whisperModelForPipeline(),
+      language: safeLanguage,
+      provider: safeStt
+    });
+    res.json({
+      transcript: formatTranscript(out?.transcript ?? ''),
+      language: out?.language ?? ''
+    });
+  } catch (e) {
+    if (!res.headersSent) {
       res.status(500).json({
         error: 'Live transcription failed',
         details: e?.message ?? String(e)
       });
-    } finally {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore
-      }
     }
-  })();
+  } finally {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+  }
 });
 
 app.get('/api/notes', (req, res) => {

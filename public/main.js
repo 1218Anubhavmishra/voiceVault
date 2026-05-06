@@ -12,6 +12,8 @@ const noteDetectedLangEl = document.getElementById('noteDetectedLang');
 const noteLanguageWrapEl = document.getElementById('noteLanguageWrap');
 const noteLanguageEl = document.getElementById('noteLanguage');
 const btnGenerateFullPreviewEl = document.getElementById('btnGenerateFullPreview');
+const noteLangCountdownWrapEl = document.getElementById('noteLangCountdownWrap');
+const noteLangCountdownPillEl = document.getElementById('noteLangCountdownPill');
 const uploadNoteEl = document.getElementById('uploadNote');
 const uploadNoteBtnEl = document.getElementById('uploadNoteBtn');
 const uploadNoteNameEl = document.getElementById('uploadNoteName');
@@ -75,7 +77,9 @@ async function runNotePostRecordTranscriptionPipeline(source) {
     clearLiveTxPreviewCountdown();
     if (liveTxStatusEl) liveTxStatusEl.hidden = true;
     setLiveTxPhaseLabel('Language');
-    await detectLanguageForNotePreview();
+    // Full-file `/api/detect-language` can take minutes on long clips; do not block the UI or Save
+    // on it. Manual language (or any non–auto-detect hint) is enough to enable Generate immediately.
+    void detectLanguageForNotePreview().catch(() => {});
     updateGenerateFullPreviewButtonVisibility();
     syncLiveTxScrollRowVisibility();
   } finally {
@@ -179,6 +183,11 @@ const LIVE_TRANSCRIBE_MIN_CHUNK_BYTES = 12_000;
 const LIVE_TRANSCRIBE_MAX_WINDOW_MS = 11_500;
 /** Shorter window for /api/detect-language polling while recording. */
 const LIVE_LANG_PROBE_MAX_WINDOW_MS = 8000;
+/** If auto language detection does not open the language row first, show a countdown then reveal the list. */
+const NOTE_LANG_AUTODETECT_COUNTDOWN_SEC = 30;
+
+let noteLangCountdownIntervalId = null;
+let noteLangCountdownEndsAt = 0;
 
 /**
  * WebM from MediaRecorder is an init chunk plus cluster fragments. Using only `chunks.slice(-N)`
@@ -244,8 +253,23 @@ function vvTranscriptFromSegments(segments) {
 /** Wall-clock STT vs recording length (very approximate; GPU/local Whisper varies). Used only for UI estimate. */
 const PROCESSING_TIME_ESTIMATE_RATIO = 0.45;
 
+/** Synced from `GET /api/client-config` so it matches `VOICEVAULT_STT_PROVIDER` on the server. */
+let serverPreferredSttProvider = 'whisper';
+
+async function refreshServerPreferredSttProvider() {
+  try {
+    const r = await fetch('/api/client-config');
+    if (!r.ok) return;
+    const j = await r.json();
+    const p = (j?.stt_provider ?? '').toString().trim().toLowerCase();
+    serverPreferredSttProvider = p === 'elevenlabs' ? 'elevenlabs' : 'whisper';
+  } catch {
+    // keep prior value
+  }
+}
+
 function getNewNoteSttProvider() {
-  return 'whisper';
+  return serverPreferredSttProvider;
 }
 
 /** Restore last language choice from localStorage (empty string = Auto-detect was chosen). */
@@ -274,8 +298,50 @@ function mapApiLanguageToSelectValue(raw) {
   return opt ? opt.value : '';
 }
 
+function stopNoteLangDetectCountdown() {
+  if (noteLangCountdownIntervalId != null) {
+    clearInterval(noteLangCountdownIntervalId);
+    noteLangCountdownIntervalId = null;
+  }
+  noteLangCountdownEndsAt = 0;
+  if (noteLangCountdownWrapEl) noteLangCountdownWrapEl.hidden = true;
+}
+
+function updateNoteLangDetectCountdownTick() {
+  if (!noteLangCountdownPillEl || !noteLangCountdownWrapEl || noteLangCountdownWrapEl.hidden) return;
+  if (noteLanguageWrapEl && !noteLanguageWrapEl.hidden) {
+    stopNoteLangDetectCountdown();
+    return;
+  }
+  const rem = Math.max(0, Math.ceil((noteLangCountdownEndsAt - Date.now()) / 1000));
+  noteLangCountdownPillEl.textContent = `Auto-detect: ${rem}s`;
+  if (rem <= 0) {
+    stopNoteLangDetectCountdown();
+    revealNoteLanguageWrap();
+    syncLiveTxLangHeader();
+    updateGenerateFullPreviewButtonVisibility();
+    syncVisibility();
+  }
+}
+
+/** While the language row is hidden, show a 30s countdown then reveal the row for manual choice. */
+function startNoteLangDetectCountdown() {
+  if (!noteLangCountdownWrapEl || !noteLangCountdownPillEl) return;
+  if (noteLanguageWrapEl && !noteLanguageWrapEl.hidden) {
+    stopNoteLangDetectCountdown();
+    return;
+  }
+  stopNoteLangDetectCountdown();
+  noteLangCountdownEndsAt = Date.now() + NOTE_LANG_AUTODETECT_COUNTDOWN_SEC * 1000;
+  noteLangCountdownWrapEl.hidden = false;
+  updateNoteLangDetectCountdownTick();
+  noteLangCountdownIntervalId = setInterval(updateNoteLangDetectCountdownTick, 250);
+}
+
 function revealNoteLanguageWrap() {
   if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = false;
+  stopNoteLangDetectCountdown();
+  syncLiveTxLangHeader();
 }
 
 /** Sync pill + dropdown from `/api/detect-language` (or live probe) result. */
@@ -310,7 +376,11 @@ function syncLiveTxLangHeader() {
     liveTxLangStatusEl.hidden = true;
     return;
   }
+  // Once the language row is shown (live detect, countdown expiry, or server result), the header
+  // should not duplicate "Detecting language…" while full-file detect still runs for Generate gating.
+  const langRowHidden = !noteLanguageWrapEl || noteLanguageWrapEl.hidden;
   const show =
+    langRowHidden &&
     !noteLangDetectionComplete &&
     (note.isRecording || !!note.audioBlob) &&
     !noteFullPreviewGateOk;
@@ -318,10 +388,18 @@ function syncLiveTxLangHeader() {
   if (show) liveTxLangStatusEl.textContent = 'Detecting language…';
 }
 
+/** User can run full preview once auto-detect finished, or sooner if they set a language hint (or overrode auto). */
+function noteLanguageReadyForFullPreview() {
+  if (noteLangDetectionComplete) return true;
+  if (noteUserOverrodeLanguage) return true;
+  const hint = (noteLanguageEl?.value ?? '').toString().trim();
+  return !!hint;
+}
+
 function updateGenerateFullPreviewButtonVisibility() {
   if (!btnGenerateFullPreviewEl) return;
   btnGenerateFullPreviewEl.hidden =
-    !note.audioBlob || note.isRecording || noteFullPreviewGateOk || !noteLangDetectionComplete;
+    !note.audioBlob || note.isRecording || noteFullPreviewGateOk || !noteLanguageReadyForFullPreview();
   syncLiveTxLangHeader();
 }
 
@@ -577,6 +655,9 @@ let lastFullPreviewBundle = null;
 
 /** True after a successful full-file preview for the current audio + language hint (Save stays gated until then). */
 let noteFullPreviewGateOk = false;
+
+/** After full preview fails or returns no usable segments, allow typing + Save via `final_transcript` without a bundle. */
+let noteAllowManualSaveFinal = false;
 
 /** Ignore `#noteLanguage` synthetic updates from auto-detect sync. */
 let noteLangProgrammatic = false;
@@ -1158,6 +1239,7 @@ try {
 }
 
 setStatus('Ready');
+await refreshServerPreferredSttProvider();
 wire();
 setSemanticMode(semanticMode);
 await refreshResults();
@@ -1181,6 +1263,7 @@ window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
+  stopNoteLangDetectCountdown();
   if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = true;
   if (noteLanguageEl) {
     noteLangProgrammatic = true;
@@ -1263,7 +1346,8 @@ function wire() {
         if (s.previewUrl) previewNote.src = s.previewUrl;
         if (liveTranscriptEl) {
           liveTranscriptEl.disabled = false;
-          liveTranscriptEl.readOnly = s.isRecording || !noteFullPreviewGateOk;
+          liveTranscriptEl.readOnly =
+            s.isRecording || (!noteFullPreviewGateOk && !noteAllowManualSaveFinal);
         }
         syncVisibility();
       },
@@ -1282,7 +1366,7 @@ function wire() {
         if (s.previewUrl) previewNote.src = s.previewUrl;
         if (liveTranscriptEl) {
           liveTranscriptEl.disabled = false;
-          liveTranscriptEl.readOnly = !noteFullPreviewGateOk;
+          liveTranscriptEl.readOnly = !noteFullPreviewGateOk && !noteAllowManualSaveFinal;
         }
         syncVisibility();
       }
@@ -1308,6 +1392,7 @@ function wire() {
 
   liveTranscriptEl?.addEventListener('input', () => {
     syncLiveTxScrollRowVisibility();
+    syncVisibility();
   });
 
   noteLanguageEl?.addEventListener('change', () => {
@@ -1315,6 +1400,7 @@ function wire() {
     noteUserOverrodeLanguage = true;
     lastFullPreviewBundle = null;
     noteFullPreviewGateOk = false;
+    noteAllowManualSaveFinal = false;
     const v = (noteLanguageEl.value ?? '').toString().trim();
     try {
       localStorage.setItem('vv_last_note_language', v);
@@ -1808,11 +1894,13 @@ async function startRecording(state, { onUi, label }) {
     if (label === 'note') {
       lastFullPreviewBundle = null;
       noteFullPreviewGateOk = false;
+      noteAllowManualSaveFinal = false;
       noteUsedMicForCurrentBlob = true;
       state.sourceFilename = '';
       state.liveTranscribeTail = Promise.resolve();
       ensureAutoTitleFilled(note);
       resetNewNoteLanguageForRecording();
+      startNoteLangDetectCountdown();
       if (liveTranscriptEl) {
         liveTranscriptEl.readOnly = true;
         liveTranscriptEl.disabled = false;
@@ -1890,9 +1978,15 @@ function currentNoteMatchesFullPreviewBundle(b) {
   const bytes = Number(note.audioBlob.size) || 0;
   const hint = (noteLanguageEl?.value ?? '').toString().trim();
   const stt = getNewNoteSttProvider();
+  const bd = Math.round(Number(b.duration_ms) || 0);
+  const bb = Number(b.audio_bytes) || 0;
+  // Tolerant match: wall-clock duration vs blob metadata can differ slightly; live proxies may alter size reporting.
+  const durOk = Math.abs(bd - d) <= 2500;
+  const byteTol = Math.max(8192, Math.ceil(bytes * 0.03));
+  const byteOk = bytes === 0 ? bb === 0 : Math.abs(bb - bytes) <= byteTol;
   return (
-    b.duration_ms === d &&
-    b.audio_bytes === bytes &&
+    durOk &&
+    byteOk &&
     (b.language_hint ?? '').toString().trim() === hint &&
     String(b.stt_provider ?? '') === String(stt)
   );
@@ -1952,7 +2046,7 @@ async function saveNote() {
       : '';
     const unchangedFromBundle = !!(pb && editedFmt && editedFmt === bundleFmt);
     if (pb && unchangedFromBundle) fd.append('preview_bundle', pb);
-    else if (noteFullPreviewGateOk && editedFmt) {
+    else if ((noteFullPreviewGateOk || noteAllowManualSaveFinal) && editedFmt) {
       fd.append('final_transcript', (liveTranscriptEl?.value ?? '').toString());
     }
 
@@ -3681,7 +3775,7 @@ function startLiveQueryTranscript(state) {
     state.liveTxInFlight = true;
     const fd = new FormData();
     fd.append('language', ''); // always auto-detect for search
-    fd.append('stt_provider', 'whisper');
+    fd.append('stt_provider', getNewNoteSttProvider());
     fd.append('audio', blob, guessFilename(blob.type));
 
     fetch('/api/live-transcribe', { method: 'POST', body: fd })
@@ -3723,6 +3817,7 @@ async function transcribeFullPreviewImpl() {
 
   lastFullPreviewBundle = null;
   noteFullPreviewGateOk = false;
+  noteAllowManualSaveFinal = false;
 
   if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
   // UX: keep last live-chunk transcript visible until the full-file result returns (do not blank here).
@@ -3740,24 +3835,53 @@ async function transcribeFullPreviewImpl() {
   fd.append('stt_provider', getNewNoteSttProvider());
   fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
 
+  const failFullPreview = (msg, { serverDetail = '' } = {}) => {
+    const detail = (serverDetail ?? '').toString().trim();
+    setStatus(detail ? `${msg} ${detail}` : msg, true);
+    if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+    setLiveTxPhaseLabel('Full Transcription failed');
+    noteFullPreviewGateOk = false;
+    noteAllowManualSaveFinal = true;
+    if (liveTranscriptEl) {
+      liveTranscriptEl.readOnly = false;
+    }
+    setNewNoteTranscriptionStages({
+      live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
+      full: 'pending',
+      showRow: true
+    });
+    syncLiveTxScrollRowVisibility();
+    updateGenerateFullPreviewButtonVisibility();
+    syncVisibility();
+  };
+
   try {
-    const resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
-    if (!resp.ok) {
-      setStatus('Full preview failed — live transcript above is unchanged.', true);
-      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
-      setLiveTxPhaseLabel('Full Transcription failed');
-      noteFullPreviewGateOk = false;
-      if (liveTranscriptEl) liveTranscriptEl.readOnly = true;
-      setNewNoteTranscriptionStages({
-        live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
-        full: 'pending',
-        showRow: true
-      });
-      syncLiveTxScrollRowVisibility();
-      updateGenerateFullPreviewButtonVisibility();
+    let resp;
+    try {
+      resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
+    } catch (netErr) {
+      failFullPreview(`Full preview failed (network): ${netErr?.message ?? netErr}`);
       return;
     }
+
+    if (!resp.ok) {
+      let detail = '';
+      try {
+        const errBody = await safeJson(resp);
+        detail = (errBody?.details ?? errBody?.error ?? '').toString().trim();
+      } catch {
+        // ignore
+      }
+      failFullPreview('Full preview failed — server returned an error.', { serverDetail: detail });
+      return;
+    }
+
     const data = await safeJson(resp);
+    if (!data || typeof data !== 'object') {
+      failFullPreview('Full preview failed — empty or invalid response from server.');
+      return;
+    }
+
     const rawFromApi = (data?.transcript ?? '').toString();
     const segRaw = Array.isArray(data?.segments) ? data.segments : [];
     const segments = vvSanitizePreviewSegments(segRaw);
@@ -3765,15 +3889,26 @@ async function transcribeFullPreviewImpl() {
       ? rawFromApi
       : vvTranscriptFromSegments(segments.length ? segments : segRaw);
     const formatted = vvFormatTranscript(transcriptForBundle).trim();
-    // Replace with full-file transcript; if still empty, keep prior live text so the box does not flash blank.
     liveTranscriptEl.value = formatted || priorLiveText;
-    if (liveTxStatusEl) liveTxStatusEl.hidden = true;
-    setLiveTxPhaseLabel('Ready');
-    syncLiveTxScrollRowVisibility();
-    // Do not store a preview bundle the server would reject (avoids useless queue + misleading "ready" path).
+
     if (!formatted || segments.length === 0) {
       lastFullPreviewBundle = null;
       noteFullPreviewGateOk = false;
+      noteAllowManualSaveFinal = true;
+      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+      setLiveTxPhaseLabel('No transcript returned');
+      if (liveTranscriptEl) liveTranscriptEl.readOnly = false;
+      setNewNoteTranscriptionStages({
+        live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
+        full: 'pending',
+        showRow: true
+      });
+      setStatus(
+        'Full preview returned no usable text (check server Whisper / Python). You can type the transcript and Save.',
+        true
+      );
+      updateGenerateFullPreviewButtonVisibility();
+      syncVisibility();
     } else {
       lastFullPreviewBundle = {
         transcript: transcriptForBundle,
@@ -3784,15 +3919,20 @@ async function transcribeFullPreviewImpl() {
         duration_ms: Math.round(note.durationMs || 0),
         audio_bytes: Number(note.audioBlob?.size || 0) || 0
       };
-      noteFullPreviewGateOk = currentNoteMatchesFullPreviewBundle(lastFullPreviewBundle);
+      noteFullPreviewGateOk = true;
+      noteAllowManualSaveFinal = false;
+      if (liveTxStatusEl) liveTxStatusEl.hidden = true;
+      setLiveTxPhaseLabel('Ready');
+      syncLiveTxScrollRowVisibility();
+      if (liveTranscriptEl) liveTranscriptEl.readOnly = false;
+      setNewNoteTranscriptionStages({
+        live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
+        full: 'done',
+        showRow: true
+      });
+      updateGenerateFullPreviewButtonVisibility();
+      syncVisibility();
     }
-    if (liveTranscriptEl) liveTranscriptEl.readOnly = !noteFullPreviewGateOk;
-    setNewNoteTranscriptionStages({
-      live: noteUsedMicForCurrentBlob ? 'done' : 'skipped',
-      full: lastFullPreviewBundle ? 'done' : 'pending',
-      showRow: true
-    });
-    updateGenerateFullPreviewButtonVisibility();
   } finally {
     clearLiveTxPreviewCountdown();
   }
@@ -4192,7 +4332,7 @@ function pollNoteUntilDone(id) {
 function buildSearchTranscribeForm(audioBlob) {
   const fd = new FormData();
   fd.append('audio', audioBlob, guessFilename(audioBlob.type));
-  fd.append('stt_provider', 'whisper');
+  fd.append('stt_provider', getNewNoteSttProvider());
   fd.append('language', '');
   return fd;
 }
@@ -4386,8 +4526,10 @@ function resetRecorder(state) {
     liveTranscriptEl.readOnly = true;
   }
   if (state === note) {
+    stopNoteLangDetectCountdown();
     lastFullPreviewBundle = null;
     noteFullPreviewGateOk = false;
+    noteAllowManualSaveFinal = false;
     noteLangDetectionComplete = false;
     noteUserOverrodeLanguage = false;
     noteUsedMicForCurrentBlob = false;
@@ -4401,6 +4543,7 @@ function resetRecorder(state) {
       noteLangProgrammatic = false;
     }
     updateGenerateFullPreviewButtonVisibility();
+    syncLiveTxLangHeader();
     state.liveTxStartedAfterLang = false;
   }
 }
@@ -4564,8 +4707,9 @@ function syncVisibility() {
   btnSaveNote.hidden = !note.audioBlob || note.isRecording;
   const textOk = !!(liveTranscriptEl && vvFormatTranscript(liveTranscriptEl.value ?? '').trim());
   const saveBusy = !!transcribeFullPreviewInFlight || noteTranscriptionPipelineBusy;
+  const saveAllowed = noteFullPreviewGateOk || noteAllowManualSaveFinal;
   btnSaveNote.disabled =
-    !note.audioBlob || note.isRecording || !noteFullPreviewGateOk || !textOk || saveBusy;
+    !note.audioBlob || note.isRecording || !saveAllowed || !textOk || saveBusy;
   updateGenerateFullPreviewButtonVisibility();
   if (noteDetectedLangEl) noteDetectedLangEl.hidden = !note.isRecording && !note.audioBlob;
 
@@ -4613,6 +4757,7 @@ async function detectLanguageForNotePreview() {
   noteLangDetectionComplete = false;
   syncLiveTxLangHeader();
   updateGenerateFullPreviewButtonVisibility();
+  if (noteLanguageWrapEl?.hidden) startNoteLangDetectCountdown();
 
   try {
     if (!noteDetectedLangEl) return;
@@ -4622,6 +4767,7 @@ async function detectLanguageForNotePreview() {
 
     const fd = new FormData();
     fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
+    fd.append('stt_provider', getNewNoteSttProvider());
 
     const resp = await fetch('/api/detect-language', { method: 'POST', body: fd });
     if (!resp.ok) {
@@ -4639,6 +4785,7 @@ async function detectLanguageForNotePreview() {
     if (!noteUserOverrodeLanguage) applyDetectedLanguageToPillAndSelect(lang);
     else revealNoteLanguageWrap();
   } finally {
+    stopNoteLangDetectCountdown();
     noteLangDetectionComplete = true;
     syncLiveTxLangHeader();
     updateGenerateFullPreviewButtonVisibility();
@@ -4662,6 +4809,7 @@ function startLiveLanguageDetection(state) {
     state.liveLangInFlight = true;
     const fd = new FormData();
     fd.append('audio', blob, guessFilename(blob.type));
+    fd.append('stt_provider', getNewNoteSttProvider());
 
     fetch('/api/detect-language', { method: 'POST', body: fd })
       .then((r) => (r.ok ? r.json() : null))

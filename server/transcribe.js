@@ -1,6 +1,8 @@
 import { spawn, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { transcribeAudioWithElevenLabs } from './elevenlabs-stt.js';
+import { defaultSttProviderFromEnv } from './stt-providers.js';
 
 let _ffmpegBin;
 
@@ -81,11 +83,45 @@ function writeSilentPcmWav16kMono(outPath, durationSec) {
   fs.writeFileSync(outPath, buf);
 }
 
+let _pythonCmd;
+
+/**
+ * Python used to run `server/transcribe.py`. On Linux hosts `python` is often missing (only `python3`);
+ * local Windows dev typically uses `.venv\\Scripts\\python.exe`. Override with `VOICEVAULT_PYTHON` or `PYTHON`.
+ */
+export function pythonExecutable() {
+  if (_pythonCmd) return _pythonCmd;
+  _pythonCmd = resolvePythonExecutableUncached();
+  return _pythonCmd;
+}
+
+function resolvePythonExecutableUncached() {
+  const fromEnv = (process.env.VOICEVAULT_PYTHON || process.env.PYTHON || '')
+    .toString()
+    .trim()
+    .replace(/^["']|["']$/g, '');
+  if (fromEnv) {
+    if (path.isAbsolute(fromEnv) && fs.existsSync(fromEnv)) return fromEnv;
+    const rel = path.resolve(process.cwd(), fromEnv);
+    if (fs.existsSync(rel)) return rel;
+    return fromEnv;
+  }
+  const root = process.cwd();
+  if (process.platform === 'win32') {
+    const venvWin = path.join(root, '.venv', 'Scripts', 'python.exe');
+    if (fs.existsSync(venvWin)) return venvWin;
+    return 'python';
+  }
+  const venvPy3 = path.join(root, '.venv', 'bin', 'python3');
+  if (fs.existsSync(venvPy3)) return venvPy3;
+  const venvPy = path.join(root, '.venv', 'bin', 'python');
+  if (fs.existsSync(venvPy)) return venvPy;
+  return 'python3';
+}
+
 export async function transcribeAudioFile(audioPath, { model = 'small', language = '', provider = '' } = {}) {
   const scriptPath = path.resolve(process.cwd(), 'server', 'transcribe.py');
-  const venvPythonWin = path.resolve(process.cwd(), '.venv', 'Scripts', 'python.exe');
-  const pythonCmd =
-    process.platform === 'win32' && fs.existsSync(venvPythonWin) ? venvPythonWin : 'python';
+  const pythonCmd = pythonExecutable();
 
   const dataDir = process.env.VV_DATA_DIR ? path.resolve(process.env.VV_DATA_DIR) : path.resolve(process.cwd(), 'data');
 
@@ -140,7 +176,18 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
   }
 
   const audioForStt = fs.existsSync(preprocessedPath) ? preprocessedPath : audioPath;
-  void provider;
+  const pv = (provider ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
+  if (pv === 'elevenlabs' || pv === 'eleven_labs') {
+    try {
+      return await transcribeAudioWithElevenLabs(audioForStt, { language });
+    } finally {
+      try {
+        if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);
+      } catch {
+        // ignore
+      }
+    }
+  }
 
   const args = [
     scriptPath,
@@ -163,7 +210,7 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
 
   if (exitCode !== 0) {
     const hint =
-      'Transcription failed. Install Python 3.10+, ffmpeg, then run: pip install -r server/requirements.txt';
+      'Transcription failed. Install Python 3.10+, ffmpeg, and `pip install -r server/requirements.txt` in your venv. On Linux set `VOICEVAULT_PYTHON` to your venv interpreter if `python3` is wrong.';
     const msg = [hint, stderr?.trim()].filter(Boolean).join('\n');
     const err = new Error(msg);
     err.code = 'TRANSCRIBE_FAILED';
@@ -216,6 +263,7 @@ export function whisperFinalModelFromEnv() {
 export async function warmupWhisperPipeline() {
   const off = (process.env.VOICEVAULT_WHISPER_WARMUP ?? '').toString().trim() === '0';
   if (off) return;
+  if (defaultSttProviderFromEnv() === 'elevenlabs') return;
   const dataDir = process.env.VV_DATA_DIR ? path.resolve(process.env.VV_DATA_DIR) : path.resolve(process.cwd(), 'data');
   const audioDir = path.join(dataDir, 'audio');
   try {

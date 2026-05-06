@@ -165,6 +165,10 @@
             <textarea id="liveTranscript" class="textarea" rows="6"></textarea>
           </label>
 
+          <div id="noteLangCountdownWrap" class="row" hidden style="margin-top: 8px; align-items: center">
+            <span id="noteLangCountdownPill" class="pill timerPill">Auto-detect: 30s</span>
+          </div>
+
           <label class="label">
             Choose audio file (optional)
             <input id="uploadNote" class="input" type="file" accept="audio/*" hidden />
@@ -177,7 +181,7 @@
           </label>
 
           <div id="noteLanguageWrap" class="label" hidden>
-            Language (shown after the first detection; you can change it while recording)
+            Language (auto if detected; otherwise pick within the timer or after it ends)
             <select
               id="noteLanguage"
               class="input"
