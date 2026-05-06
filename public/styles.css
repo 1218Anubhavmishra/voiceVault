@@ -485,6 +485,31 @@ input[type='file'] {
   height: 32px;
 }
 
+.newNoteTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.newNoteTitleInput {
+  flex: 0 1 auto;
+  width: min(25vw, 18rem);
+  max-width: 25vw;
+  min-width: 180px;
+}
+
+#liveTranscript {
+  resize: none;
+}
+
+@media (max-width: 720px) {
+  .newNoteTitleInput {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
 /* Native dropdown menus (options) are browser-controlled, but set a sane default for light theme. */
 select option {
   background: #ffffff;

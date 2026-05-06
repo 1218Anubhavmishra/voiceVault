@@ -121,12 +121,14 @@
             <div id="newNoteBody">
 
           <label class="label">
-            Title <span class="newNoteTitleHint">(change it if needed)</span>
-            <input
-              id="title"
-              class="input"
-              placeholder="Note title (shown above transcript). Uploads default to the file name."
-            />
+            <span class="newNoteTitleRow">
+              <span class="newNoteTitleLabel">Title <span class="newNoteTitleHint">( Editable )</span></span>
+              <input
+                id="title"
+                class="input newNoteTitleInput"
+                placeholder="Note title (shown above transcript). Uploads default to the file name."
+              />
+            </span>
           </label>
 
           <div class="row">
@@ -198,8 +200,7 @@
           </div>
 
           <p class="newNoteTitleHint" style="margin: 0 0 8px">
-            Transcription runs on the server with <strong>ElevenLabs STT</strong>; see <code>.env.example</code> for provider
-            options.
+            Transcription runs on the server with <strong>ElevenLabs STT</strong>.
           </p>
 
           <div class="row">
