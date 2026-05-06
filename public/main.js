@@ -1440,6 +1440,7 @@ function wire() {
 
     resetRecorder(note);
     resetNewNoteLanguageForRecording();
+    applyStickyNoteLanguageFromStorage();
     noteUsedMicForCurrentBlob = false;
     note.audioBlob = f;
     note.sourceFilename = f.name;
@@ -4754,6 +4755,28 @@ async function detectLanguageForNotePreview() {
     return;
   }
 
+  const manualHintEarly = (noteLanguageEl?.value ?? '').toString().trim();
+  if (manualHintEarly || noteUserOverrodeLanguage) {
+    noteLangDetectionComplete = false;
+    syncLiveTxLangHeader();
+    updateGenerateFullPreviewButtonVisibility();
+    if (noteLanguageWrapEl?.hidden) startNoteLangDetectCountdown();
+    try {
+      if (noteDetectedLangEl) {
+        noteDetectedLangEl.hidden = false;
+        const label = manualHintEarly ? formatNoteLanguageMeta(manualHintEarly) || manualHintEarly : '—';
+        noteDetectedLangEl.textContent = manualHintEarly ? `Lang: ${label}` : 'Lang: —';
+      }
+      revealNoteLanguageWrap();
+    } finally {
+      stopNoteLangDetectCountdown();
+      noteLangDetectionComplete = true;
+      syncLiveTxLangHeader();
+      updateGenerateFullPreviewButtonVisibility();
+    }
+    return;
+  }
+
   noteLangDetectionComplete = false;
   syncLiveTxLangHeader();
   updateGenerateFullPreviewButtonVisibility();
@@ -4771,14 +4794,16 @@ async function detectLanguageForNotePreview() {
 
     const resp = await fetch('/api/detect-language', { method: 'POST', body: fd });
     if (!resp.ok) {
-      noteDetectedLangEl.textContent = 'Lang: —';
+      const hasManual = !!(noteLanguageEl?.value ?? '').toString().trim() || noteUserOverrodeLanguage;
+      if (!hasManual) noteDetectedLangEl.textContent = 'Lang: —';
       revealNoteLanguageWrap();
       return;
     }
     const data = await safeJson(resp);
     const lang = (data?.language ?? '').toString().trim();
     if (!lang) {
-      noteDetectedLangEl.textContent = 'Lang: —';
+      const hasManual = !!(noteLanguageEl?.value ?? '').toString().trim() || noteUserOverrodeLanguage;
+      if (!hasManual) noteDetectedLangEl.textContent = 'Lang: —';
       revealNoteLanguageWrap();
       return;
     }

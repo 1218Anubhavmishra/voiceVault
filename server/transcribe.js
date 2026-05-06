@@ -329,6 +329,39 @@ function runFfmpeg(args, opts = {}) {
   return run(bin, args, opts);
 }
 
+/**
+ * First ~N seconds as 16 kHz mono WAV for cheap language detection (avoids full-file STT on long uploads).
+ * @returns {Promise<boolean>} true if destPath was written
+ */
+export async function writeLangProbeWavClip(sourcePath, destPath, maxSeconds = 55) {
+  const lim = Math.max(12, Math.min(180, Number(maxSeconds) || 55));
+  const { exitCode } = await runFfmpeg(
+    [
+      '-nostdin',
+      '-y',
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-fflags',
+      '+genpts',
+      '-i',
+      sourcePath,
+      '-t',
+      String(lim),
+      '-vn',
+      '-ar',
+      '16000',
+      '-ac',
+      '1',
+      '-c:a',
+      'pcm_s16le',
+      destPath
+    ],
+    { env: process.env }
+  );
+  return exitCode === 0 && fs.existsSync(destPath);
+}
+
 function run(cmd, args, { env } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {

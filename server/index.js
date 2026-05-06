@@ -12,7 +12,8 @@ import {
   transcribeAudioFile,
   warmupWhisperPipeline,
   whisperModelFromEnv,
-  whisperFinalModelFromEnv
+  whisperFinalModelFromEnv,
+  writeLangProbeWavClip
 } from './transcribe.js';
 import { normalizeSttProvider, sttProviderForAuthoritativeFinal, defaultSttProviderFromEnv } from './stt-providers.js';
 import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic.js';
@@ -1516,9 +1517,15 @@ app.post('/api/detect-language', upload.single('audio'), async (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
 
+  const hintRaw = (req.body?.language_hint ?? '').toString().trim();
+  if (hintRaw) {
+    return res.json({ language: hintRaw, source: 'hint' });
+  }
+
   const id = nanoid(12);
   const ext = mimeToExt(audio.mimetype) ?? 'webm';
   const tmpPath = path.join(audioDir, `__lang_${id}.${ext}`);
+  const probePath = path.join(audioDir, `__langprobe_${id}.wav`);
   fs.writeFileSync(tmpPath, audio.buffer);
 
   try {
@@ -1527,13 +1534,26 @@ app.post('/api/detect-language', upload.single('audio'), async (req, res) => {
     // ignore
   }
 
+  const probeSec = Math.max(
+    12,
+    Math.min(180, Number(process.env.VOICEVAULT_DETECT_LANGUAGE_MAX_SEC ?? '55') || 55)
+  );
+  let audioForDetect = tmpPath;
+  let haveProbe = false;
   try {
-    const out = await transcribeAudioFile(tmpPath, {
+    haveProbe = await writeLangProbeWavClip(tmpPath, probePath, probeSec);
+    if (haveProbe) audioForDetect = probePath;
+  } catch {
+    audioForDetect = tmpPath;
+  }
+
+  try {
+    const out = await transcribeAudioFile(audioForDetect, {
       model: whisperModelFromEnv(),
       language: '', // force auto-detect
       provider: normalizeSttProvider(req.body?.stt_provider)
     });
-    res.json({ language: out?.language ?? '' });
+    res.json({ language: out?.language ?? '', source: haveProbe ? 'probe' : 'full' });
   } catch (e) {
     if (!res.headersSent) {
       res.status(500).json({
@@ -1544,6 +1564,11 @@ app.post('/api/detect-language', upload.single('audio'), async (req, res) => {
   } finally {
     try {
       fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+    try {
+      if (haveProbe) fs.unlinkSync(probePath);
     } catch {
       // ignore
     }
