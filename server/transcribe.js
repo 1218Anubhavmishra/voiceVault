@@ -176,6 +176,24 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
   }
 
   const audioForStt = fs.existsSync(preprocessedPath) ? preprocessedPath : audioPath;
+
+  const rejectSilence = (process.env.VOICEVAULT_REJECT_SILENCE ?? '1').toString().trim() !== '0';
+  if (rejectSilence) {
+    try {
+      const silent = await isLikelySilentAudio(audioForStt);
+      if (silent) {
+        const err = new Error(
+          'Audio appears silent or muted. Unmute your microphone / pick the correct input device, then record again.'
+        );
+        err.code = 'AUDIO_SILENT';
+        throw err;
+      }
+    } catch (e) {
+      // If silence detection itself fails, proceed with STT (do not block transcription).
+      if ((e?.code ?? '') === 'AUDIO_SILENT') throw e;
+    }
+  }
+
   const pv = (provider ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
   if (pv === 'elevenlabs' || pv === 'eleven_labs') {
     try {
@@ -360,6 +378,43 @@ export async function writeLangProbeWavClip(sourcePath, destPath, maxSeconds = 5
     { env: process.env }
   );
   return exitCode === 0 && fs.existsSync(destPath);
+}
+
+async function isLikelySilentAudio(audioPath) {
+  const nullSink = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const { exitCode, stderr } = await runFfmpeg(
+    [
+      '-nostdin',
+      '-hide_banner',
+      '-loglevel',
+      'info',
+      '-i',
+      audioPath,
+      '-vn',
+      '-af',
+      'volumedetect',
+      '-f',
+      'null',
+      nullSink
+    ],
+    { env: process.env }
+  );
+  if (exitCode !== 0) return false;
+  const s = (stderr ?? '').toString();
+  if (!s) return false;
+  if (/max_volume:\s*-inf/i.test(s) || /mean_volume:\s*-inf/i.test(s)) return true;
+
+  const maxM = s.match(/max_volume:\s*([-\d.]+)\s*dB/i);
+  const meanM = s.match(/mean_volume:\s*([-\d.]+)\s*dB/i);
+  const maxDb = maxM ? Number(maxM[1]) : NaN;
+  const meanDb = meanM ? Number(meanM[1]) : NaN;
+  if (!Number.isFinite(maxDb) && !Number.isFinite(meanDb)) return false;
+
+  // Conservative thresholds: treat extremely quiet audio as muted/silent.
+  // (For speech, max usually rises above -30 dBFS unless the mic is muted or far away.)
+  if (Number.isFinite(maxDb) && maxDb <= -45) return true;
+  if (Number.isFinite(meanDb) && meanDb <= -55) return true;
+  return false;
 }
 
 function run(cmd, args, { env } = {}) {

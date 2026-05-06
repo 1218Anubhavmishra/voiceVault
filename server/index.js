@@ -1,4 +1,5 @@
 import cors from 'cors';
+import './load-env.js';
 import express from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -1498,12 +1499,15 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
       segments: Array.isArray(out?.segments) ? out.segments : []
       });
     } catch (e) {
-    if (!res.headersSent) {
-      res.status(500).json({
-        error: 'Transcription failed',
-        details: e?.message ?? String(e)
-      });
-    }
+      if (!res.headersSent) {
+        const code = (e?.code ?? '').toString();
+        const status = code === 'AUDIO_SILENT' ? 400 : 500;
+        res.status(status).json({
+          error: 'Transcription failed',
+          details: e?.message ?? String(e),
+          code
+        });
+      }
     } finally {
       try {
         fs.unlinkSync(tmpPath);
@@ -1556,9 +1560,12 @@ app.post('/api/detect-language', upload.single('audio'), async (req, res) => {
     res.json({ language: out?.language ?? '', source: haveProbe ? 'probe' : 'full' });
   } catch (e) {
     if (!res.headersSent) {
-      res.status(500).json({
+      const code = (e?.code ?? '').toString();
+      const status = code === 'AUDIO_SILENT' ? 400 : 500;
+      res.status(status).json({
         error: 'Language detection failed',
-        details: e?.message ?? String(e)
+        details: e?.message ?? String(e),
+        code
       });
     }
   } finally {
@@ -1604,9 +1611,12 @@ app.post('/api/live-transcribe', upload.single('audio'), async (req, res) => {
     });
   } catch (e) {
     if (!res.headersSent) {
-      res.status(500).json({
+      const code = (e?.code ?? '').toString();
+      const status = code === 'AUDIO_SILENT' ? 400 : 500;
+      res.status(status).json({
         error: 'Live transcription failed',
-        details: e?.message ?? String(e)
+        details: e?.message ?? String(e),
+        code
       });
     }
   } finally {
