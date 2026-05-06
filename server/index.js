@@ -2216,39 +2216,51 @@ app.get('/api/blobs/:id', (req, res) => {
 app.post('/api/notes/:id/retry', (req, res) => {
   const { id } = req.params;
   const row = db
-    .prepare(`SELECT id, audio_filename, audio_mime, audio_blob, language, stt_provider FROM notes WHERE id = ?`)
+    .prepare(
+      `SELECT id, audio_filename, audio_mime, audio_blob, audio_blob_id, language, stt_provider
+       FROM notes WHERE id = ?`
+    )
     .get(id);
   if (!row) return res.status(404).json({ error: 'Not found' });
 
-  let audioBuf = null;
-  if (row.audio_blob && Buffer.isBuffer(row.audio_blob) && row.audio_blob.length > 0) {
-    audioBuf = row.audio_blob;
-  } else {
-    const audioPath = path.join(audioDir, row.audio_filename);
-    if (!fs.existsSync(audioPath)) return res.status(404).json({ error: 'Audio missing' });
-    audioBuf = fs.readFileSync(audioPath);
+  // Ensure we have a durable audio_blob_id for ingestion jobs (they read from blobsDir).
+  let blobId = (row.audio_blob_id ?? '').toString().trim();
+  if (!blobId) {
+    let audioBuf = null;
+    if (row.audio_blob && Buffer.isBuffer(row.audio_blob) && row.audio_blob.length > 0) {
+      audioBuf = row.audio_blob;
+    } else {
+      const audioPath = path.join(audioDir, row.audio_filename);
+      if (!fs.existsSync(audioPath)) return res.status(404).json({ error: 'Audio missing' });
+      audioBuf = fs.readFileSync(audioPath);
+    }
+    if (!audioBuf || audioBuf.length === 0) return res.status(400).json({ error: 'Audio missing' });
+    blobId = sha256Hex(audioBuf);
     try {
-      db.prepare(`UPDATE notes SET audio_blob = @audio_blob WHERE id = @id`).run({
+      const blobPath = path.join(blobsDir, blobId);
+      if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, audioBuf);
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to persist audio blob', details: e?.message ?? String(e) });
+    }
+    try {
+      db.prepare(`UPDATE notes SET audio_blob_id = @audio_blob_id WHERE id = @id`).run({
         id,
-        audio_blob: audioBuf
+        audio_blob_id: blobId
       });
     } catch {
       // ignore
     }
   }
 
-  const ext = mimeToExt(row.audio_mime) ?? 'webm';
-  const tmpPath = path.join(audioDir, `__retry_${id}.${ext}`);
-  fs.writeFileSync(tmpPath, audioBuf);
-
   const now = new Date().toISOString();
   db.prepare(
     `UPDATE notes
      SET status = @status,
+         transcribe_mode = @transcribe_mode,
          error = @error,
          updated_at = @updated_at
      WHERE id = @id`
-  ).run({ id, status: 'processing', error: '', updated_at: now });
+  ).run({ id, status: 'processing', transcribe_mode: 'retranscribe', error: '', updated_at: now });
 
   // Resume any paused pipeline for this note and clear stop flags so queued workers can run; timer uses fresh updated_at.
   try {
@@ -2261,96 +2273,11 @@ app.post('/api/notes/:id/retry', (req, res) => {
     // ignore if columns mismatch old DB
   }
 
+  // Durable jobs so they show up in Processes panel and can be retried/cancelled.
+  enqueueJob(db, { job_type: 'transcribe_note', note_id: id, priority: 1 });
+  enqueueJob(db, { job_type: 'backfill_words', note_id: id, priority: 0 });
+
   res.json({ ok: true, id, status: 'processing' });
-
-  (async () => {
-    try {
-      throwIfRetryInlineCancelled(db, id);
-
-      let cancelledDuringTranscribe = false;
-      const pollIv = setInterval(() => {
-        try {
-          throwIfRetryInlineCancelled(db, id);
-        } catch (e) {
-          if (e?.code === 'VV_CANCEL') cancelledDuringTranscribe = true;
-        }
-      }, 900);
-
-      try {
-        // Use stored hint when set (e.g. user chose Hindi in UI); empty string => Whisper auto-detect.
-        const hintLang = (row.language ?? '').toString().trim();
-        const stt = sttProviderForAuthoritativeFinal(row.stt_provider);
-        const out = await transcribeAuthoritativeFullFile(tmpPath, {
-          model: whisperFinalModelFromEnv(),
-          language: hintLang,
-          provider: stt
-        });
-
-        if (cancelledDuringTranscribe) {
-          const e = new Error('__VV_CANCEL__');
-          e.code = 'VV_CANCEL';
-          throw e;
-        }
-        throwIfRetryInlineCancelled(db, id);
-
-      const transcript = formatTranscript(out?.transcript ?? out ?? '');
-      const updatedAt = new Date().toISOString();
-        const detectedLang = normalizeDetectedLanguage(out?.language);
-        const priorLang = (row.language ?? '').toString().trim();
-        const storedLang = (detectedLang || priorLang).toString().trim();
-
-        const r = db
-          .prepare(
-        `UPDATE notes
-         SET body = @body,
-                 segments_json = @segments_json,
-                 language = @language,
-             status = @status,
-             error = @error,
-             updated_at = @updated_at
-             WHERE id = @id AND status = 'processing'`
-          )
-          .run({
-        id,
-        body: transcript || '',
-            segments_json: safeStringifySegments(out?.segments),
-            language: storedLang,
-        status: 'ready',
-        error: '',
-        updated_at: updatedAt
-      });
-        if (!r.changes) return;
-    } catch (e) {
-        if (e?.code === 'VV_CANCEL' || e?.message === '__VV_CANCEL__') return;
-
-      const updatedAt = new Date().toISOString();
-      db.prepare(
-        `UPDATE notes
-         SET status = @status,
-             error = @error,
-             updated_at = @updated_at
-           WHERE id = @id AND status = 'processing'`
-      ).run({
-        id,
-        status: 'error',
-        error: (e?.message ?? String(e)).slice(0, 2000),
-        updated_at: updatedAt
-      });
-      } finally {
-        try {
-          clearInterval(pollIv);
-        } catch {
-          // ignore
-        }
-      }
-    } finally {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore
-      }
-    }
-  })();
 });
 
 // Background worker: durable ingestion queue (transcription + segment persistence).
@@ -2936,7 +2863,10 @@ async function finalizeNoteFromSttOutput(
   { transcriptRaw, segments, detectedLang, transcribe_mode = '' } = {}
 ) {
   const transcript = formatTranscript(transcriptRaw ?? '');
-  const segArr = Array.isArray(segments) ? segments : [];
+  let segArr = Array.isArray(segments) ? segments : [];
+  if (!segArr.length && transcript.trim()) {
+    segArr = segmentsFromTranscriptFallback(transcript, Number(row?.duration_ms ?? 0) || 0);
+  }
   const segmentsJson = safeStringifySegments(segArr);
   await ensureNoteSegments(db, noteId, segArr);
   await ensureNoteChunks(db, noteId, segArr);
@@ -2978,6 +2908,54 @@ async function finalizeNoteFromSttOutput(
       updated_at: updatedAt
     });
   return (r?.changes ?? 0) > 0;
+}
+
+function segmentsFromTranscriptFallback(transcript, durationMs) {
+  const t = (transcript ?? '').toString().trim();
+  if (!t) return [];
+  const durSec = Math.max(1.0, (Number(durationMs) || 0) > 0 ? (Number(durationMs) || 0) / 1000 : 60);
+
+  const parts = t
+    .replaceAll('\r\n', '\n')
+    .split(/\n+/g)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .flatMap((s) => s.split(/(?<=[.!?])\s+/g).map((x) => x.trim()).filter(Boolean));
+
+  const clipped = parts.slice(0, 120);
+  if (!clipped.length) return [];
+
+  const weights = clipped.map((s) => Math.max(1, s.replace(/\s+/g, ' ').length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  const MIN_SEC = 0.4;
+  const maxN = Math.min(clipped.length, Math.max(1, Math.floor(durSec / MIN_SEC)));
+  const lines = clipped.slice(0, maxN);
+  const w2 = weights.slice(0, maxN);
+  const tot2 = w2.reduce((a, b) => a + b, 0) || 1;
+
+  const out = [];
+  let cursor = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const frac = w2[i] / tot2;
+    const span = Math.max(MIN_SEC, durSec * frac);
+    const start = cursor;
+    const end = i === lines.length - 1 ? durSec : Math.min(durSec, cursor + span);
+    cursor = end;
+    const text = lines[i].replace(/\s+/g, ' ').trim();
+    if (text) out.push({ start, end, text });
+    if (cursor >= durSec - 0.001) break;
+  }
+  if (!out.length) {
+    const oneLine = t.replace(/\s+/g, ' ').trim();
+    return oneLine ? [{ start: 0, end: durSec, text: oneLine }] : [];
+  }
+  // Ensure strictly increasing end times.
+  for (let i = 0; i < out.length; i += 1) {
+    const prev = out[i - 1];
+    if (prev && out[i].start < prev.end) out[i].start = prev.end;
+    if (out[i].end <= out[i].start) out[i].end = Math.min(durSec, out[i].start + MIN_SEC);
+  }
+  return out.filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start && s.text);
 }
 
 function parseWordsJson(wordsJson) {
@@ -3365,7 +3343,7 @@ function getBackoffMaxSec(db) {
 async function runTranscribeJob(db, { noteId, blobsDir }) {
   const row = db
     .prepare(
-      `SELECT id, title, display_title, audio_blob_id, audio_mime, language, stt_provider
+      `SELECT id, title, display_title, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider
        FROM notes
        WHERE id = ?`
     )

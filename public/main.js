@@ -304,17 +304,18 @@ function stopNoteLangDetectCountdown() {
     noteLangCountdownIntervalId = null;
   }
   noteLangCountdownEndsAt = 0;
-  if (noteLangCountdownWrapEl) noteLangCountdownWrapEl.hidden = true;
 }
 
 function updateNoteLangDetectCountdownTick() {
-  if (!noteLangCountdownPillEl || !noteLangCountdownWrapEl || noteLangCountdownWrapEl.hidden) return;
   if (noteLanguageWrapEl && !noteLanguageWrapEl.hidden) {
     stopNoteLangDetectCountdown();
     return;
   }
   const rem = Math.max(0, Math.ceil((noteLangCountdownEndsAt - Date.now()) / 1000));
-  noteLangCountdownPillEl.textContent = `Auto-detect: ${rem}s`;
+  if (noteDetectedLangEl) {
+    noteDetectedLangEl.hidden = false;
+    noteDetectedLangEl.textContent = `Auto-detect language in ${rem}s`;
+  }
   if (rem <= 0) {
     stopNoteLangDetectCountdown();
     revealNoteLanguageWrap();
@@ -326,14 +327,12 @@ function updateNoteLangDetectCountdownTick() {
 
 /** While the language row is hidden, show a 30s countdown then reveal the row for manual choice. */
 function startNoteLangDetectCountdown() {
-  if (!noteLangCountdownWrapEl || !noteLangCountdownPillEl) return;
   if (noteLanguageWrapEl && !noteLanguageWrapEl.hidden) {
     stopNoteLangDetectCountdown();
     return;
   }
   stopNoteLangDetectCountdown();
   noteLangCountdownEndsAt = Date.now() + NOTE_LANG_AUTODETECT_COUNTDOWN_SEC * 1000;
-  noteLangCountdownWrapEl.hidden = false;
   updateNoteLangDetectCountdownTick();
   noteLangCountdownIntervalId = setInterval(updateNoteLangDetectCountdownTick, 250);
 }
@@ -413,7 +412,7 @@ function resetNewNoteLanguageForRecording() {
     noteLangProgrammatic = false;
   }
   if (noteDetectedLangEl) {
-    noteDetectedLangEl.textContent = 'Lang: —';
+    noteDetectedLangEl.textContent = 'Auto-detect language';
     noteDetectedLangEl.hidden = true;
   }
 }
@@ -594,9 +593,14 @@ function processingProgressFromAttrs({ baseMs, units, lockedAt, elapsedWallMs })
   const r = elapsedWork / b;
   if (r <= 1) {
     const left = 100 * (1 - r);
-    return { pct: Math.max(1, Math.min(100, Math.round(left))), pastBudget: false };
+    return {
+      pct: Math.max(1, Math.min(100, Math.round(left))),
+      pastBudget: false,
+      elapsedMs: elapsedWork,
+      budgetMs: scaledBudget
+    };
   }
-  return { pct: 1, pastBudget: true };
+  return { pct: 1, pastBudget: true, elapsedMs: elapsedWork, budgetMs: scaledBudget };
 }
 
 function processingPercentLeftFromAttrs(attrs) {
@@ -634,15 +638,19 @@ function coarseStageHint(stage) {
 }
 
 /** Past time budget: plain “Transcribing…”; with server stage, append hint in parentheses. */
-function formatProcessingProgressChipText({ pct, pastBudget, coarseStage, retranscribeFallback = false }) {
+function formatProcessingProgressChipText({ pct, pastBudget, coarseStage, retranscribeFallback = false, elapsedMs = 0, budgetMs = 0 }) {
   if (pastBudget) {
     const hint = coarseStageHint(coarseStage);
+    const over = Math.max(0, (Number(elapsedMs) || 0) - (Number(budgetMs) || 0));
+    const overSec = Math.floor(over / 1000);
     // Re-transcribe cards prefix the row with “ReTranscribing”; avoid repeating it in the chip.
     if (retranscribeFallback) {
-      return hint ? `(${hint})` : '…';
+      const tail = overSec > 0 ? `estimate +${overSec}s` : 'estimate';
+      return hint ? `(${hint} • ${tail})` : tail;
     }
     const base = 'Transcribing…';
-    return hint ? `${base} (${hint})` : base;
+    const tail = overSec > 0 ? `estimate +${overSec}s` : 'estimate';
+    return hint ? `${base} (${hint} • ${tail})` : `${base} (${tail})`;
   }
   return formatProcessingPercentLeftLabel(pct);
 }
@@ -884,7 +892,7 @@ function openChangeLanguageDialog(opts, onApply) {
   overlay.innerHTML = `
     <div class="dialog" style="width:min(440px,96vw)">
       <div id="vvChangeLangTitle" style="font-weight:850; margin-bottom:12px">Change language</div>
-      <p style="margin:0 0 12px; font-size:13px; color:rgba(255,255,255,0.72); line-height:1.45">
+      <p style="margin:0 0 12px; font-size:13px; color:rgba(0,0,0,0.72); line-height:1.45">
         Updates the transcription hint for this note and re-runs transcription on the saved audio (same as Reprocess).
       </p>
       <label class="label" style="margin-bottom:0">
@@ -1149,6 +1157,20 @@ function setNewNotePanelOpen(open) {
   if (on) closeAllPanelsExcept('newNote');
   newNoteCardEl.hidden = !on;
   if (on && newNoteBodyEl) newNoteBodyEl.hidden = false;
+  // If user re-opens New note without an active blob/recording, reset language UI so stale
+  // auto-detect pills don't persist across reloads/panel toggles.
+  try {
+    if (on && !note?.isRecording && !note?.audioBlob) {
+      resetNewNoteLanguageForRecording();
+      stopNoteLangDetectCountdown();
+      noteLangDetectionComplete = false;
+      syncLiveTxLangHeader();
+      updateGenerateFullPreviewButtonVisibility();
+      syncVisibility();
+    }
+  } catch {
+    // ignore
+  }
   if (btnFloatNewNoteEl) {
     btnFloatNewNoteEl.hidden = on;
     btnFloatNewNoteEl.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -1470,7 +1492,7 @@ function wire() {
     });
 
     syncVisibility();
-    setStatus(`Loaded audio file: ${f.name}`);
+    setStatus('Loaded audio file');
     scheduleServerNoteDraftBackup();
 
     if (liveTranscriptEl) {
@@ -2350,10 +2372,10 @@ async function refreshResults(q = '') {
                        <button class="btn" data-dl-audio="${item.id}">Download Audio</button>
                        <button class="btn" data-dl-text="${item.id}">Download Transcript</button>
                        ${
-                         hideReprocessWhileBusy
-                           ? ''
-                           : `<button class="btn" data-reprocess="${item.id}" type="button" title="Re-run transcription (e.g. fix missing language)">Reprocess</button>
+                         status === 'error' || !hideReprocessWhileBusy
+                           ? `<button class="btn" data-reprocess="${item.id}" type="button" title="Re-run transcription (e.g. fix missing language)">Reprocess</button>
                               <button class="btn" data-change-lang="${item.id}" type="button" title="Set transcription language hint and re-run">Change language</button>`
+                           : ''
                        }
                        <button class="btn" data-edit="${item.id}">Edit</button>
                        <button class="btn" data-delete="${item.id}">Delete Note</button>`;
@@ -2384,7 +2406,7 @@ async function refreshResults(q = '') {
 
         <div class="row notePlaybackRow" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap">
           <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
-            <span style="font-size:12px; color:rgba(255,255,255,0.72); font-weight:750">Speed</span>
+            <span style="font-size:12px; color:rgba(0,0,0,0.72); font-weight:750">Speed</span>
             <select class="jobsSelect" data-rate="${item.id}">
               <option value="0.75">0.75×</option>
               <option value="1">1×</option>
@@ -2467,13 +2489,18 @@ async function refreshResults(q = '') {
                     )}" data-retranscribe-fallback="${isRetranscribeQueue ? '1' : '0'}" title="Until the time estimate is used up: approximate % from audio length vs elapsed. After that: working… When the server reports starting/running on the job queue (refreshes with this list).">${escapeHtml(
                       procChipTxt
                     )}</span></span>`
-                  : status === 'error'
+                : status === 'error'
                     ? `<span class="noteStatus err">Error</span>`
                     : `<span class="noteStatus">${escapeHtml(status)}</span>`
               : ''
           }
           ${
-            status === 'ready'
+            status === 'error'
+              ? `<button class="btn err btnIconOnly" data-delete="${item.id}" type="button" title="Delete note">🗑</button>`
+              : ''
+          }
+          ${
+            status === 'ready' || status === 'error'
               ? `<button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
                  ${readyActionsStackHtml}`
               : ''
@@ -4606,7 +4633,7 @@ function renderBitrateHint() {
   if (aboutBox) {
     aboutBox.innerHTML = `
       <div>Audio is recorded at <strong>${kbps} kbps</strong>. Maximum length is about <strong>100 minutes</strong> per note.</div>
-      <div style="margin-top:6px">Transcription runs on the server with <strong>Whisper</strong> (faster-whisper). Saving runs <strong>offline</strong> indexing for search.</div>
+      <div style="margin-top:6px">Transcription runs on the server with <strong>ElevenLabs STT</strong>. Saving runs <strong>offline</strong> indexing for search.</div>
       <div style="margin-top:6px">After you stop recording or pick a file, the app <strong>backs up audio to the server</strong> in the background so a failed <strong>Save</strong> is easier to recover from (tap Save again).</div>
       <div style="margin-top:6px">
         Notes store <strong>timestamped segments</strong>; use each segment’s <strong>Play</strong> for a clip, or full <strong>Play Audio</strong> for the whole file.
@@ -4632,10 +4659,10 @@ function renderBitrateHint() {
   if (uiStepsBox) {
     uiStepsBox.innerHTML = `
         <div style="margin-top:6px">
-        1) Tap <strong>+</strong> in the quick-action bar to open <strong>New note</strong> (it closes any other open panel). Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> for mic audio or <strong>Upload_YYYY-MM-DD_HH-MM-SS</strong> after <strong>Choose Audio File</strong> — change it if you like.
+        1) Tap <strong>+</strong> in the quick-action bar to open <strong>New note</strong> (it closes any other open panel). Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> for mic audio or <strong>Upload_YYYY-MM-DD_HH-MM-SS</strong> after <strong>Upload</strong> — change it if you like.
         </div>
         <div style="margin-top:4px">
-        2) Optional: <strong>Choose Audio File</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>.
+        2) Optional: <strong>Upload</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>.
         </div>
         <div style="margin-top:4px">
         3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>. Edit the <strong>Transcript preview</strong> after it finishes processing.

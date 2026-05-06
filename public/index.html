@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#060a14" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#f4efe4" />
+    <meta name="color-scheme" content="light" />
     <title>voiceVault</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -69,7 +69,7 @@
                   <option value="cancelled">Cancelled</option>
                 </select>
                 <label class="label" style="margin: 0; display: flex; align-items: center; gap: 10px">
-                  <span style="font-size: 12px; color: rgba(255, 255, 255, 0.72); font-weight: 750">Backoff base (sec)</span>
+                  <span style="font-size: 12px; color: rgba(0, 0, 0, 0.72); font-weight: 750">Backoff base (sec)</span>
                   <input
                     id="jobsBackoffBaseSec"
                     class="input"
@@ -81,7 +81,7 @@
                   />
                 </label>
                 <label class="label" style="margin: 0; display: flex; align-items: center; gap: 10px">
-                  <span style="font-size: 12px; color: rgba(255, 255, 255, 0.72); font-weight: 750">Backoff max (sec)</span>
+                  <span style="font-size: 12px; color: rgba(0, 0, 0, 0.72); font-weight: 750">Backoff max (sec)</span>
                   <input
                     id="jobsBackoffMaxSec"
                     class="input"
@@ -93,7 +93,7 @@
                   />
                 </label>
                 <label class="label" style="margin: 0; display: flex; align-items: center; gap: 10px">
-                  <span style="font-size: 12px; color: rgba(255, 255, 255, 0.72); font-weight: 750">Max parallel</span>
+                  <span style="font-size: 12px; color: rgba(0, 0, 0, 0.72); font-weight: 750">Max parallel</span>
                   <input
                     id="jobsMaxParallel"
                     class="input"
@@ -134,12 +134,27 @@
             <button id="btnStopNote" class="btn" disabled hidden>Stop</button>
             <span class="pill timerPill" id="noteTimer" hidden>00:00</span>
             <span class="pill timerPill" id="noteDetectedLang" hidden>Lang: —</span>
-          </div>
-
-          <div id="newNoteTxStageRow" class="newNoteTxStageRow" hidden>
-            <span id="newNoteStageLive" class="newNoteTxStage pill" data-state="pending">Live Transcript</span>
-            <span class="newNoteTxStageSep" aria-hidden="true">→</span>
-            <span id="newNoteStageFull" class="newNoteTxStage pill" data-state="pending">Full Transcription</span>
+            <span id="noteLanguageWrap" hidden style="display:inline-flex; align-items:center; gap:8px">
+              <select
+                id="noteLanguage"
+                class="input noteLanguageSelect"
+                aria-label="Language"
+                style="background: rgba(255, 255, 255, 0.95); color: rgba(0, 0, 0, 0.92); border-color: rgba(255, 255, 255, 0.75)"
+              >
+                <option value="">Auto-detect</option>
+                <option value="en">English (en)</option>
+                <option value="hi">Hindi (hi)</option>
+                <option value="es">Spanish (es)</option>
+                <option value="fr">French (fr)</option>
+                <option value="de">German (de)</option>
+                <option value="it">Italian (it)</option>
+                <option value="pt">Portuguese (pt)</option>
+                <option value="ja">Japanese (ja)</option>
+                <option value="ko">Korean (ko)</option>
+                <option value="zh">Chinese (zh)</option>
+              </select>
+              <audio id="previewNote" controls class="audio notePreviewAudioInline" hidden></audio>
+            </span>
           </div>
 
           <label class="label" id="liveTranscriptWrap" hidden>
@@ -165,41 +180,16 @@
             <textarea id="liveTranscript" class="textarea" rows="6"></textarea>
           </label>
 
-          <div id="noteLangCountdownWrap" class="row" hidden style="margin-top: 8px; align-items: center">
-            <span id="noteLangCountdownPill" class="pill timerPill">Auto-detect: 30s</span>
-          </div>
-
           <label class="label">
             Choose audio file (optional)
             <input id="uploadNote" class="input" type="file" accept="audio/*" hidden />
             <div class="row" style="margin-top:8px">
-              <button id="uploadNoteBtn" class="btn">Choose Audio File</button>
+              <button id="uploadNoteBtn" class="btn">Upload</button>
               <span id="uploadNoteName" class="pill" style="max-width:65ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
                 No file selected
               </span>
             </div>
           </label>
-
-          <div id="noteLanguageWrap" class="label" hidden>
-            Language (auto if detected; otherwise pick within the timer or after it ends)
-            <select
-              id="noteLanguage"
-              class="input"
-              style="background: rgba(255, 255, 255, 0.95); color: rgba(0, 0, 0, 0.92); border-color: rgba(255, 255, 255, 0.75)"
-            >
-              <option value="">Auto-detect</option>
-              <option value="en">English (en)</option>
-              <option value="hi">Hindi (hi)</option>
-              <option value="es">Spanish (es)</option>
-              <option value="fr">French (fr)</option>
-              <option value="de">German (de)</option>
-              <option value="it">Italian (it)</option>
-              <option value="pt">Portuguese (pt)</option>
-              <option value="ja">Japanese (ja)</option>
-              <option value="ko">Korean (ko)</option>
-              <option value="zh">Chinese (zh)</option>
-            </select>
-          </div>
 
           <div class="row" style="margin-top: 8px">
             <button type="button" id="btnGenerateFullPreview" class="btn primary" hidden>
@@ -208,8 +198,8 @@
           </div>
 
           <p class="newNoteTitleHint" style="margin: 0 0 8px">
-            Transcription runs on the server with <strong>Whisper</strong> (faster-whisper); see <code>.env.example</code> for
-            model and device options.
+            Transcription runs on the server with <strong>ElevenLabs STT</strong>; see <code>.env.example</code> for provider
+            options.
           </p>
 
           <div class="row">
@@ -221,9 +211,7 @@
               <span id="newNoteProcessingTime" class="noteProcessingTime" data-note-id="" data-processing-since="" data-estimated-total-ms="" title="Approximate percent of server transcription remaining for this note.">—</span></span>
           </div>
 
-          <div class="row">
-            <audio id="previewNote" controls class="audio" hidden></audio>
-          </div>
+          <!-- previewNote relocated beside language dropdown -->
 
             </div>
           </section>

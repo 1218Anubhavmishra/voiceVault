@@ -1,13 +1,13 @@
 :root {
   /* Base canvas + transition paint (overscroll / reload / View Transitions) */
-  --page-transition-bg: #060a14;
-  --bg: #0b1220;
-  --card: rgba(255, 255, 255, 0.06);
-  --card2: rgba(255, 255, 255, 0.09);
-  --text: rgba(255, 255, 255, 0.92);
-  --muted: rgba(255, 255, 255, 0.65);
-  --border: rgba(255, 255, 255, 0.12);
-  --shadow: 0 16px 50px rgba(0, 0, 0, 0.35);
+  --page-transition-bg: #f4efe4;
+  --bg: #f4efe4; /* warm off-white (cream/beige) */
+  --card: rgba(17, 24, 39, 0.06);
+  --card2: rgba(17, 24, 39, 0.09);
+  --text: rgba(17, 24, 39, 0.92);
+  --muted: rgba(17, 24, 39, 0.65);
+  --border: rgba(17, 24, 39, 0.14);
+  --shadow: 0 16px 50px rgba(17, 24, 39, 0.12);
   --primary: #7c3aed;
   --primary2: #a855f7;
   --danger: #ef4444;
@@ -20,11 +20,11 @@
 
 html {
   min-height: 100%;
-  color-scheme: dark;
+  color-scheme: light;
   /* Single base + soft radials only — avoids sharp horizontal bands from multi-stop linear blends */
   background-color: var(--bg);
-  background-image: radial-gradient(ellipse 1300px 720px at 18% 12%, rgba(124, 58, 237, 0.16), transparent 58%),
-    radial-gradient(ellipse 1000px 620px at 78% 22%, rgba(168, 85, 247, 0.12), transparent 55%);
+  background-image: radial-gradient(ellipse 1300px 720px at 18% 12%, rgba(124, 58, 237, 0.11), transparent 58%),
+    radial-gradient(ellipse 1000px 620px at 78% 22%, rgba(168, 85, 247, 0.08), transparent 55%);
   background-repeat: no-repeat;
 }
 
@@ -112,7 +112,7 @@ body {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(17, 24, 39, 0.14);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -127,7 +127,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 18px;
   /* Fully opaque dialog so text is easy to read; backdrop opacity stays on .overlay */
-  background: #121a2e;
+  background: rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow);
   padding: 14px 14px 12px;
 }
@@ -137,9 +137,9 @@ body {
   word-break: break-word;
   font-size: 12px;
   line-height: 1.45;
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(0, 0, 0, 0.20);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
   margin: 12px 0 10px;
@@ -453,7 +453,7 @@ input[type='file'] {
 .textarea {
   width: 100%;
   border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(255, 255, 255, 0.72);
   color: var(--text);
   padding: 10px 12px;
   border-radius: 12px;
@@ -464,17 +464,43 @@ input[type='file'] {
   background: rgba(255, 255, 255, 0.95);
   color: rgba(0, 0, 0, 0.92);
   border-color: rgba(255, 255, 255, 0.75);
+  color-scheme: light;
+}
+
+/* New note: keep language select compact (inline, beside language pill). */
+.noteLanguageSelect {
+  width: auto;
+  min-width: 10.5rem;
+  max-width: min(18rem, 60vw);
+  padding: 6px 10px;
+  border-radius: 999px;
+  line-height: 1.1;
+}
+
+.notePreviewAudioInline {
+  width: min(220px, 25vw);
+  max-width: 25vw;
+  min-width: 140px;
+  flex: 0 0 auto;
+  height: 32px;
+}
+
+/* Native dropdown menus (options) are browser-controlled, but set a sane default for light theme. */
+select option {
+  background: #ffffff;
+  color: #111827;
+}
+
+/* In some Chromium builds, <select> popup theme follows the element's color-scheme. */
+select {
+  color-scheme: light;
 }
 
 @media (hover: hover) and (pointer: fine) {
   #noteLanguage:hover {
-    background: linear-gradient(
-      180deg,
-      rgba(168, 85, 247, 0.95),
-      rgba(124, 58, 237, 0.7)
-    );
-    color: rgba(255, 255, 255, 0.98);
-    border-color: rgba(124, 58, 237, 0.65);
+    background: rgba(255, 255, 255, 0.98);
+    color: var(--text);
+    border-color: rgba(124, 58, 237, 0.35);
   }
 }
 
@@ -565,10 +591,10 @@ input[type='file'] {
   margin-bottom: 10px;
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.86);
+  color: var(--text);
   white-space: normal;
 }
 
@@ -578,7 +604,7 @@ input[type='file'] {
 }
 
 .answerMeta {
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--muted);
   font-size: 12px;
   margin-bottom: 8px;
 }
@@ -586,7 +612,7 @@ input[type='file'] {
 .answerItem {
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px dotted rgba(255, 255, 255, 0.16);
+  border-top: 1px dotted var(--border);
 }
 
 .cite {
@@ -602,7 +628,7 @@ input[type='file'] {
   border: none;
   border-radius: 14px;
   padding: 12px;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.55);
   min-width: 0;
 }
 
@@ -616,12 +642,12 @@ input[type='file'] {
 .note.noteCollapsed.note--processingInCard {
   padding: 12px 14px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.14);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
 }
 
 .note.noteCollapsed.note--processingInCard:hover {
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .newNoteTitleHint {
@@ -640,7 +666,7 @@ input[type='file'] {
 }
 
 .note.noteCollapsed:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.42);
 }
 
 /* Ready “saved card” layout: toolbar (meta + collapse + ▼) only when expanded; saved surface is the old inner box. */
@@ -676,13 +702,13 @@ input[type='file'] {
 
 .note.noteExpanded {
   padding: 14px 14px 12px;
-  background: rgba(0, 0, 0, 0.26);
+  background: rgba(255, 255, 255, 0.66);
 }
 
 .noteDetails {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+  border-top: 1px dashed var(--border);
   max-height: min(62vh, 560px);
   overflow: hidden;
 }
@@ -789,7 +815,7 @@ input[type='file'] {
 .noteBody {
   margin-top: 8px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.82);
+  color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -797,14 +823,14 @@ input[type='file'] {
 .noteDisplayTitleBlock {
   font-size: 14px;
   font-weight: 800;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--text);
   line-height: 1.35;
   margin-bottom: 2px;
 }
 
 hr.noteTitleBodyDivider {
   border: 0;
-  border-top: 1px dashed rgba(255, 255, 255, 0.28);
+  border-top: 1px dashed var(--border);
   margin: 10px 0 12px;
 }
 
@@ -817,8 +843,8 @@ hr.noteTitleBodyDivider.editTitleBodySep {
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.14);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.62);
 }
 
 /* Saved card is the primary surface (first in summary); no extra gap above it. */
@@ -841,7 +867,7 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 .noteCollapsedBodyPreview {
   margin-top: 8px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 9.5em;
@@ -856,7 +882,7 @@ hr.noteTitleBodyDivider.editTitleBodySep {
   margin: 0;
   padding: 6px 2px;
   border: 0;
-  border-bottom: 1px dotted rgba(255, 255, 255, 0.18);
+  border-bottom: 1px dotted var(--border);
   background: transparent;
 }
 
@@ -874,12 +900,12 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 
 .segTime {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.68);
+  color: var(--muted);
   white-space: nowrap;
 }
 
 .segText {
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
@@ -897,17 +923,17 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 .segHeader {
   grid-template-columns: auto 1fr;
   padding: 6px 2px;
-  border-bottom: 1px dotted rgba(255, 255, 255, 0.18);
+  border-bottom: 1px dotted var(--border);
 }
 
 .segHeaderLabel {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.68);
+  color: var(--muted);
   white-space: nowrap;
 }
 
 .segHeaderText {
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
@@ -931,8 +957,8 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 
 .pill {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--muted);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 6px 10px;
   display: inline-flex;
@@ -963,8 +989,8 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 .note .noteLength,
 .note .timerPill {
   background: transparent;
-  color: rgba(255, 255, 255, 0.82);
-  border-color: rgba(255, 255, 255, 0.22);
+  color: var(--text);
+  border-color: var(--border);
 }
 
 .editBox {
@@ -1007,17 +1033,17 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 
 .jobsList {
   margin-top: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: rgba(0, 0, 0, 0.14);
+  background: rgba(255, 255, 255, 0.62);
   padding: 10px 10px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--text);
 }
 
 .jobItem {
   padding: 6px 2px;
-  border-bottom: 1px dotted rgba(255, 255, 255, 0.14);
+  border-bottom: 1px dotted var(--border);
 }
 
 .jobItem:last-child {
@@ -1025,7 +1051,7 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 }
 
 .jobMeta {
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--muted);
 }
 
 .jobsSummary {
@@ -1038,15 +1064,15 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 
 .jobsKpi {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--muted);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.16);
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .jobsKpi strong {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--text);
 }
 
 .jobsFilters {
@@ -1058,9 +1084,9 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 }
 
 .jobsSelect {
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.18);
-  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
   padding: 8px 10px;
   border-radius: 12px;
   outline: none;
@@ -1085,7 +1111,7 @@ select.jobsSelect--priority option {
 }
 
 .err {
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--text);
   border-color: rgba(239, 68, 68, 0.45);
   background: rgba(239, 68, 68, 0.12);
 }
@@ -1103,8 +1129,8 @@ select.jobsSelect--priority option {
   align-items: center;
   padding: 2px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .noteCollapseActions .noteActionsWrap {
@@ -1121,10 +1147,10 @@ select.jobsSelect--priority option {
   z-index: 30;
   right: 0;
   top: calc(100% );
-  background: #121a2e;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 20px 60px rgba(17, 24, 39, 0.18);
   padding: 10px;
 }
 
