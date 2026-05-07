@@ -3801,24 +3801,26 @@ function highlightTranscriptHtml(rawText, matchSegments, { mode = 'search' } = {
   const segs = Array.isArray(matchSegments) ? matchSegments : [];
   if (!raw || segs.length === 0) return escapeHtml(raw);
 
-  const lower = raw.toLowerCase();
+  const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const ranges = [];
   for (const s of segs) {
     const needle = (s?.text ?? '').toString().trim();
     if (!needle) continue;
-    const needleLower = needle.toLowerCase();
-    // Best-effort: highlight the first occurrence, skipping overlaps.
-    let idx = lower.indexOf(needleLower);
-    while (idx >= 0) {
-      const i0 = idx;
-      const i1 = idx + needleLower.length;
-      const overlaps = ranges.some((r) => !(i1 <= r.i0 || i0 >= r.i1));
-      if (!overlaps) {
-        ranges.push({ i0, i1, seg: s });
-        break;
-      }
-      idx = lower.indexOf(needleLower, idx + 1);
+    // Best-effort: find a match allowing flexible whitespace differences (\n vs space).
+    // This avoids the common mismatch where semantic retrieval normalizes line breaks.
+    const pattern = escapeRegExp(needle).replace(/\s+/g, '\\s+');
+    let m = null;
+    try {
+      m = new RegExp(pattern, 'i').exec(raw);
+    } catch {
+      m = null;
     }
+    if (!m || typeof m.index !== 'number') continue;
+    const i0 = m.index;
+    const i1 = m.index + (m[0] ? m[0].length : needle.length);
+    const overlaps = ranges.some((r) => !(i1 <= r.i0 || i0 >= r.i1));
+    if (overlaps) continue;
+    ranges.push({ i0, i1, seg: s });
   }
   if (ranges.length === 0) return escapeHtml(raw);
   ranges.sort((a, b) => a.i0 - b.i0);
