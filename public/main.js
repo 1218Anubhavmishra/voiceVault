@@ -2645,6 +2645,9 @@ async function refreshResults(q = '') {
         expandedNoteIdsFromSearchMatch.add(item.id);
       }
 
+      const shouldRenderMatchSegments =
+        isSearch && status === 'ready' && !!(item?.matches?.length || item?.best_match);
+
       if (expandedNoteIds.has(item.id)) {
         details.hidden = false;
         note.classList.add('noteExpanded');
@@ -2652,17 +2655,22 @@ async function refreshResults(q = '') {
         btnToggle.innerHTML = VV_ICON_SVG.arrowLeft;
         btnToggle.setAttribute('aria-label', 'Collapse note');
         btnToggle.setAttribute('title', 'Collapse');
-        // Best-effort: upgrade transcript to timestamped segments (if available).
-        loadNoteSegmentsIntoUi(item.id, note, {
-          highlight: item?.matches ?? item?.best_match ?? null,
-          autoPlayMatch: false
-        })
-          .catch(() => {
-            // ignore
+        // Default view: show full transcript as a whole.
+        // Search results: render match-capable segment rows (enables per-match segment play).
+        if (shouldRenderMatchSegments) {
+          loadNoteSegmentsIntoUi(item.id, note, {
+            highlight: item?.matches ?? item?.best_match ?? null,
+            autoPlayMatch: false
           })
-          .finally(() => {
-            scheduleExpandedNoteScroll(note, isLastNote);
-          });
+            .catch(() => {
+              // ignore
+            })
+            .finally(() => {
+              scheduleExpandedNoteScroll(note, isLastNote);
+            });
+        } else {
+          scheduleExpandedNoteScroll(note, isLastNote);
+        }
         syncCollapsedTranscriptShell();
       }
       btnToggle.addEventListener('click', (e) => {
@@ -2684,16 +2692,18 @@ async function refreshResults(q = '') {
           requestAnimationFrame(() => {
             if (editBox && !editBox.hidden) updateScrollHint(editBody, scrollHint);
           });
-          loadNoteSegmentsIntoUi(item.id, note, {
-            highlight: item?.best_match ?? null,
-            autoPlayMatch: false
-          })
-            .catch(() => {
-              // ignore
+          if (shouldRenderMatchSegments) {
+            loadNoteSegmentsIntoUi(item.id, note, {
+              highlight: item?.matches ?? item?.best_match ?? null,
+              autoPlayMatch: false
             })
-            .finally(() => {
-              scheduleExpandedNoteScroll(note, isLastNote);
-            });
+              .catch(() => {
+                // ignore
+              })
+              .finally(() => {
+                scheduleExpandedNoteScroll(note, isLastNote);
+              });
+          }
         }
         syncCollapsedTranscriptShell();
       });
