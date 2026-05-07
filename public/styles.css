@@ -733,21 +733,18 @@ select {
 }
 
 @media (max-width: 560px) {
-  /* Mobile: prevent header action icons from overflowing the tile */
+  /* Mobile: keep header in flow but wrap actions to next line */
   .noteTitleRow {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-  }
-
-  .noteTitleRow > div:last-child {
-    width: 100%;
-    justify-content: space-between;
     flex-wrap: wrap;
   }
 
-  .noteHeaderActions {
+  /* Ensure the actions/timestamp block can drop to a new line */
+  .noteTitleRow > div:last-child {
+    flex: 1 1 100%;
+    width: 100%;
     justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 }
 
