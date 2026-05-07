@@ -2384,18 +2384,23 @@ async function refreshResults(q = '') {
       status === 'ready' && (item.body ?? '').toString().trim()
         ? escapeHtml(truncateNotePreviewPlain(item.body || '', 280))
         : '';
+    const collapsedTitleTextEsc = displayTitleEsc || escapeHtml((item.title ?? '').toString().trim() || 'Untitled');
+    const collapsedTitleRowHtml =
+      status === 'ready' && collapsedTitleTextEsc
+        ? `<div class="noteCollapsedTitleRow"><span class="noteCollapsedTitleText">${collapsedTitleTextEsc}</span><span class="noteCollapsedTitleSep" aria-hidden="true"></span><button class="btn vvIconBtn noteStarInline${
+            fav ? ' primary' : ''
+          }" data-fav="${item.id}" type="button" aria-label="${
+            fav ? 'Unstar note' : 'Star note'
+          }" title="${fav ? 'Starred' : 'Star'}">${fav ? VV_ICON_SVG.starOn : VV_ICON_SVG.starOff}</button></div>`
+        : '';
     const savedCardInnerHtml =
-      status === 'ready' && (displayTitleEsc || collapsedBodyPreview)
-        ? `${titleBodySepHtml}${
+      status === 'ready' && (collapsedTitleRowHtml || collapsedBodyPreview)
+        ? `${collapsedTitleRowHtml}${
             collapsedBodyPreview ? `<div class="noteCollapsedBodyPreview">${collapsedBodyPreview}</div>` : ''
           }`
         : '';
     const collapsedTranscriptHtml = savedCardInnerHtml
-      ? `<div class="noteSavedCard noteCollapsedTranscriptShell" data-collapsed-expand="1" role="button" tabindex="0" aria-label="Expand note"><button class="btn vvIconBtn noteStarBtn${
-          fav ? ' noteStarBtn--on primary' : ''
-        }" data-fav="${item.id}" type="button" aria-label="${
-          fav ? 'Unstar note' : 'Star note'
-        }" title="${fav ? 'Starred' : 'Star'}">${fav ? VV_ICON_SVG.starOn : VV_ICON_SVG.starOff}</button>${savedCardInnerHtml}</div>`
+      ? `<div class="noteSavedCard noteCollapsedTranscriptShell" data-collapsed-expand="1" role="button" tabindex="0" aria-label="Expand note">${savedCardInnerHtml}</div>`
       : '';
 
     const hasCollapsedShell = !!collapsedTranscriptHtml;

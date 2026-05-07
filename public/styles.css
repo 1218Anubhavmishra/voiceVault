@@ -714,7 +714,7 @@ select {
 
 .results {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 12px;
   align-items: start;
   margin-top: 0;
@@ -995,6 +995,10 @@ select {
   margin-bottom: 2px;
 }
 
+.noteSavedCard.noteCollapsedTranscriptShell .noteDisplayTitleBlock {
+  font-size: 17px;
+}
+
 hr.noteTitleBodyDivider {
   border: 0;
   border-top: 1px dashed var(--border);
@@ -1012,7 +1016,6 @@ hr.noteTitleBodyDivider.editTitleBodySep {
   border-radius: 14px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.62);
-  position: relative;
 }
 
 /* Saved card is the primary surface (first in summary); no extra gap above it. */
@@ -1042,26 +1045,43 @@ hr.noteTitleBodyDivider.editTitleBodySep {
   overflow: hidden;
 }
 
-/* Collapsed saved-card star overlay (top-right; always visible) */
-.noteStarBtn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+/* Collapsed saved-card: title + star on one line */
+.noteCollapsedTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.noteCollapsedTitleText {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.35;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noteCollapsedTitleSep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  opacity: 0.85;
+  flex: 0 0 auto;
+}
+
+.noteStarInline {
   min-width: 30px;
   min-height: 30px;
   padding-inline: 6px;
   border-radius: 10px;
-  opacity: 1;
-  pointer-events: auto;
 }
 
-.noteStarBtn .vvIcon {
+.noteStarInline .vvIcon {
   width: 16px;
   height: 16px;
-}
-
-.noteStarBtn.noteStarBtn--on {
-  opacity: 1;
 }
 
 .segRow {
