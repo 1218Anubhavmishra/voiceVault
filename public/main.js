@@ -1260,6 +1260,50 @@ function setSearchPanelOpen(open, { focusQuery = false } = {}) {
   }
 }
 
+function resetSearchAndReturnToDefault({ closePanel = true } = {}) {
+  try {
+    if (query.isRecording) return;
+  } catch {
+    // ignore
+  }
+
+  try {
+    if (qEl) qEl.value = '';
+  } catch {
+    // ignore
+  }
+
+  try {
+    resetRecorder(query);
+  } catch {
+    // ignore
+  }
+
+  try {
+    if (previewQuery) {
+      previewQuery.hidden = true;
+      previewQuery.src = '';
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    btnSearch.hidden = true;
+    btnSearch.disabled = true;
+  } catch {
+    // ignore
+  }
+
+  if (closePanel) setSearchPanelOpen(false);
+
+  refreshResults('').catch(() => {
+    // ignore
+  });
+
+  syncVisibility();
+}
+
 function setAdvancedSearchOpen(open) {
   advancedSearchOpen = !!open;
   if (advancedSearchBodyEl) advancedSearchBodyEl.hidden = !advancedSearchOpen;
@@ -1368,7 +1412,7 @@ function wire() {
 
   btnSearchCloseEl?.addEventListener('click', (e) => {
     e.preventDefault();
-    setSearchPanelOpen(false);
+    resetSearchAndReturnToDefault({ closePanel: true });
   });
 
   btnFloatSearchEl?.addEventListener('click', (e) => {
@@ -1582,17 +1626,8 @@ function wire() {
     btnSearch.hidden = shouldHide;
     btnSearch.disabled = shouldHide;
 
-    // If user clears search transcript, treat it as "finished / wrong search":
-    // - show all notes
-    // - clear search audio preview and reset search recorder state
-    if (qEl.value.trim().length === 0) {
-      resetRecorder(query);
-      previewQuery.hidden = true;
-      previewQuery.src = '';
-      refreshResults('').catch(() => {
-        // ignore
-      });
-    }
+    // If user clears search, reset fully and return to default Saved Notes view.
+    if (qEl.value.trim().length === 0) resetSearchAndReturnToDefault({ closePanel: true });
 
     // Keep Quick answer enabled/disabled in sync with typed text.
     syncVisibility();
