@@ -12,7 +12,8 @@ function envSttProviderRaw() {
 export function defaultSttProviderFromEnv() {
   const v = envSttProviderRaw().toLowerCase().replace(/-/g, '_');
   if (v === 'elevenlabs' || v === 'eleven_labs') return 'elevenlabs';
-  return 'whisper';
+  // Default to ElevenLabs so transcript/segments generation does not depend on Whisper.
+  return 'elevenlabs';
 }
 
 /** Normalize client/body `stt_provider` plus env default. */

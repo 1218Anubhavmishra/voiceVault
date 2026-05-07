@@ -2861,7 +2861,8 @@ async function refreshResults(q = '') {
             // ignore
           }
         await audio.play();
-          // Follow along while playing full audio (row tint works even without word spans).
+          // Follow along word-by-word (ElevenLabs word timestamps).
+          await ensureNoteWordSpans(item.id, note);
           startWordFollowAll(audio, note.querySelector('.noteBody'));
         for (const b of playBtns) {
           try {
@@ -2933,6 +2934,13 @@ async function refreshResults(q = '') {
           }
 
           s.classList.add('playing');
+          // Ensure we can highlight each word while the match-range plays.
+          try {
+            await ensureNoteWordSpans(item.id, note);
+            startWordFollowAll(audio, note.querySelector('.noteBody'));
+          } catch {
+            // ignore
+          }
           const cleanup = () => {
             try {
               s.classList.remove('playing');
@@ -3839,6 +3847,65 @@ function highlightTranscriptHtml(rawText, matchSegments, { mode = 'search' } = {
   }
   if (cur < raw.length) out.push(escapeHtml(raw.slice(cur)));
   return out.join('');
+}
+
+function renderWordsHtmlFromSegments(segments) {
+  const segs = Array.isArray(segments) ? segments : [];
+  const words = [];
+  for (const s of segs) {
+    const ws = Array.isArray(s?.words) ? s.words : [];
+    for (const w of ws) {
+      const start = Number(w?.start);
+      const end = Number(w?.end);
+      const word = (w?.word ?? '').toString();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !word) continue;
+      words.push({ start, end, word });
+      if (words.length >= 60_000) break;
+    }
+    if (words.length >= 60_000) break;
+  }
+  if (words.length === 0) return '';
+  words.sort((a, b) => a.start - b.start || a.end - b.end);
+  return words
+    .map(
+      (w) =>
+        `<span class="word" data-ws="${escapeHtml(String(w.start))}" data-we="${escapeHtml(
+          String(w.end)
+        )}">${escapeHtml(w.word)}</span>`
+    )
+    .join('');
+}
+
+async function ensureNoteWordSpans(noteId, noteEl) {
+  try {
+    if (noteEl?.dataset?.wordsLoaded === '1') return true;
+  } catch {
+    // ignore
+  }
+  const detailsEl = noteEl?.querySelector?.('.noteDetails');
+  const bodyEl = noteEl?.querySelector?.('.noteBody');
+  if (!detailsEl || !bodyEl || detailsEl.hidden) return false;
+
+  const resp = await fetch(`/api/notes/${encodeURIComponent(noteId)}`);
+  if (!resp.ok) return false;
+  const data = await resp.json();
+  const segments = Array.isArray(data?.segments) ? data.segments : [];
+  const wordsHtml = renderWordsHtmlFromSegments(segments);
+  if (!wordsHtml) return false;
+
+  const displayTitleRaw = (data?.display_title ?? '').toString().trim();
+  const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
+  const titleBodySepHtml = displayTitleEsc
+    ? `<div class="noteDisplayTitleBlock"><span class="noteDisplayTitleText">${displayTitleEsc}</span></div><hr class="noteTitleBodyDivider" />`
+    : '';
+
+  bodyEl.innerHTML = titleBodySepHtml + wordsHtml;
+  try {
+    noteEl.dataset.wordsLoaded = '1';
+  } catch {
+    // ignore
+  }
+  return true;
 }
 
 function firstLineLooksLikeUploadedSourceFilename(line) {

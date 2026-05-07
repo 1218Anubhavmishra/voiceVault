@@ -1,7 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { transcribeAudioWithElevenLabs } from './elevenlabs-stt.js';
+import { transcribeAudioWithElevenLabs } from './elevenlabs-stt-vv.js';
 import { defaultSttProviderFromEnv } from './stt-providers.js';
 
 let _ffmpegBin;
@@ -194,8 +194,14 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
     }
   }
 
+  // voiceVault now uses ElevenLabs STT for transcript + segmentation (word timestamps).
+  // Keep the `provider` param for API compatibility, but force ElevenLabs to avoid Whisper dependency.
   const pv = (provider ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
-  if (pv === 'elevenlabs' || pv === 'eleven_labs') {
+  if (pv === 'whisper' || !pv || pv === 'default') {
+    provider = 'elevenlabs';
+  }
+  const pv2 = (provider ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
+  if (pv2 === 'elevenlabs' || pv2 === 'eleven_labs') {
     try {
       return await transcribeAudioWithElevenLabs(audioForStt, { language });
     } finally {
