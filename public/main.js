@@ -2414,7 +2414,12 @@ async function refreshResults(q = '') {
     const titleBodySepHtml = displayTitleEsc
       ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
       : '';
-    const body = escapeHtml(item.body || '');
+    const rawBody = (item.body ?? '').toString();
+    const matchSegs = isSearch ? normalizeMatchSegments(item?.matches ?? item?.best_match ?? null) : [];
+    const body =
+      isSearch && matchSegs.length
+        ? highlightTranscriptHtml(rawBody, matchSegs, { mode: 'search' })
+        : escapeHtml(rawBody);
     const collapsedBodyPreview =
       status === 'ready' && (item.body ?? '').toString().trim()
         ? escapeHtml(truncateNotePreviewPlain(item.body || '', 280))
@@ -2645,9 +2650,6 @@ async function refreshResults(q = '') {
         expandedNoteIdsFromSearchMatch.add(item.id);
       }
 
-      const shouldRenderMatchSegments =
-        isSearch && status === 'ready' && !!(item?.matches?.length || item?.best_match);
-
       if (expandedNoteIds.has(item.id)) {
         details.hidden = false;
         note.classList.add('noteExpanded');
@@ -2655,22 +2657,7 @@ async function refreshResults(q = '') {
         btnToggle.innerHTML = VV_ICON_SVG.arrowLeft;
         btnToggle.setAttribute('aria-label', 'Collapse note');
         btnToggle.setAttribute('title', 'Collapse');
-        // Default view: show full transcript as a whole.
-        // Search results: render match-capable segment rows (enables per-match segment play).
-        if (shouldRenderMatchSegments) {
-          loadNoteSegmentsIntoUi(item.id, note, {
-            highlight: item?.matches ?? item?.best_match ?? null,
-            autoPlayMatch: false
-          })
-            .catch(() => {
-              // ignore
-            })
-            .finally(() => {
-              scheduleExpandedNoteScroll(note, isLastNote);
-            });
-        } else {
-          scheduleExpandedNoteScroll(note, isLastNote);
-        }
+        scheduleExpandedNoteScroll(note, isLastNote);
         syncCollapsedTranscriptShell();
       }
       btnToggle.addEventListener('click', (e) => {
@@ -2692,18 +2679,6 @@ async function refreshResults(q = '') {
           requestAnimationFrame(() => {
             if (editBox && !editBox.hidden) updateScrollHint(editBody, scrollHint);
           });
-          if (shouldRenderMatchSegments) {
-            loadNoteSegmentsIntoUi(item.id, note, {
-              highlight: item?.matches ?? item?.best_match ?? null,
-              autoPlayMatch: false
-            })
-              .catch(() => {
-                // ignore
-              })
-              .finally(() => {
-                scheduleExpandedNoteScroll(note, isLastNote);
-              });
-          }
         }
         syncCollapsedTranscriptShell();
       });
@@ -2928,6 +2903,55 @@ async function refreshResults(q = '') {
         // ignore
       }
     });
+    }
+
+    // Search highlight playback: clicking a highlighted match plays just that range.
+    if (isSearch && status === 'ready' && audio) {
+      const hitSpans = Array.from(note.querySelectorAll('.vvSearchHit[data-seg-start][data-seg-end]'));
+      for (const s of hitSpans) {
+        s.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          closeAllActionMenus();
+
+          const start = Number(s.getAttribute('data-seg-start') || '0');
+          const end = Number(s.getAttribute('data-seg-end') || '0');
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+
+          // Clear prior playing highlight.
+          for (const other of hitSpans) other.classList.remove('playing');
+
+          const wantSrc = `/api/notes/${encodeURIComponent(item.id)}/audio`;
+          audio.hidden = false;
+          if (audio.src !== new URL(wantSrc, window.location.origin).toString()) {
+            audio.src = wantSrc;
+            try {
+              audio.load();
+            } catch {
+              // ignore
+            }
+          }
+
+          s.classList.add('playing');
+          const cleanup = () => {
+            try {
+              s.classList.remove('playing');
+            } catch {
+              // ignore
+            }
+          };
+          audio.addEventListener('pause', cleanup, { once: true });
+          audio.addEventListener('ended', cleanup, { once: true });
+
+          playAudioRange(audio, start, end, { loop: loopSegments, rate: playbackRate });
+          try {
+            const loopBtn = note.querySelector(`button[data-loop="${CSS.escape(String(item.id))}"]`);
+            if (loopBtn) loopBtn.hidden = false;
+          } catch {
+            // ignore
+          }
+        });
+      }
     }
 
     const editTitle = note.querySelector('.editTitle');
@@ -3750,6 +3774,69 @@ function normalizeHighlightList(highlight) {
   const end = Number(highlight?.end);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
   return [{ start, end }];
+}
+
+function normalizeMatchSegments(matches, { limit = 12 } = {}) {
+  const out = [];
+  const pushOne = (m) => {
+    const start = Number(m?.start);
+    const end = Number(m?.end);
+    const text = (m?.text ?? '').toString().trim();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) return;
+    out.push({ start, end, text });
+  };
+  if (Array.isArray(matches)) {
+    for (const m of matches) {
+      pushOne(m);
+      if (out.length >= limit) break;
+    }
+  } else if (matches) {
+    pushOne(matches);
+  }
+  return out;
+}
+
+function highlightTranscriptHtml(rawText, matchSegments, { mode = 'search' } = {}) {
+  const raw = (rawText ?? '').toString();
+  const segs = Array.isArray(matchSegments) ? matchSegments : [];
+  if (!raw || segs.length === 0) return escapeHtml(raw);
+
+  const lower = raw.toLowerCase();
+  const ranges = [];
+  for (const s of segs) {
+    const needle = (s?.text ?? '').toString().trim();
+    if (!needle) continue;
+    const needleLower = needle.toLowerCase();
+    // Best-effort: highlight the first occurrence, skipping overlaps.
+    let idx = lower.indexOf(needleLower);
+    while (idx >= 0) {
+      const i0 = idx;
+      const i1 = idx + needleLower.length;
+      const overlaps = ranges.some((r) => !(i1 <= r.i0 || i0 >= r.i1));
+      if (!overlaps) {
+        ranges.push({ i0, i1, seg: s });
+        break;
+      }
+      idx = lower.indexOf(needleLower, idx + 1);
+    }
+  }
+  if (ranges.length === 0) return escapeHtml(raw);
+  ranges.sort((a, b) => a.i0 - b.i0);
+
+  const out = [];
+  let cur = 0;
+  for (const r of ranges) {
+    if (r.i0 > cur) out.push(escapeHtml(raw.slice(cur, r.i0)));
+    const cls = mode === 'playback' ? 'vvSearchHit playing' : 'vvSearchHit search';
+    out.push(
+      `<span class="${cls}" data-seg-start="${escapeHtml(String(r.seg.start))}" data-seg-end="${escapeHtml(
+        String(r.seg.end)
+      )}" title="Play matched segment">${escapeHtml(raw.slice(r.i0, r.i1))}</span>`
+    );
+    cur = r.i1;
+  }
+  if (cur < raw.length) out.push(escapeHtml(raw.slice(cur)));
+  return out.join('');
 }
 
 function firstLineLooksLikeUploadedSourceFilename(line) {
