@@ -156,6 +156,21 @@ input[type='file'] {
   padding: 28px 18px 48px;
 }
 
+/* Mobile: use more horizontal space for saved notes tiles */
+@media (max-width: 520px) {
+  .app {
+    padding: 18px 10px 34px;
+  }
+
+  .topbar {
+    padding: 14px 12px;
+  }
+
+  .results {
+    gap: 10px;
+  }
+}
+
 .topbar {
   display: flex;
   align-items: flex-end;
