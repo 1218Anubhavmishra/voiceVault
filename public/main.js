@@ -11,7 +11,6 @@ const noteTimerEl = document.getElementById('noteTimer');
 const noteDetectedLangEl = document.getElementById('noteDetectedLang');
 const noteLanguageWrapEl = document.getElementById('noteLanguageWrap');
 const noteLanguageEl = document.getElementById('noteLanguage');
-const btnGenerateFullPreviewEl = document.getElementById('btnGenerateFullPreview');
 const noteLangCountdownWrapEl = document.getElementById('noteLangCountdownWrap');
 const noteLangCountdownPillEl = document.getElementById('noteLangCountdownPill');
 const uploadNoteEl = document.getElementById('uploadNote');
@@ -72,6 +71,7 @@ async function runNotePostRecordTranscriptionPipeline(source) {
       setNewNoteTranscriptionStages({ live: 'done', full: 'pending', showRow: true });
     } else if (fromUpload) {
       setNewNoteTranscriptionStages({ live: 'skipped', full: 'pending', showRow: true });
+      if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
     }
 
     clearLiveTxPreviewCountdown();
@@ -143,6 +143,26 @@ const jobsBackoffBaseSecEl = document.getElementById('jobsBackoffBaseSec');
 const jobsBackoffMaxSecEl = document.getElementById('jobsBackoffMaxSec');
 const btnJobsRetryAllEl = document.getElementById('btnJobsRetryAll');
 const btnJobsUnlockNowEl = document.getElementById('btnJobsUnlockNow');
+
+/** Shared inline SVGs for icon toolbar buttons (`currentColor`, 24×24). */
+const VV_ICON_SVG = {
+  save: `<svg class="vvIcon vvIcon--save" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4ZM5 19V9h14v10H5Zm8-4h4v-4h-4v4ZM7 7h8v6H7V7Z"/></svg>`,
+  stop: `<svg class="vvIcon vvIcon--stop" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>`,
+  play: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5v14l11-7-11-7z"/></svg>`,
+  playSegment: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-2 14.5v-9l7 4.5-7 4.5Z"/></svg>`,
+  arrowLeft: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M14 7 9 12l5 5 1.41-1.41L11.83 12l3.58-3.59L14 7z"/></svg>`,
+  chevronDown: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>`,
+  chevronUp: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7.41 15.41 12 10.83l4.59 4.58L18 14l-6-6-6 6 1.41 1.41z"/></svg>`,
+  starOn: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="m12 17.27 6.18 3.73-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>`,
+  starOff: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="m22 9.24-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24Zm-10 6.15-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.02 4.38.38-3.32 2.88 1 4.28L12 15.39Z"/></svg>`,
+  download: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 20h14v-2H5v2Zm7-18a1 1 0 0 1 1 1v9.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4.01 4a1 1 0 0 1-1.38 0l-4.01-4a1 1 0 1 1 1.4-1.42l2.3 2.3V3a1 1 0 0 1 1-1Z"/></svg>`,
+  doc: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v2H8v-2Zm0 4h8v2H8v-2Zm0-8h5v2H8V8Z"/></svg>`,
+  edit: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm2.92 2.83H5v-.92l9.06-9.06.92.92L5.92 20.08ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>`,
+  applyTick: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="evenodd" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z" clip-rule="evenodd"/></svg>`,
+  cancel: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`,
+  delete: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4zm-10 10h2v5h-2v-5zm4 0h2v5h-2v-5z"/></svg>`,
+  reprocess: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4 8 8 0 1 0 14.05 19.7l-1.43-1.43A6 6 0 1 1 12 6c1.62 0 3.12.65 4.24 1.76L13 11h7V4l-2.35 2.35z"/></svg>`
+};
 
 const jobDetailsOverlayEl = document.getElementById('jobDetailsOverlay');
 const jobDetailsPreEl = document.getElementById('jobDetailsPre');
@@ -347,6 +367,7 @@ function revealNoteLanguageWrap() {
 function applyDetectedLanguageToPillAndSelect(apiLang) {
   const raw = (apiLang ?? '').toString().trim();
   if (!raw) return;
+  noteLastDetectedApiLang = raw;
   const selectVal = mapApiLanguageToSelectValue(raw);
   const meta = formatNoteLanguageMeta(raw) || selectVal || raw;
   if (noteDetectedLangEl) {
@@ -354,6 +375,7 @@ function applyDetectedLanguageToPillAndSelect(apiLang) {
     noteDetectedLangEl.textContent = meta ? `Lang: ${meta}` : 'Lang: —';
   }
   revealNoteLanguageWrap();
+  const prevSelect = (noteLanguageEl?.value ?? '').toString().trim();
   if (noteLanguageEl) {
     noteLangProgrammatic = true;
     noteLanguageEl.value = selectVal;
@@ -363,6 +385,13 @@ function applyDetectedLanguageToPillAndSelect(apiLang) {
     } catch {
       // ignore
     }
+  }
+  const nextSelect = (noteLanguageEl?.value ?? '').toString().trim();
+  if (note.audioBlob && !note.isRecording) {
+    // Avoid re-running full STT when a second detect pass confirms the same language after success.
+    if (noteFullPreviewGateOk && prevSelect === nextSelect) return;
+    const restart = !!transcribeFullPreviewInFlight && prevSelect !== nextSelect;
+    void transcribeFullPreview({ restart }).then(() => syncVisibility());
   }
 }
 
@@ -396,15 +425,14 @@ function noteLanguageReadyForFullPreview() {
 }
 
 function updateGenerateFullPreviewButtonVisibility() {
-  if (!btnGenerateFullPreviewEl) return;
-  btnGenerateFullPreviewEl.hidden =
-    !note.audioBlob || note.isRecording || noteFullPreviewGateOk || !noteLanguageReadyForFullPreview();
+  // Generate-full-transcript control removed from UI; full preview is auto-started from language detect / selection.
   syncLiveTxLangHeader();
 }
 
 /** Before a new mic session: hide language row, clear hint, reset pill until detection runs. */
 function resetNewNoteLanguageForRecording() {
   noteUserOverrodeLanguage = false;
+  noteLastDetectedApiLang = '';
   if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = true;
   if (noteLanguageEl) {
     noteLangProgrammatic = true;
@@ -673,11 +701,17 @@ let noteLangProgrammatic = false;
 /** Current blob came from the mic (vs upload) — drives stage labels. */
 let noteUsedMicForCurrentBlob = false;
 
+/** Raw language string from last successful `/api/detect-language` (used when the dropdown has no matching option). */
+let noteLastDetectedApiLang = '';
+
 /** Once the user changes `#noteLanguage` manually, auto-detect must not overwrite their choice. */
 let noteUserOverrodeLanguage = false;
 
 /** In-flight full preview so Save can await the same run started after recording (avoids queued save when preview is still running). */
 let transcribeFullPreviewInFlight = null;
+
+/** Abort the current `/api/transcribe` when language changes or a new full preview is forced. */
+let fullPreviewAbortController = null;
 
 /** While any note in the current list is processing, poll so transcript appears when STT actually finishes (timer ≠ completion). */
 let processingNotesPollId = null;
@@ -902,7 +936,7 @@ function openChangeLanguageDialog(opts, onApply) {
         </select>
       </label>
       <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap">
-        <button type="button" class="btn vvChangeLangCancel">Cancel</button>
+        <button type="button" class="btn vvIconBtn vvChangeLangCancel" aria-label="Cancel" title="Cancel">${VV_ICON_SVG.cancel}</button>
         <button type="button" class="btn primary vvChangeLangApply">Apply &amp; re-transcribe</button>
       </div>
     </div>
@@ -1260,7 +1294,6 @@ try {
   // ignore
 }
 
-setStatus('Ready');
 await refreshServerPreferredSttProvider();
 wire();
 setSemanticMode(semanticMode);
@@ -1285,13 +1318,11 @@ window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
+  // Ensure New note language UI is clean on refresh/reload.
   stopNoteLangDetectCountdown();
-  if (noteLanguageWrapEl) noteLanguageWrapEl.hidden = true;
-  if (noteLanguageEl) {
-    noteLangProgrammatic = true;
-    noteLanguageEl.value = '';
-    noteLangProgrammatic = false;
-  }
+  noteLangDetectionComplete = false;
+  if (note) note.liveDetectedLang = '';
+  resetNewNoteLanguageForRecording();
 
   // Saved searches + folder/tag filtering removed.
 
@@ -1396,13 +1427,6 @@ function wire() {
   );
   btnSaveNote.addEventListener('click', saveNote);
 
-  btnGenerateFullPreviewEl?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    if (!note.audioBlob || note.isRecording) return;
-    await transcribeFullPreview();
-    syncVisibility();
-  });
-
   liveTxUpEl?.addEventListener('click', (e) => {
     e.preventDefault();
     liveTranscriptEl?.scrollBy({ top: -220, behavior: 'smooth' });
@@ -1417,7 +1441,7 @@ function wire() {
     syncVisibility();
   });
 
-  noteLanguageEl?.addEventListener('change', () => {
+  noteLanguageEl?.addEventListener('change', async () => {
     if (noteLangProgrammatic) return;
     noteUserOverrodeLanguage = true;
     lastFullPreviewBundle = null;
@@ -1439,6 +1463,12 @@ function wire() {
     }
     updateGenerateFullPreviewButtonVisibility();
     syncVisibility();
+
+    // Auto-start/restart full preview when a language is selected.
+    if (v && note.audioBlob && !note.isRecording) {
+      await transcribeFullPreview({ restart: true });
+      syncVisibility();
+    }
   });
 
   uploadNoteBtnEl?.addEventListener('click', (e) => {
@@ -1462,7 +1492,10 @@ function wire() {
 
     resetRecorder(note);
     resetNewNoteLanguageForRecording();
-    applyStickyNoteLanguageFromStorage();
+    stopNoteLangDetectCountdown();
+    noteLangDetectionComplete = false;
+    note.liveDetectedLang = '';
+    // Switching modes (record → upload) should reset language back to Auto-detect.
     noteUsedMicForCurrentBlob = false;
     note.audioBlob = f;
     note.sourceFilename = f.name;
@@ -1584,7 +1617,7 @@ function wire() {
     try {
       await fetch('/api/ingestion/pause', { method: 'POST' });
       setStatus('Processing paused');
-      await refreshIngestionUi();
+      await refreshIngestionUi({ toggleList: false, forceShow: true });
     } catch {
       // ignore
     } finally {
@@ -1598,7 +1631,7 @@ function wire() {
     try {
       await fetch('/api/ingestion/resume', { method: 'POST' });
       setStatus('Processing resumed');
-      await refreshIngestionUi();
+      await refreshIngestionUi({ toggleList: false, forceShow: true });
     } catch {
       // ignore
     } finally {
@@ -1767,7 +1800,7 @@ async function refreshLibraryMeta() {
   if (metaFoldersListEl) {
     metaFoldersListEl.innerHTML = foldersCache.length
       ? foldersCache
-          .map((f) => `<div style="display:flex; justify-content:space-between; gap:10px"><span>${escapeHtml(String(f.name))}</span><button class="btn err" data-del-folder="${escapeHtml(String(f.id))}" type="button">Delete</button></div>`)
+          .map((f) => `<div style="display:flex; justify-content:space-between; gap:10px"><span>${escapeHtml(String(f.name))}</span><button class="btn vvIconBtn err" data-del-folder="${escapeHtml(String(f.id))}" type="button" aria-label="Delete folder" title="Delete">${VV_ICON_SVG.delete}</button></div>`)
           .join('')
       : `<div style="opacity:0.8">No folders yet</div>`;
     metaFoldersListEl.querySelectorAll?.('button[data-del-folder]')?.forEach((b) => {
@@ -1788,7 +1821,7 @@ async function refreshLibraryMeta() {
   if (metaTagsListEl) {
     metaTagsListEl.innerHTML = tagsCache.length
       ? tagsCache
-          .map((t) => `<div style="display:flex; justify-content:space-between; gap:10px"><span>${escapeHtml(String(t.name))}</span><button class="btn err" data-del-tag="${escapeHtml(String(t.id))}" type="button">Delete</button></div>`)
+          .map((t) => `<div style="display:flex; justify-content:space-between; gap:10px"><span>${escapeHtml(String(t.name))}</span><button class="btn vvIconBtn err" data-del-tag="${escapeHtml(String(t.id))}" type="button" aria-label="Delete tag" title="Delete">${VV_ICON_SVG.delete}</button></div>`)
           .join('')
       : `<div style="opacity:0.8">No tags yet</div>`;
     metaTagsListEl.querySelectorAll?.('button[data-del-tag]')?.forEach((b) => {
@@ -1921,9 +1954,9 @@ async function startRecording(state, { onUi, label }) {
       noteUsedMicForCurrentBlob = true;
       state.sourceFilename = '';
       state.liveTranscribeTail = Promise.resolve();
-      ensureAutoTitleFilled(note);
+      // Switching modes (upload → record) should reset the default title.
+      titleEl.value = defaultRecordingTitle();
       resetNewNoteLanguageForRecording();
-      startNoteLangDetectCountdown();
       if (liveTranscriptEl) {
         liveTranscriptEl.readOnly = true;
         liveTranscriptEl.disabled = false;
@@ -1953,6 +1986,15 @@ async function startRecording(state, { onUi, label }) {
       state.durationMs = Math.max(0, Date.now() - (state.startedAtMs || Date.now()));
       stopTimer(state, label === 'note' ? noteTimerEl : queryTimerEl);
       if (label === 'note') {
+        // Only start the auto-detect countdown after Stop is pressed (i.e., after recording ends).
+        // If live detection already found a language (and user didn't override), apply it immediately.
+        const liveLang = (state?.liveDetectedLang ?? '').toString().trim();
+        const manualHint = (noteLanguageEl?.value ?? '').toString().trim();
+        if (!noteUserOverrodeLanguage && !manualHint && liveLang) {
+          applyDetectedLanguageToPillAndSelect(liveLang);
+        } else if (noteLanguageWrapEl?.hidden) {
+          startNoteLangDetectCountdown();
+        }
         notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('recording_stop').finally(() => {
           notePostRecordPipelinePromise = null;
         });
@@ -2135,12 +2177,19 @@ async function saveNote() {
 }
 
 async function refreshResults(q = '') {
+  const vvT0 = performance.now();
   const prevScroll = resultsEl.scrollTop;
   // Any "Search" refresh should show the results list (Quick answer may hide it separately).
   resultsEl.hidden = false;
   resultsEl.innerHTML = '';
   const isSearch = !!(q && q.trim());
   const queryText = (q ?? '').toString().trim();
+  let vvFetchMs = 0;
+  let vvRenderMs = 0;
+
+  if (!isSearch) {
+    setStatus('Displaying Saved Notes…');
+  }
 
   if (!isSearch) {
     for (const id of expandedNoteIdsFromSearchMatch) {
@@ -2154,15 +2203,31 @@ async function refreshResults(q = '') {
   let items = [];
   if (!isSearch) {
     // Empty query: show saved notes (keyword path).
+    const fetchT0 = performance.now();
     const url = new URL('/api/notes', window.location.origin);
   const resp = await fetch(url.toString());
   if (!resp.ok) {
       resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
+    setStatus(`Failed to load notes (${resp.status})`, true);
     return;
   }
   const data = await resp.json();
+    vvFetchMs = performance.now() - fetchT0;
     items = Array.isArray(data?.items) ? data.items : [];
+    // Pin starred notes to the top in the normal Saved Notes view.
+    try {
+      const withIdx = items.map((it, idx) => ({ it, idx }));
+      withIdx.sort((a, b) => {
+        const af = Number(a?.it?.is_favorite ?? 0) ? 1 : 0;
+        const bf = Number(b?.it?.is_favorite ?? 0) ? 1 : 0;
+        if (af !== bf) return bf - af;
+        return (a?.idx ?? 0) - (b?.idx ?? 0);
+      });
+      items = withIdx.map((x) => x.it);
+    } catch {
+      // ignore
+    }
   } else {
     // Hybrid blend: semantic + keyword (FTS).
     const urlSem = new URL('/api/semantic', window.location.origin);
@@ -2176,6 +2241,7 @@ async function refreshResults(q = '') {
     if (!semResp.ok && !ftsResp.ok) {
       resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
+      setStatus('Failed to load search results', true);
       return;
     }
     const semJson = await safeJson(semResp);
@@ -2274,6 +2340,7 @@ async function refreshResults(q = '') {
   if (items.length === 0) {
     resultsEl.innerHTML = `<div class="note resultsBanner"><div class="pill">No results</div></div>`;
     syncProcessingNotesPoll([]);
+    if (!isSearch) setStatus('Ready');
     return;
   }
 
@@ -2285,6 +2352,7 @@ async function refreshResults(q = '') {
 
   const hideReprocessWhileBusy = items.some((it) => (it?.status ?? '').toString() === 'processing');
 
+  const renderT0 = performance.now();
   for (let idx = 0; idx < items.length; idx += 1) {
     const item = items[idx];
     const isLastNote = idx === items.length - 1;
@@ -2323,7 +2391,11 @@ async function refreshResults(q = '') {
           }`
         : '';
     const collapsedTranscriptHtml = savedCardInnerHtml
-      ? `<div class="noteSavedCard noteCollapsedTranscriptShell" data-collapsed-expand="1" role="button" tabindex="0" aria-label="Expand note">${savedCardInnerHtml}</div>`
+      ? `<div class="noteSavedCard noteCollapsedTranscriptShell" data-collapsed-expand="1" role="button" tabindex="0" aria-label="Expand note"><button class="btn vvIconBtn noteStarBtn${
+          fav ? ' noteStarBtn--on primary' : ''
+        }" data-fav="${item.id}" type="button" aria-label="${
+          fav ? 'Unstar note' : 'Star note'
+        }" title="${fav ? 'Starred' : 'Star'}">${fav ? VV_ICON_SVG.starOn : VV_ICON_SVG.starOff}</button>${savedCardInnerHtml}</div>`
       : '';
 
     const hasCollapsedShell = !!collapsedTranscriptHtml;
@@ -2367,28 +2439,20 @@ async function refreshResults(q = '') {
       retranscribeFallback: isRetranscribeQueue
     });
 
-    const actionsListHtml = `
-                       <button class="btn" data-play="${item.id}">Play Audio</button>
-                       <button class="btn" data-dl-audio="${item.id}">Download Audio</button>
-                       <button class="btn" data-dl-text="${item.id}">Download Transcript</button>
-                       ${
-                         status === 'error' || !hideReprocessWhileBusy
-                           ? `<button class="btn" data-reprocess="${item.id}" type="button" title="Re-run transcription (e.g. fix missing language)">Reprocess</button>
-                              <button class="btn" data-change-lang="${item.id}" type="button" title="Set transcription language hint and re-run">Change language</button>`
-                           : ''
-                       }
-                       <button class="btn" data-edit="${item.id}">Edit</button>
-                       <button class="btn" data-delete="${item.id}">Delete Note</button>`;
-
-    const readyActionsStackHtml = `
-                 <div class="noteActionsWrap" data-actions-wrap="${item.id}">
-                   <button class="btn noteActionsChevron" data-actions-toggle="${item.id}" aria-label="Toggle actions">▼</button>
-                   <div class="noteActions" data-actions-menu="${item.id}" hidden>
-                     <div class="noteActionsList">
-                       ${actionsListHtml}
-        </div>
-      </div>
-                 </div>`;
+    const headerActionsHtml =
+      status === 'ready' || status === 'error'
+        ? `<span class="noteHeaderActions" style="display:inline-flex; align-items:center; gap:8px">
+             <button class="btn vvIconBtn" data-play="${item.id}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button>
+             <button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>
+             <button class="btn vvIconBtn" data-dl-text="${item.id}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button>
+             <button class="btn vvIconBtn" data-edit="${item.id}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button>
+             ${
+               status === 'error' || !hideReprocessWhileBusy
+                 ? `<button class="btn vvIconBtn" data-reprocess="${item.id}" type="button" aria-label="Reprocess note" title="Reprocess">${VV_ICON_SVG.reprocess}</button>`
+                 : ''
+             }
+           </span>`
+        : '';
 
     const noteDetailsHtml = `
       <div class="noteDetails" hidden>
@@ -2404,21 +2468,13 @@ async function refreshResults(q = '') {
           }</div>
         </div>
 
-        <div class="row notePlaybackRow" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap">
-          <label class="label" style="margin:0; display:flex; align-items:center; gap:10px">
-            <span style="font-size:12px; color:rgba(0,0,0,0.72); font-weight:750">Speed</span>
-            <select class="jobsSelect" data-rate="${item.id}">
-              <option value="0.75">0.75×</option>
-              <option value="1">1×</option>
-              <option value="1.25">1.25×</option>
-              <option value="1.5">1.5×</option>
-              <option value="2">2×</option>
-            </select>
-          </label>
-          <button class="btn" data-loop="${item.id}" type="button" aria-pressed="false" title="Loop played segments">Loop segment</button>
+        <div class="row notePlaybackRow" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap; align-items:center">
+          <span class="notePlayerCluster">
+            <audio class="audio noteInlinePlayer" controls hidden></audio>
+            <button class="btn vvIconBtn" data-dl-audio="${item.id}" type="button" aria-label="Download audio" title="Download audio">${VV_ICON_SVG.download}</button>
+            <button class="btn" data-loop="${item.id}" type="button" aria-pressed="false" title="Loop played segments" hidden>Loop segment</button>
+          </span>
         </div>
-
-        <audio class="audio" controls hidden></audio>
 
         <div class="editBox" hidden>
           <label class="label">
@@ -2432,8 +2488,8 @@ async function refreshResults(q = '') {
           </label>
           <div class="noteScrollHint" style="margin-bottom:12px" hidden>More transcript below</div>
           <div class="row" style="margin-bottom:0">
-            <button class="btn primary" data-save="${item.id}">Save</button>
-            <button class="btn" data-cancel="${item.id}">Cancel</button>
+            <button class="btn primary vvIconBtn" data-save="${item.id}" type="button" aria-label="Save changes" title="Save">${VV_ICON_SVG.save}</button>
+            <button class="btn vvIconBtn" data-cancel="${item.id}" type="button" aria-label="Cancel editing" title="Cancel">${VV_ICON_SVG.cancel}</button>
           </div>
         </div>
       </div>
@@ -2444,14 +2500,16 @@ async function refreshResults(q = '') {
       <div class="noteSummary">
         ${collapsedTranscriptHtml}
         <div class="noteSummaryToolbar">
-          <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
           <span class="noteStatus ready">Ready</span>
           ${fileMetaHtml}
           <span class="noteToolbarDate noteMeta">${escapeHtml(created)}</span>
           <span class="noteToolbarSpacer" aria-hidden="true"></span>
           <div class="noteCollapseActions">
-            <button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
-            ${readyActionsStackHtml}
+            ${headerActionsHtml}
+            <button class="btn vvIconBtn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" aria-label="${
+              fav ? 'Unstar note' : 'Star note'
+            }" title="${fav ? 'Starred' : 'Star'}">${fav ? VV_ICON_SVG.starOn : VV_ICON_SVG.starOff}</button>
+            <button class="btn vvIconBtn" data-toggle="${item.id}" type="button" aria-label="Expand note" title="Expand">${VV_ICON_SVG.chevronDown}</button>
           </div>
         </div>
       </div>
@@ -2465,10 +2523,15 @@ async function refreshResults(q = '') {
             <div class="noteTitle">${listHeadline}</div>
             ${fileMetaHtml}
           </div>
-          <div class="noteMeta noteTitleStamp">${created}</div>
+          <div style="display:flex; align-items:center; gap:10px">
+            ${headerActionsHtml}
+            <div class="noteMeta noteTitleStamp">${created}</div>
+          </div>
         </div>
         <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
-          <button class="btn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" title="Toggle favorite">${fav ? '★' : '☆'}</button>
+          <button class="btn vvIconBtn ${fav ? 'primary' : ''}" data-fav="${item.id}" type="button" aria-label="${
+            fav ? 'Unstar note' : 'Star note'
+          }" title="${fav ? 'Starred' : 'Star'}">${fav ? VV_ICON_SVG.starOn : VV_ICON_SVG.starOff}</button>
           ${
             status
               ? status === 'ready'
@@ -2496,18 +2559,17 @@ async function refreshResults(q = '') {
           }
           ${
             status === 'error'
-              ? `<button class="btn err btnIconOnly" data-delete="${item.id}" type="button" title="Delete note">🗑</button>`
+              ? `<button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>`
               : ''
           }
           ${
             status === 'ready' || status === 'error'
-              ? `<button class="btn" data-toggle="${item.id}" aria-label="Toggle note details">Expand</button>
-                 ${readyActionsStackHtml}`
+              ? `<button class="btn vvIconBtn" data-toggle="${item.id}" type="button" aria-label="Expand note" title="Expand">${VV_ICON_SVG.chevronDown}</button>`
               : ''
           }
           ${
             status === 'processing'
-              ? `<span class="noteProcActions" style="display:inline-flex; gap:10px; align-items:center; flex-wrap:nowrap; flex-shrink:0"><button class="btn ${procPaused ? 'primary' : ''}" data-proc-toggle="${item.id}" type="button" title="Pause/resume jobs for this note">${procPaused ? 'Resume processing' : 'Pause processing'}</button><button class="btn err" data-proc-stop="${item.id}" type="button" title="Stop transcription for this note">Stop</button></span>`
+              ? `<span class="noteProcActions" style="display:inline-flex; gap:10px; align-items:center; flex-wrap:nowrap; flex-shrink:0"><button class="btn ${procPaused ? 'primary' : ''}" data-proc-toggle="${item.id}" type="button" title="Pause/resume jobs for this note">${procPaused ? 'Resume processing' : 'Pause processing'}</button><button class="btn vvIconBtn err" data-proc-stop="${item.id}" type="button" aria-label="Stop transcription" title="Stop transcription for this note">${VV_ICON_SVG.stop}</button></span>`
               : ''
           }
         </div>
@@ -2521,7 +2583,7 @@ async function refreshResults(q = '') {
     }
 
     const summary = note.querySelector('.noteSummary');
-    const actionsMenu = note.querySelector(`[data-actions-menu="${CSS.escape(String(item.id))}"]`);
+    const actionsMenu = null;
     const details = note.querySelector('.noteDetails');
     const scrollHint = note.querySelector('.noteScrollHint');
 
@@ -2547,7 +2609,9 @@ async function refreshResults(q = '') {
         details.hidden = false;
         note.classList.add('noteExpanded');
         note.classList.remove('noteCollapsed');
-        btnToggle.textContent = 'Collapse';
+        btnToggle.innerHTML = VV_ICON_SVG.arrowLeft;
+        btnToggle.setAttribute('aria-label', 'Collapse note');
+        btnToggle.setAttribute('title', 'Collapse');
         // Best-effort: upgrade transcript to timestamped segments (if available).
         loadNoteSegmentsIntoUi(item.id, note, {
           highlight: item?.matches ?? item?.best_match ?? null,
@@ -2567,7 +2631,9 @@ async function refreshResults(q = '') {
         details.hidden = isOpen;
         note.classList.toggle('noteExpanded', !isOpen);
         note.classList.toggle('noteCollapsed', isOpen);
-        btnToggle.textContent = isOpen ? 'Expand' : 'Collapse';
+        btnToggle.innerHTML = isOpen ? VV_ICON_SVG.chevronDown : VV_ICON_SVG.arrowLeft;
+        btnToggle.setAttribute('aria-label', isOpen ? 'Expand note' : 'Collapse note');
+        btnToggle.setAttribute('title', isOpen ? 'Expand' : 'Collapse');
         if (isOpen) expandedNoteIds.add(item.id);
         else {
           expandedNoteIds.delete(item.id);
@@ -2595,40 +2661,10 @@ async function refreshResults(q = '') {
 
     syncCollapsedTranscriptShell();
 
-    const btnActionsToggle = note.querySelector('button[data-actions-toggle]');
-    if (btnActionsToggle && actionsMenu) {
-      btnActionsToggle.addEventListener('click', (e) => {
-        e.stopPropagation();
-        installActionMenuGlobalHandlersOnce();
-        const willOpen = actionsMenu.hidden;
-        // Always close any other open menus before toggling this one.
-        closeAllActionMenus(actionsMenu);
-        actionsMenu.hidden = !willOpen;
-        btnActionsToggle.textContent = willOpen ? '▲' : '▼';
-        if (willOpen) {
-          requestAnimationFrame(() => {
-            ensureElementFullyVisible(actionsMenu, 8);
-          });
-        }
-      });
-    }
+    const btnActionsToggle = null;
 
-    // Playback polish: speed + loop for this note.
+    // Playback polish: loop for this note (only show while audio is playing).
     const audioEl = note.querySelector('audio');
-    const rateSel = note.querySelector(`select[data-rate="${CSS.escape(String(item.id))}"]`);
-    if (rateSel) {
-      rateSel.value = String(playbackRate);
-      rateSel.addEventListener('change', () => {
-        const v = Number(rateSel.value);
-        playbackRate = Number.isFinite(v) && v > 0 ? v : 1;
-        saveNumberSetting('vv_playback_rate', playbackRate);
-        try {
-          if (audioEl) audioEl.playbackRate = playbackRate;
-        } catch {
-          // ignore
-        }
-      });
-    }
     const loopBtn = note.querySelector(`button[data-loop="${CSS.escape(String(item.id))}"]`);
     if (loopBtn) {
       const sync = () => {
@@ -2636,6 +2672,7 @@ async function refreshResults(q = '') {
         loopBtn.classList.toggle('primary', loopSegments);
       };
       sync();
+      loopBtn.hidden = true;
       loopBtn.addEventListener('click', (e) => {
         e.preventDefault();
         loopSegments = !loopSegments;
@@ -2653,7 +2690,7 @@ async function refreshResults(q = '') {
         e.preventDefault();
         const id = (b.getAttribute('data-fav') ?? '').toString();
         if (!id) return;
-        const next = b.textContent === '★' ? 0 : 1;
+        const next = (b.classList?.contains?.('primary') ?? false) ? 0 : 1;
         try {
           await fetch(`/api/notes/${encodeURIComponent(id)}`, {
             method: 'PATCH',
@@ -2755,11 +2792,11 @@ async function refreshResults(q = '') {
 
     // Tags removed.
 
-    const btn = note.querySelector('button[data-play]');
+    const playBtns = Array.from(note.querySelectorAll('button[data-play]'));
     const audio = note.querySelector('audio');
-    // Ready notes expose Play/Downloads/Edit in the summary actions; processing/error notes omit those controls.
-    if (btn && audio) {
-    btn.addEventListener('click', async (e) => {
+    // Ready notes expose playback controls; processing/error notes omit those controls.
+    if (playBtns.length && audio) {
+    const onToggleFullAudio = async (btn, e) => {
       e.stopPropagation();
       const src = `/api/notes/${encodeURIComponent(item.id)}/audio`;
       const isPlaying = !audio.paused && !audio.ended && audio.currentTime > 0;
@@ -2770,7 +2807,21 @@ async function refreshResults(q = '') {
         } catch {
           // ignore
         }
-        btn.textContent = 'Play Audio';
+        for (const b of playBtns) {
+          try {
+            b.innerHTML = VV_ICON_SVG.play;
+            b.setAttribute('aria-label', 'Play audio');
+            b.setAttribute('title', 'Play audio');
+          } catch {
+            // ignore
+          }
+        }
+        try {
+          const loopBtn = note.querySelector(`button[data-loop="${CSS.escape(String(item.id))}"]`);
+          if (loopBtn) loopBtn.hidden = true;
+        } catch {
+          // ignore
+        }
         return;
       }
 
@@ -2785,25 +2836,61 @@ async function refreshResults(q = '') {
             // ignore
           }
         await audio.play();
-          // If segments are rendered (word spans exist), follow along while playing full audio.
+          // Follow along while playing full audio (row tint works even without word spans).
           startWordFollowAll(audio, note.querySelector('.noteBody'));
-        btn.textContent = 'Stop Audio';
+        for (const b of playBtns) {
+          try {
+            b.innerHTML = VV_ICON_SVG.stop;
+            b.setAttribute('aria-label', 'Stop audio');
+            b.setAttribute('title', 'Stop audio');
+          } catch {
+            // ignore
+          }
+        }
+        try {
+          const loopBtn = note.querySelector(`button[data-loop="${CSS.escape(String(item.id))}"]`);
+          if (loopBtn) loopBtn.hidden = false;
+        } catch {
+          // ignore
+        }
       } catch {
         // ignore autoplay restrictions
       }
-    });
+    };
+    for (const b of playBtns) {
+      b.addEventListener('click', (e) => onToggleFullAudio(b, e));
+    }
 
     audio.addEventListener('ended', () => {
-      btn.textContent = 'Play Audio';
+      for (const b of playBtns) {
+        try {
+          b.innerHTML = VV_ICON_SVG.play;
+          b.setAttribute('aria-label', 'Play audio');
+          b.setAttribute('title', 'Play audio');
+        } catch {
+          // ignore
+        }
+      }
+      try {
+        const loopBtn = note.querySelector(`button[data-loop="${CSS.escape(String(item.id))}"]`);
+        if (loopBtn) loopBtn.hidden = true;
+      } catch {
+        // ignore
+      }
     });
     }
 
     const editTitle = note.querySelector('.editTitle');
-    const btnEdit = note.querySelector('button[data-edit]');
-    const btnDelete = note.querySelector('button[data-delete]');
+    const editBtns = Array.from(note.querySelectorAll('button[data-edit]'));
+    const deleteBtns = Array.from(note.querySelectorAll('button[data-delete]'));
+    const reprocessBtns = Array.from(note.querySelectorAll('button[data-reprocess]'));
+    const dlAudioBtns = Array.from(note.querySelectorAll('button[data-dl-audio]'));
+    const dlTextBtns = Array.from(note.querySelectorAll('button[data-dl-text]'));
+    const btnEdit = editBtns[0] || null;
+    const btnDelete = deleteBtns[0] || null;
     const btnRemove = note.querySelector('button[data-remove]');
-    const btnDlAudio = note.querySelector('button[data-dl-audio]');
-    const btnDlText = note.querySelector('button[data-dl-text]');
+    const btnDlAudio = null;
+    const btnDlText = null;
     const btnSave = note.querySelector('button[data-save]');
     const btnCancel = note.querySelector('button[data-cancel]');
 
@@ -2828,24 +2915,23 @@ async function refreshResults(q = '') {
     }
 
     const syncEditMenuBtn = () => {
-      if (btnEdit) btnEdit.hidden = note.classList.contains('isEditing');
+      for (const b of editBtns) b.hidden = note.classList.contains('isEditing');
     };
     syncEditMenuBtn();
 
-    if (btnEdit) {
+    for (const btnEdit of editBtns) {
       btnEdit.addEventListener('click', async (e) => {
       e.stopPropagation();
-        // Close the actions dropdown when entering edit mode.
-        if (actionsMenu && !actionsMenu.hidden) {
-          actionsMenu.hidden = true;
-          if (btnActionsToggle) btnActionsToggle.textContent = '▼';
-        }
         // Editing UI lives inside details; ensure it's visible.
         if (details?.hidden) {
           details.hidden = false;
           note.classList.add('noteExpanded');
           note.classList.remove('noteCollapsed');
-          if (btnToggle) btnToggle.textContent = 'Collapse';
+          if (btnToggle) {
+            btnToggle.innerHTML = VV_ICON_SVG.arrowLeft;
+            btnToggle.setAttribute('aria-label', 'Collapse note');
+            btnToggle.setAttribute('title', 'Collapse');
+          }
           expandedNoteIds.add(item.id);
           scheduleExpandedNoteScroll(note, isLastNote);
           syncCollapsedTranscriptShell();
@@ -2868,7 +2954,7 @@ async function refreshResults(q = '') {
           }
           requestAnimationFrame(refreshEditScrollHint);
         }
-    });
+      });
     }
 
     btnCancel.addEventListener('click', (e) => {
@@ -2909,28 +2995,28 @@ async function refreshResults(q = '') {
       }
     });
 
-    if (btnDelete) {
-    btnDelete.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const ok = confirm('Delete this note permanently?');
-      if (!ok) return;
-      btnDelete.disabled = true;
-      setStatus('Deleting…');
-      try {
-        const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
-          method: 'DELETE'
-        });
-        if (!resp.ok) {
-          const msg = await safeJson(resp);
-          throw new Error(msg?.error || `Delete failed (${resp.status})`);
+    for (const btnDelete of deleteBtns) {
+      btnDelete.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const ok = confirm('Delete this note permanently?');
+        if (!ok) return;
+        btnDelete.disabled = true;
+        setStatus('Deleting…');
+        try {
+          const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`, {
+            method: 'DELETE'
+          });
+          if (!resp.ok) {
+            const msg = await safeJson(resp);
+            throw new Error(msg?.error || `Delete failed (${resp.status})`);
+          }
+          setStatus('Deleted');
+          await refreshResults(qEl.value);
+        } catch (e) {
+          setStatus(`Delete error: ${e?.message ?? e}`, true);
+          btnDelete.disabled = false;
         }
-        setStatus('Deleted');
-        await refreshResults(qEl.value);
-      } catch (e) {
-        setStatus(`Delete error: ${e?.message ?? e}`, true);
-        btnDelete.disabled = false;
-      }
-    });
+      });
     }
 
     btnRemove?.addEventListener('click', async (e) => {
@@ -2955,20 +3041,19 @@ async function refreshResults(q = '') {
       }
     });
 
-    if (btnDlAudio) {
-    btnDlAudio.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const a = document.createElement('a');
-      a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
+    for (const b of dlAudioBtns) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const a = document.createElement('a');
+        a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
         a.download = `${sanitizeFilename((item.display_title || item.title || 'recording').toString()) || 'recording'}.webm`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
     }
 
-    const btnReprocess = note.querySelector('button[data-reprocess]');
-    if (btnReprocess) {
+    for (const btnReprocess of reprocessBtns) {
       btnReprocess.addEventListener('click', async (e) => {
         e.stopPropagation();
         const ok = confirm(
@@ -2976,8 +3061,6 @@ async function refreshResults(q = '') {
         );
         if (!ok) return;
         btnReprocess.disabled = true;
-        closeAllActionMenus();
-        if (btnActionsToggle) btnActionsToggle.textContent = '▼';
         setStatus('Reprocessing note…');
         try {
           const nid = (item.id ?? '').toString();
@@ -3035,30 +3118,47 @@ async function refreshResults(q = '') {
       });
     }
 
-    if (btnDlText) {
-    btnDlText.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const text = (item.body ?? '').toString();
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
+    for (const b of dlTextBtns) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const text = (item.body ?? '').toString();
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
         a.download = `${sanitizeFilename((item.display_title || item.title || 'transcript').toString()) || 'transcript'}.txt`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
     }
 
     resultsEl.appendChild(note);
   }
+  vvRenderMs = performance.now() - renderT0;
 
   requestAnimationFrame(() => {
     resultsEl.scrollTop = prevScroll;
   });
 
   syncProcessingNotesPoll(items);
+  if (!isSearch) setStatus('Ready');
+
+  // Perf breadcrumbs (check DevTools console): fetch vs render cost.
+  try {
+    if (!isSearch) {
+      const totalMs = performance.now() - vvT0;
+      console.debug('[voiceVault] saved-notes refresh', {
+        count: items.length,
+        fetch_ms: Math.round(vvFetchMs),
+        render_ms: Math.round(vvRenderMs),
+        total_ms: Math.round(totalMs)
+      });
+    }
+  } catch {
+    // ignore
+  }
 }
 
 // Removed: Quick answer button + handler.
@@ -3159,7 +3259,11 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
   const displayTitleRaw = (data?.display_title ?? '').toString().trim();
   const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
   const titleBodySepHtml = displayTitleEsc
-    ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
+    ? `<div class="noteDisplayTitleBlock"><span class="noteDisplayTitleText">${displayTitleEsc}</span><span class="noteDisplayTitleActions"><button class="btn vvIconBtn" data-dl-text="${escapeHtml(
+        String(noteId)
+      )}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button><button class="btn vvIconBtn" data-edit="${escapeHtml(
+        String(noteId)
+      )}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></span></div><hr class="noteTitleBodyDivider" />`
     : '';
 
   // Replace transcript with clickable timestamped segments.
@@ -3168,7 +3272,7 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
   // Delegate clicks to Play buttons (text is not clickable).
   bodyEl.addEventListener('click', (e) => {
     const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const playBtn = target.closest?.('button[data-seg-play]');
     if (!playBtn) return;
     e.preventDefault();
@@ -3179,6 +3283,20 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
     const end = Number(playBtn.getAttribute('data-seg-end') || '0');
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
 
+    const setSegBtn = (btnEl, mode) => {
+      if (!(btnEl instanceof HTMLButtonElement)) return;
+      if (mode === 'stop') {
+        btnEl.innerHTML = VV_ICON_SVG.stop;
+        btnEl.setAttribute('aria-label', 'Stop segment');
+        btnEl.setAttribute('title', 'Stop');
+      } else {
+        const tt = `Play ${formatClock(start)}–${formatClock(end)}`;
+        btnEl.innerHTML = VV_ICON_SVG.playSegment;
+        btnEl.setAttribute('aria-label', 'Play segment');
+        btnEl.setAttribute('title', tt);
+      }
+    };
+
     const wantSrc = `/api/notes/${encodeURIComponent(noteId)}/audio`;
     if (audioEl.src !== new URL(wantSrc, window.location.origin).toString()) {
       audioEl.src = wantSrc;
@@ -3188,6 +3306,58 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
         // ignore
       }
     }
+
+    // Toggle off if this segment is already playing.
+    const activeBtn = audioEl.__vvActiveSegBtn;
+    const activeStart = Number(audioEl.__vvLastSegStart);
+    const activeEnd = Number(audioEl.__vvLastSegEnd);
+    const isActive = activeBtn === playBtn && Number.isFinite(activeStart) && Number.isFinite(activeEnd) && Math.abs(activeStart - start) < 0.001 && Math.abs(activeEnd - end) < 0.001;
+    const isPlaying = !audioEl.paused && !audioEl.ended;
+    if (isActive && isPlaying) {
+      try {
+        if (audioEl.__vvRangeCleanup) audioEl.__vvRangeCleanup();
+        audioEl.pause();
+        audioEl.currentTime = 0;
+      } catch {
+        // ignore
+      }
+      setSegBtn(playBtn, 'play');
+      try {
+        const loopBtn = noteEl?.querySelector?.(`button[data-loop="${CSS.escape(String(noteId))}"]`);
+        if (loopBtn) loopBtn.hidden = true;
+      } catch {
+        // ignore
+      }
+      try {
+        audioEl.__vvActiveSegBtn = null;
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    // Reset any previously active segment button.
+    if (activeBtn && activeBtn instanceof HTMLButtonElement && activeBtn !== playBtn) {
+      try {
+        activeBtn.innerHTML = VV_ICON_SVG.play;
+        activeBtn.setAttribute('aria-label', 'Play segment');
+      } catch {
+        // ignore
+      }
+    }
+    setSegBtn(playBtn, 'stop');
+    try {
+      audioEl.__vvActiveSegBtn = playBtn;
+    } catch {
+      // ignore
+    }
+    try {
+      const loopBtn = noteEl?.querySelector?.(`button[data-loop="${CSS.escape(String(noteId))}"]`);
+      if (loopBtn) loopBtn.hidden = false;
+    } catch {
+      // ignore
+    }
+
     // Highlight words in the clicked segment while playing (if available).
     const rowEl = playBtn.closest?.('.segRow');
     try {
@@ -3198,6 +3368,42 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
     }
     playAudioRange(audioEl, start, end, { loop: loopSegments, rate: playbackRate });
     startWordHighlight(audioEl, rowEl);
+
+    // Ensure button reverts when the range playback cleans up (end of segment or interruption).
+    const revert = () => {
+      try {
+        if (audioEl.__vvActiveSegBtn === playBtn) {
+          setSegBtn(playBtn, 'play');
+          audioEl.__vvActiveSegBtn = null;
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        const loopBtn = noteEl?.querySelector?.(`button[data-loop="${CSS.escape(String(noteId))}"]`);
+        if (loopBtn) loopBtn.hidden = true;
+      } catch {
+        // ignore
+      }
+    };
+    // playAudioRange sets __vvRangeCleanup asynchronously inside its `run`; wrap it after the call.
+    setTimeout(() => {
+      try {
+        const curCleanup = audioEl.__vvRangeCleanup;
+        if (!curCleanup || curCleanup.__vvWrappedForSegUi) return;
+        const wrapped = () => {
+          try {
+            curCleanup();
+          } finally {
+            revert();
+          }
+        };
+        wrapped.__vvWrappedForSegUi = true;
+        audioEl.__vvRangeCleanup = wrapped;
+      } catch {
+        // ignore
+      }
+    }, 0);
 
     if (rowEl) {
       requestAnimationFrame(() => {
@@ -3225,7 +3431,34 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
 function startWordHighlight(audioEl, segRowEl) {
   if (!audioEl || !segRowEl) return;
   const words = Array.from(segRowEl.querySelectorAll?.('.word[data-ws][data-we]') ?? []);
-  if (words.length === 0) return;
+  // Still tint the whole segment row even when word-level spans don't exist.
+  try {
+    segRowEl.classList.add('playing');
+  } catch {
+    // ignore
+  }
+  if (words.length === 0) {
+    const cleanup = () => {
+      try {
+        segRowEl.classList.remove('playing');
+      } catch {
+        // ignore
+      }
+    };
+    // If a previous cleanup existed, run it first.
+    if (audioEl.__vvWordCleanup) {
+      try {
+        audioEl.__vvWordCleanup();
+      } catch {
+        // ignore
+      }
+      audioEl.__vvWordCleanup = null;
+    }
+    audioEl.__vvWordCleanup = cleanup;
+    audioEl.addEventListener('pause', cleanup, { once: true });
+    audioEl.addEventListener('ended', cleanup, { once: true });
+    return;
+  }
 
   // Stop any previous highlighter on this audio element.
   if (audioEl.__vvWordCleanup) {
@@ -3262,6 +3495,11 @@ function startWordHighlight(audioEl, segRowEl) {
       // ignore
     }
     clear();
+    try {
+      segRowEl.classList.remove('playing');
+    } catch {
+      // ignore
+    }
   };
   audioEl.__vvWordCleanup = cleanup;
 
@@ -3274,10 +3512,71 @@ function startWordHighlight(audioEl, segRowEl) {
   );
 }
 
+function startSegRowFollowAll(audioEl, containerEl) {
+  if (!audioEl || !containerEl) return;
+
+  // Stop any previous row-highlighter on this audio element.
+  if (audioEl.__vvSegRowCleanup) {
+    try {
+      audioEl.__vvSegRowCleanup();
+    } catch {
+      // ignore
+    }
+    audioEl.__vvSegRowCleanup = null;
+  }
+
+  const rows = Array.from(containerEl.querySelectorAll?.('.segRow[data-seg-start][data-seg-end]') ?? []);
+  if (rows.length === 0) return;
+
+  let lastRow = null;
+  const clear = () => {
+    if (lastRow) lastRow.classList.remove('playing');
+    lastRow = null;
+  };
+
+  const tick = () => {
+    const t = Number(audioEl.currentTime);
+    if (!Number.isFinite(t)) return;
+    let active = null;
+    for (const r of rows) {
+      const s = Number(r.getAttribute('data-seg-start') || '0');
+      const e = Number(r.getAttribute('data-seg-end') || '0');
+      if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) continue;
+      if (t >= s && t < e) {
+        active = r;
+        break;
+      }
+    }
+    if (active !== lastRow) {
+      if (lastRow) lastRow.classList.remove('playing');
+      if (active) active.classList.add('playing');
+      lastRow = active;
+    }
+  };
+
+  tick();
+  const intervalId = setInterval(tick, 80);
+  const cleanup = () => {
+    try {
+      clearInterval(intervalId);
+    } catch {
+      // ignore
+    }
+    clear();
+  };
+  audioEl.__vvSegRowCleanup = cleanup;
+  audioEl.addEventListener('pause', cleanup, { once: true });
+  audioEl.addEventListener('ended', cleanup, { once: true });
+}
+
 function startWordFollowAll(audioEl, containerEl) {
   if (!audioEl || !containerEl) return;
   const words = Array.from(containerEl.querySelectorAll?.('.word[data-ws][data-we]') ?? []);
-  if (words.length === 0) return;
+  // Even without word spans, we can still highlight the active segment row by time.
+  if (words.length === 0) {
+    startSegRowFollowAll(audioEl, containerEl);
+    return;
+  }
 
   // Stop any previous highlighter on this audio element.
   if (audioEl.__vvWordCleanup) {
@@ -3294,6 +3593,7 @@ function startWordFollowAll(audioEl, containerEl) {
   };
 
   let lastScrolledAt = 0;
+  let lastRow = null;
   const tick = () => {
     const t = Number(audioEl.currentTime);
     if (!Number.isFinite(t)) return;
@@ -3304,6 +3604,16 @@ function startWordFollowAll(audioEl, containerEl) {
       const on = Number.isFinite(ws) && Number.isFinite(we) && t >= ws && t < we;
       w.classList.toggle('on', on);
       if (on) active = w;
+    }
+    try {
+      const row = active ? active.closest?.('.segRow') : null;
+      if (row !== lastRow) {
+        if (lastRow) lastRow.classList.remove('playing');
+        if (row) row.classList.add('playing');
+        lastRow = row;
+      }
+    } catch {
+      // ignore
     }
     // Scroll occasionally so the user can follow.
     if (active && Date.now() - lastScrolledAt > 800) {
@@ -3325,6 +3635,12 @@ function startWordFollowAll(audioEl, containerEl) {
       // ignore
     }
     clear();
+    try {
+      if (lastRow) lastRow.classList.remove('playing');
+      lastRow = null;
+    } catch {
+      // ignore
+    }
   };
   audioEl.__vvWordCleanup = cleanup;
 
@@ -3357,11 +3673,11 @@ function renderSegmentsHtml(segments, { highlight = null, headerText = '' } = {}
       <div class="segRow${isMatch ? ' match' : ''}" data-seg-start="${escapeHtml(
       String(start)
     )}" data-seg-end="${escapeHtml(String(end))}">
-        <button class="btn segPlay" type="button" data-seg-play="1" data-seg-start="${escapeHtml(
+        <button class="btn vvIconBtn segPlay" type="button" data-seg-play="1" data-seg-start="${escapeHtml(
           String(start)
-        )}" data-seg-end="${escapeHtml(String(end))}" title="Play ${escapeHtml(
+        )}" data-seg-end="${escapeHtml(String(end))}" aria-label="Play segment" title="Play ${escapeHtml(
       `${formatClock(start)}–${formatClock(end)}`
-    )}">Play</button>
+    )}">${VV_ICON_SVG.playSegment}</button>
         <span class="segTime">${escapeHtml(`${formatClock(start)}–${formatClock(end)}`)}</span>
         <span class="segText">${escapeHtml(text)}</span>
       </div>
@@ -3831,15 +4147,38 @@ function stopLiveQueryTranscript(state) {
   if (state) state.liveTxInFlight = false;
 }
 
-async function transcribeFullPreview() {
-  if (transcribeFullPreviewInFlight) return transcribeFullPreviewInFlight;
-  transcribeFullPreviewInFlight = transcribeFullPreviewImpl().finally(() => {
+async function transcribeFullPreview(opts = {}) {
+  const restart = !!opts.restart;
+  if (transcribeFullPreviewInFlight && !restart) {
+    return transcribeFullPreviewInFlight;
+  }
+  if (fullPreviewAbortController) {
+    try {
+      fullPreviewAbortController.abort();
+    } catch {
+      // ignore
+    }
+    fullPreviewAbortController = null;
+  }
+  const prev = transcribeFullPreviewInFlight;
+  if (prev) {
+    try {
+      await prev;
+    } catch {
+      // ignore
+    }
     transcribeFullPreviewInFlight = null;
+  }
+  const ac = new AbortController();
+  fullPreviewAbortController = ac;
+  transcribeFullPreviewInFlight = transcribeFullPreviewImpl(ac.signal).finally(() => {
+    transcribeFullPreviewInFlight = null;
+    if (fullPreviewAbortController === ac) fullPreviewAbortController = null;
   });
   return transcribeFullPreviewInFlight;
 }
 
-async function transcribeFullPreviewImpl() {
+async function transcribeFullPreviewImpl(signal) {
   if (!note.audioBlob) return;
   if (!liveTranscriptEl) return;
 
@@ -3859,11 +4198,14 @@ async function transcribeFullPreviewImpl() {
   });
 
   const fd = new FormData();
-  fd.append('language', (noteLanguageEl?.value ?? '').toString());
+  const langHint =
+    (noteLanguageEl?.value ?? '').toString().trim() || primaryLanguageCode(noteLastDetectedApiLang);
+  fd.append('language', langHint);
   fd.append('stt_provider', getNewNoteSttProvider());
   fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
 
   const failFullPreview = (msg, { serverDetail = '' } = {}) => {
+    if (signal.aborted) return;
     const detail = (serverDetail ?? '').toString().trim();
     setStatus(detail ? `${msg} ${detail}` : msg, true);
     if (liveTxStatusEl) liveTxStatusEl.hidden = true;
@@ -3886,11 +4228,14 @@ async function transcribeFullPreviewImpl() {
   try {
     let resp;
     try {
-      resp = await fetch('/api/transcribe', { method: 'POST', body: fd });
+      resp = await fetch('/api/transcribe', { method: 'POST', body: fd, signal });
     } catch (netErr) {
+      if (netErr?.name === 'AbortError' || signal.aborted) return;
       failFullPreview(`Full preview failed (network): ${netErr?.message ?? netErr}`);
       return;
     }
+
+    if (signal.aborted) return;
 
     if (!resp.ok) {
       let detail = '';
@@ -3905,6 +4250,7 @@ async function transcribeFullPreviewImpl() {
     }
 
     const data = await safeJson(resp);
+    if (signal.aborted) return;
     if (!data || typeof data !== 'object') {
       failFullPreview('Full preview failed — empty or invalid response from server.');
       return;
@@ -3986,35 +4332,46 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     return;
   }
 
-  let summary;
+  let summary = null;
   try {
     const summaryResp = await fetch('/api/processes/summary');
-    if (!summaryResp.ok) {
-      return;
-    }
-    summary = await summaryResp.json();
+    if (summaryResp.ok) summary = await summaryResp.json();
   } catch {
-    return;
+    summary = null;
   }
-  const paused = !!summary?.paused;
+
+  let paused = false;
+  if (summary) paused = !!summary?.paused;
+  else {
+    try {
+      const ir = await fetch('/api/ingestion');
+      if (ir.ok) {
+        const ij = await ir.json();
+        paused = !!ij?.paused;
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   jobsPausedPillEl.hidden = !paused;
   btnIngestPauseEl.hidden = paused;
   btnIngestResumeEl.hidden = !paused;
 
-  const maxParallel = Number(summary?.max_parallel ?? 1) || 1;
-  if (!jobsMaxParallelEl.value) jobsMaxParallelEl.value = String(maxParallel);
+  if (summary) {
+    const maxParallel = Number(summary?.max_parallel ?? 1) || 1;
+    if (!jobsMaxParallelEl.value) jobsMaxParallelEl.value = String(maxParallel);
 
-  const jobs = summary?.jobs ?? {};
-  const notes = summary?.notes ?? {};
-  const delayed = Number(summary?.jobs_delayed_queued ?? 0) || 0;
-  const lastUnlockAt = (summary?.jobs_last_stale_unlock_at ?? '').toString().trim();
-  const lastUnlockCount = Number(summary?.jobs_last_stale_unlock_count ?? 0) || 0;
-  const backoffBase = Number(summary?.backoff_base_sec ?? 5) || 5;
-  const backoffMax = Number(summary?.backoff_max_sec ?? 300) || 300;
-  if (!jobsBackoffBaseSecEl.value) jobsBackoffBaseSecEl.value = String(backoffBase);
-  if (!jobsBackoffMaxSecEl.value) jobsBackoffMaxSecEl.value = String(backoffMax);
-  jobsSummaryEl.innerHTML = `
+    const jobs = summary?.jobs ?? {};
+    const notes = summary?.notes ?? {};
+    const delayed = Number(summary?.jobs_delayed_queued ?? 0) || 0;
+    const lastUnlockAt = (summary?.jobs_last_stale_unlock_at ?? '').toString().trim();
+    const lastUnlockCount = Number(summary?.jobs_last_stale_unlock_count ?? 0) || 0;
+    const backoffBase = Number(summary?.backoff_base_sec ?? 5) || 5;
+    const backoffMax = Number(summary?.backoff_max_sec ?? 300) || 300;
+    if (!jobsBackoffBaseSecEl.value) jobsBackoffBaseSecEl.value = String(backoffBase);
+    if (!jobsBackoffMaxSecEl.value) jobsBackoffMaxSecEl.value = String(backoffMax);
+    jobsSummaryEl.innerHTML = `
     <span class="jobsKpi"><strong>Jobs</strong> queued ${escapeHtml(String(jobs.queued ?? 0))}</span>
     <span class="jobsKpi">delayed ${escapeHtml(String(delayed))}</span>
     <span class="jobsKpi">running ${escapeHtml(String(jobs.running ?? 0))}</span>
@@ -4029,9 +4386,13 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
         : `<span class="jobsKpi">unlocked 0</span>`
     }
   `.trim();
+  } else {
+    jobsSummaryEl.innerHTML = `<span class="jobsKpi err">Summary unavailable (job list still loads if the jobs API responds)</span>`;
+  }
 
-  // Do not skip jobs refetch when forcing refresh (e.g. open panel, apply filters, or after removing a job row).
-  if (processCardEl?.hidden && forceShow !== true) return;
+  // Skip jobs list work only when the Processes panel is closed and we are not forcing a refresh.
+  const processesPanelOpen = !!(processCardEl && !processCardEl.hidden);
+  if (!processesPanelOpen && forceShow !== true) return;
 
   const nextHidden =
     forceShow === true ? false : forceShow === false ? true : toggleList ? !jobsListEl.hidden : jobsListEl.hidden;
@@ -4046,7 +4407,17 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     url.searchParams.set('limit', '60');
     if (procStatusFilter) url.searchParams.set('status', procStatusFilter);
     const resp = await fetch(url.toString());
-    if (!resp.ok) return;
+    if (!resp.ok) {
+      let hint = `${resp.status}`;
+      try {
+        const ej = await safeJson(resp);
+        hint = `${resp.status}: ${escapeHtml(((ej?.error ?? ej?.details) ?? '').toString().slice(0, 200))}`;
+      } catch {
+        /* ignore */
+      }
+      jobsListEl.innerHTML = `<div class="jobItem err">Could not load jobs (${hint}).</div>`;
+      return;
+    }
     const data = await resp.json();
     const items = Array.isArray(data?.items) ? data.items : [];
 
@@ -4077,10 +4448,10 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
                   ${st === 'error' || st === 'done'
                     ? `<button class="btn" data-job-retry="${escapeHtml(id)}" type="button">Retry</button>`
                     : ''}
-                  ${canCancel ? `<button class="btn err" data-job-cancel="${escapeHtml(id)}" type="button">Cancel</button>` : ''}
+                  ${canCancel ? `<button class="btn vvIconBtn err" data-job-cancel="${escapeHtml(id)}" type="button" aria-label="Cancel job" title="Cancel">${VV_ICON_SVG.cancel}</button>` : ''}
                   ${
                     st !== 'running'
-                      ? `<button class="btn err" data-proc-delete-job="${escapeHtml(id)}" type="button" title="Remove this job and delete its note from the library (if the note still exists)">Delete process</button>`
+                      ? `<button class="btn vvIconBtn err" data-proc-delete-job="${escapeHtml(id)}" type="button" aria-label="Delete process" title="Remove this job and delete its note from the library (if the note still exists)">${VV_ICON_SVG.delete}</button>`
                       : ''
                   }
                 </div>
@@ -4119,7 +4490,7 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
         try {
           await fetch(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
           setStatus('Job re-queued');
-          await refreshIngestionUi();
+          await refreshIngestionUi({ toggleList: false, forceShow: true });
         } catch {
           // ignore
         } finally {
@@ -4139,7 +4510,7 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
           const data2 = await safeJson(resp2);
           if (!resp2.ok) throw new Error(data2?.error || `Cancel failed (${resp2.status})`);
           setStatus('Process cancelled');
-          await refreshIngestionUi();
+          await refreshIngestionUi({ toggleList: false, forceShow: true });
         } catch (err2) {
           setStatus(`Cancel error: ${err2?.message ?? err2}`, true);
         } finally {
@@ -4419,9 +4790,12 @@ async function runAudioSearch() {
 }
 
 function setStatus(text, isError = false) {
-  statusEl.textContent = text;
+  if (!statusEl) return;
+  statusEl.textContent = text ?? '';
   const t = (text ?? '').toString().trim().toLowerCase();
-  statusEl.className = `status${isError ? ' err' : t === 'ready' ? ' ok' : ''}`;
+  const isReady = !isError && t === 'ready';
+  const isBusy = !isError && t.startsWith('displaying saved notes');
+  statusEl.className = `status${isError ? ' err' : isReady ? ' ok' : ''}${isBusy ? ' busy' : ''}`;
 }
 
 function pickMimeType() {
@@ -4559,6 +4933,7 @@ function resetRecorder(state) {
     noteFullPreviewGateOk = false;
     noteAllowManualSaveFinal = false;
     noteLangDetectionComplete = false;
+    noteLastDetectedApiLang = '';
     noteUserOverrodeLanguage = false;
     noteUsedMicForCurrentBlob = false;
     note.liveTranscribeTail = Promise.resolve();
@@ -4665,7 +5040,7 @@ function renderBitrateHint() {
         2) Optional: <strong>Upload</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>.
         </div>
         <div style="margin-top:4px">
-        3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>. Edit the <strong>Transcript preview</strong> after it finishes processing.
+        3) Pick <strong>Language</strong> or leave <strong>Auto-detect</strong>; the full transcript preview starts automatically when the language is known. Edit the <strong>Transcript preview</strong> after it finishes.
         </div>
         <div style="margin-top:4px">
         4) Tap <strong>Save Note</strong>. Status moves through <strong>Processing</strong> → <strong>Ready</strong>. While processing, an approximate <strong>percent left</strong> is shown (from audio length and elapsed time, not a byte meter from the engine). Use <strong>Pause processing</strong> / <strong>Stop</strong> only for that note.
@@ -4732,7 +5107,10 @@ function syncVisibility() {
   btnRecordNote.disabled = note.isRecording;
   btnStopNote.hidden = !note.isRecording;
   btnStopNote.disabled = !note.isRecording;
-  btnSaveNote.hidden = !note.audioBlob || note.isRecording;
+  // UX: keep Save hidden until full transcription generation has started at least once.
+  const fullGenerating = !!(liveTxStatusEl && !liveTxStatusEl.hidden && (liveTxPhaseLabelEl?.textContent ?? '') === 'Full Transcription');
+  const fullGeneratedOrFailed = noteFullPreviewGateOk || noteAllowManualSaveFinal;
+  btnSaveNote.hidden = !note.audioBlob || note.isRecording || (!fullGenerating && !fullGeneratedOrFailed);
   const textOk = !!(liveTranscriptEl && vvFormatTranscript(liveTranscriptEl.value ?? '').trim());
   const saveBusy = !!transcribeFullPreviewInFlight || noteTranscriptionPipelineBusy;
   const saveAllowed = noteFullPreviewGateOk || noteAllowManualSaveFinal;
@@ -4834,8 +5212,17 @@ async function detectLanguageForNotePreview() {
       revealNoteLanguageWrap();
       return;
     }
-    if (!noteUserOverrodeLanguage) applyDetectedLanguageToPillAndSelect(lang);
-    else revealNoteLanguageWrap();
+    if (!noteUserOverrodeLanguage) {
+      noteLastDetectedApiLang = lang;
+      applyDetectedLanguageToPillAndSelect(lang);
+    } else {
+      revealNoteLanguageWrap();
+    }
+
+    // Uploads skip live transcription; ensure full preview still runs if apply did not start it (e.g. early return).
+    if (!note.isRecording && note.audioBlob && !transcribeFullPreviewInFlight) {
+      void transcribeFullPreview({ restart: false }).then(() => syncVisibility());
+    }
   } finally {
     stopNoteLangDetectCountdown();
     noteLangDetectionComplete = true;
@@ -4847,8 +5234,8 @@ async function detectLanguageForNotePreview() {
 function startLiveLanguageDetection(state) {
   if (state.liveLangTimerId) clearInterval(state.liveLangTimerId);
   if (!noteDetectedLangEl) return;
-  noteDetectedLangEl.hidden = false;
-  noteDetectedLangEl.textContent = 'Lang: detecting…';
+  // Keep the auto-detect UI hidden while recording; countdown begins only after Stop.
+  noteDetectedLangEl.hidden = true;
 
   state.liveLangTimerId = setInterval(() => {
     if (!state.isRecording) return;
@@ -4867,17 +5254,9 @@ function startLiveLanguageDetection(state) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         const lang = (data?.language ?? '').toString().trim();
-        if (noteDetectedLangEl && state.isRecording) {
-          if (!lang) {
-            noteDetectedLangEl.textContent = 'Lang: —';
-            return;
-          }
-          if (!noteUserOverrodeLanguage) applyDetectedLanguageToPillAndSelect(lang);
-          else {
-            const meta = formatNoteLanguageMeta(lang) || lang;
-            noteDetectedLangEl.textContent = meta ? `Lang: ${meta}` : 'Lang: —';
-          }
-        }
+        if (!lang) return;
+        // Store for use after Stop; do not reveal UI while recording.
+        state.liveDetectedLang = lang;
       })
       .catch(() => {
         // ignore

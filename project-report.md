@@ -56,14 +56,18 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 - **Timestamped segments (implemented)**
   - Saved notes store **timestamped segments** (start/end seconds + text) alongside the transcript.
   - UI can play **only a selected segment** (not just full-audio playback).
+- **Segment playback UX (updated)**
+  - Segment rows highlight while playing (light grey tint).
+  - Full-audio playback also highlights the currently active segment row while following along.
 - **Playback & export**
   - Play note audio in the UI.
-  - Download note audio.
-  - Download transcript text.
+  - Download note audio (icon button near the inline player).
+  - Download transcript text (icon in the expanded note header).
 - **Edit & delete**
   - Edit transcript and title (and language metadata) after processing.
   - Delete a note (removes DB row and associated audio file).
   - Retry transcription for failed notes.
+  - Star notes and pin them to the top of the saved-notes list.
 
 ### Search
 
@@ -97,11 +101,9 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 ### UI layout (current)
 
-- The left column is organized into three windows: **New note**, **Processes**, and **Help** (App hint + UI steps).
-- Opening any left window restores a **50/50** split with the Search window; collapsing it widens Search.
-- The three windows are **mutually exclusive** (opening one closes the other two). On load, all three start collapsed by default; if any note is in **error**, **Processes** auto-opens.
-- The **Processes** card stays hidden unless there are failures.
-- Help uses **App hint** / **UI steps** buttons (no separate Help Show/Hide button).
+- The app uses a **single stacked layout**: saved notes at the top, and panels (Search / Processes / New note / Help) open beneath via quick actions.
+- Panels are **mutually exclusive** (opening one closes the others).
+- Saved notes use a **collapsed card** view by default; expanding shows a scrollable transcript with a **sticky title** and icon actions in the header.
 
 ## 5) Architecture and data flow
 

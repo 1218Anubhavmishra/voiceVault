@@ -37,7 +37,9 @@
                   placeholder="Transcript of your search audio will appear here…"
                 />
                 <button id="btnRecordQuery" class="btn primary btnIconOnly" type="button" aria-label="Record search" title="Record search">🎤</button>
-                <button id="btnStopQuery" class="btn" disabled hidden>Stop</button>
+                <button id="btnStopQuery" class="btn vvIconBtn" type="button" disabled hidden aria-label="Stop recording" title="Stop">
+                  <svg class="vvIcon vvIcon--stop" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
+                </button>
                 <button id="btnSearch" class="btn btnIconOnly" type="button" disabled hidden aria-label="Search" title="Search">🔍</button>
                 <span class="pill timerPill" id="queryTimer" hidden>00:00</span>
               </div>
@@ -104,7 +106,16 @@
                     value="1"
                   />
                 </label>
-                <button id="btnJobsApply" class="btn" type="button">Apply</button>
+                <button id="btnJobsApply" class="btn vvIconBtn" type="button" aria-label="Apply processing settings" title="Apply settings">
+                  <svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path
+                      fill="currentColor"
+                      fill-rule="evenodd"
+                      d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                </button>
                 <button id="btnJobsRetryAll" class="btn" type="button">Retry all errors</button>
                 <button id="btnJobsUnlockNow" class="btn err" type="button">Unlock stale</button>
               </div>
@@ -132,8 +143,17 @@
           </label>
 
           <div class="row">
-            <button id="btnRecordNote" class="btn primary">Record note</button>
-            <button id="btnStopNote" class="btn" disabled hidden>Stop</button>
+            <button id="btnRecordNote" class="btn primary vvIconBtn" aria-label="Record note">
+              <svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  fill="currentColor"
+                  d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0a1 1 0 1 0-2 0a7 7 0 0 0 6 6.93V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.07A7 7 0 0 0 19 11a1 1 0 1 0-2 0Z"
+                />
+              </svg>
+            </button>
+            <button id="btnStopNote" class="btn vvIconBtn" type="button" disabled hidden aria-label="Stop recording" title="Stop">
+              <svg class="vvIcon vvIcon--stop" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
+            </button>
             <span class="pill timerPill" id="noteTimer" hidden>00:00</span>
             <span class="pill timerPill" id="noteDetectedLang" hidden>Lang: —</span>
             <span id="noteLanguageWrap" hidden style="display:inline-flex; align-items:center; gap:8px">
@@ -159,52 +179,56 @@
             </span>
           </div>
 
-          <label class="label" id="liveTranscriptWrap" hidden>
-            <span class="liveTxHeaderRow" style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px">
-              <span>Transcript preview (read-only until full preview is generated)</span>
-              <span id="liveTxLangStatus" class="pill" hidden>Detecting language…</span>
-            </span>
-            <span id="liveTxStatus" class="pill" style="margin-left: 0" hidden>
-              <span id="liveTxPhaseLabel" class="liveTxProcessingLabel">Live Transcription</span>
-              <span
-                id="liveTxTimeLeft"
-                class="noteProcessingTime"
-                data-processing-since=""
-                data-estimated-total-ms=""
-                title="Approximate percent of this transcription step remaining"
-                >—</span
-              >
-            </span>
-            <div id="liveTxScrollRow" class="row" style="margin-top:8px" hidden>
-              <button id="liveTxUp" class="btn">Scroll up</button>
-              <button id="liveTxDown" class="btn">Scroll down</button>
-            </div>
-            <textarea id="liveTranscript" class="textarea" rows="6"></textarea>
-          </label>
-
           <label class="label">
             Choose audio file (optional)
             <input id="uploadNote" class="input" type="file" accept="audio/*" hidden />
             <div class="row" style="margin-top:8px">
-              <button id="uploadNoteBtn" class="btn">Upload</button>
+              <button id="uploadNoteBtn" class="btn vvIconBtn" aria-label="Upload audio file">
+                <svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    fill="currentColor"
+                    d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4.01 4a1 1 0 0 1-1.38 0l-4.01-4a1 1 0 1 1 1.4-1.42L11 12.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"
+                  />
+                </svg>
+              </button>
               <span id="uploadNoteName" class="pill" style="max-width:65ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
                 No file selected
               </span>
             </div>
           </label>
 
-          <div class="row" style="margin-top: 8px">
-            <button type="button" id="btnGenerateFullPreview" class="btn primary" hidden>
-              Generate full transcript
-            </button>
-          </div>
+          <label class="label" id="liveTranscriptWrap" hidden>
+            <span class="liveTxHeaderRow" style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px">
+              <span>Transcript preview (read-only until full preview is generated)</span>
+              <span id="liveTxLangStatus" class="pill" hidden>Detecting language…</span>
+              <span id="liveTxStatus" class="liveTxStatusText" hidden>
+                <span id="liveTxPhaseLabel" class="liveTxProcessingLabel">Live Transcription</span>
+                <span
+                  id="liveTxTimeLeft"
+                  class="noteProcessingTime"
+                  data-processing-since=""
+                  data-estimated-total-ms=""
+                  title="Approximate percent of this transcription step remaining"
+                  >—</span
+                >
+              </span>
+            </span>
+            <textarea id="liveTranscript" class="textarea" rows="6"></textarea>
+          </label>
 
           <p class="newNoteTitleHint" style="margin: 0 0 8px">
             Transcription runs on the server with <strong>ElevenLabs STT</strong>.
           </p>
 
           <div class="row">
-            <button id="btnSaveNote" class="btn" disabled hidden>Save Note</button>
+            <button id="btnSaveNote" class="btn primary vvIconBtn" type="button" disabled hidden aria-label="Save note" title="Save note">
+              <svg class="vvIcon vvIcon--save" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  fill="currentColor"
+                  d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4ZM5 19V9h14v10H5Zm8-4h4v-4h-4v4ZM7 7h8v6H7V7Z"
+                />
+              </svg>
+            </button>
           </div>
 
           <div id="newNoteProcessingRow" class="row" hidden style="margin-top: 10px; align-items: center">
@@ -250,7 +274,9 @@
       <div class="dialog">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
           <div style="font-weight:850">Job details</div>
-          <button id="btnJobDetailsClose" class="btn" type="button">Close</button>
+          <button id="btnJobDetailsClose" class="btn vvIconBtn" type="button" aria-label="Close" title="Close">
+            <svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
         </div>
         <pre id="jobDetailsPre" class="preBox"></pre>
         <div style="display:flex; gap:10px; justify-content:flex-end">
