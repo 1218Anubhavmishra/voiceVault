@@ -325,6 +325,19 @@ input[type='file'] {
   margin-bottom: 12px;
 }
 
+.searchHeaderRow {
+  display: flex;
+  align-items: center;
+  /* Keep title + input visually separated, but responsive */
+  gap: clamp(14px, 5vw, 50px);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.searchQueryRow--header {
+  margin-bottom: 0;
+}
+
 .cardHeaderRow .btn {
   padding: 8px 10px;
   border-radius: 12px;
@@ -467,11 +480,15 @@ input[type='file'] {
 }
 
 #searchBody {
-  padding-top: 8px;
+  padding-top: 4px;
+}
+
+#searchBody > .row {
+  margin-bottom: 0;
 }
 
 .searchQueryRow {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
 }
 
@@ -479,12 +496,16 @@ input[type='file'] {
   width: auto;
   flex: 1 1 0;
   min-width: 0;
-  max-width: min(100%, 20rem);
+  max-width: 300px;
 }
 
-@media (min-width: 480px) {
+@media (max-width: 420px) {
+  /* If needed on very small screens, allow wrap */
+  .searchQueryRow {
+    flex-wrap: wrap;
+  }
   .searchQueryRow .searchQueryInput {
-    max-width: min(100%, 26rem);
+    max-width: 100%;
   }
 }
 
