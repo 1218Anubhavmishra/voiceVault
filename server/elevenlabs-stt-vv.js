@@ -87,6 +87,17 @@ function elevenLabsLanguageToStored(code) {
  * @param {Array<{text?: string, start?: number, end?: number}>} words
  * @returns {Array<{start: number, end: number, text: string, words: Array<{start:number,end:number,word:string}>}>}
  */
+/** Join Whisper/ElevenLabs-style tokens — each token usually has no trailing space — into readable text. */
+function joinWordTokens(parts) {
+  let t = (parts ?? []).map((p) => String(p ?? '')).join(' ').trim();
+  t = t.replace(/\s+/g, ' ');
+  t = t.replace(/\s*,\s*/g, ', ');
+  t = t.replace(/\s*\.\s*/g, '. ');
+  t = t.replace(/\s*\?\s*/g, '? ');
+  t = t.replace(/\s*!\s*/g, '! ');
+  return t.replace(/\s+/g, ' ').trim();
+}
+
 function wordsToSegments(words) {
   if (!Array.isArray(words) || words.length === 0) return [];
 
@@ -103,7 +114,9 @@ function wordsToSegments(words) {
 
   list.sort((a, b) => a.start - b.start || a.end - b.end);
 
-  const GAP_SEC = 1.2;
+  // Pause longer than ~0.7s tends to correlate with clause / breath boundaries in flowing speech.
+  // (Too large → entire songs become one row in the UI.)
+  const GAP_SEC = 0.7;
   const out = [];
 
   let cur = {
@@ -117,7 +130,7 @@ function wordsToSegments(words) {
     const w = list[i];
     const gap = w.start - cur.end;
     if (gap > GAP_SEC) {
-      const text = cur.parts.join('').replace(/\s+/g, ' ').trim();
+      const text = joinWordTokens(cur.parts);
       const wordsOut = (cur.words || []).filter(
         (x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start && (x.word ?? '').toString()
       );
@@ -135,7 +148,7 @@ function wordsToSegments(words) {
     }
   }
 
-  const lastText = cur.parts.join('').replace(/\s+/g, ' ').trim();
+  const lastText = joinWordTokens(cur.parts);
   const lastWordsOut = (cur.words || []).filter(
     (x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start && (x.word ?? '').toString()
   );

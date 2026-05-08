@@ -752,6 +752,10 @@ select {
   justify-content: flex-start;
 }
 
+.noteDisplayTitleBlock.noteExpandedTitleRow .noteDisplayTitleText {
+  flex: 0 1 auto;
+}
+
 .noteExpandedTitleSpacer {
   flex: 1 1 auto;
   min-width: 8px;
@@ -949,6 +953,30 @@ select {
   white-space: nowrap;
 }
 
+.noteToolbarDateRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.noteToolbarDateRow .noteToolbarReprocess {
+  flex-shrink: 0;
+}
+
+.noteTranscriptProse {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .note.noteExpanded {
   padding: 14px 14px 12px;
   background: rgba(255, 255, 255, 0.66);
@@ -1006,6 +1034,19 @@ select {
   border-bottom: 1px dashed var(--border);
   border-radius: 12px;
   backdrop-filter: blur(6px);
+}
+
+.noteTranscript .noteDisplayTitleBlock.noteExpandedTitleRow {
+  flex-wrap: wrap;
+}
+
+.noteTranscript .noteExpandedTitleRow .vvIconBtn {
+  flex-shrink: 0;
+}
+
+.noteWordWall {
+  display: block;
+  line-height: 1.55;
 }
 
 .noteTranscript hr.noteTitleBodyDivider {
@@ -1252,6 +1293,7 @@ hr.noteTitleBodyDivider.editTitleBodySep {
 .segText {
   color: var(--text);
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .word {

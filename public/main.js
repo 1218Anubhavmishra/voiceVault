@@ -2431,11 +2431,11 @@ async function refreshResults(q = '') {
         : '';
     const playbackRowTailHtml =
       status === 'ready' || status === 'error'
-        ? `<span class="notePlaybackRowTail"><button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>${
-            status === 'error' || !hideReprocessWhileBusy
-              ? `<button class="btn vvIconBtn" data-reprocess="${item.id}" type="button" aria-label="Reprocess note" title="Reprocess">${VV_ICON_SVG.reprocess}</button>`
-              : ''
-          }</span>`
+        ? `<span class="notePlaybackRowTail"><button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button></span>`
+        : '';
+    const toolbarReprocessHtml =
+      (status === 'ready' || status === 'error') && (status === 'error' || !hideReprocessWhileBusy)
+        ? `<button class="btn vvIconBtn noteToolbarReprocess" data-reprocess="${item.id}" type="button" aria-label="Reprocess note" title="Reprocess">${VV_ICON_SVG.reprocess}</button>`
         : '';
     const rawBody = (item.body ?? '').toString();
     const matchSegs = isSearch ? normalizeMatchSegments(item?.matches ?? item?.best_match ?? null) : [];
@@ -2514,11 +2514,6 @@ async function refreshResults(q = '') {
              <button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>
              <button class="btn vvIconBtn" data-dl-text="${item.id}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button>
              <button class="btn vvIconBtn" data-edit="${item.id}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button>
-             ${
-               status === 'error' || !hideReprocessWhileBusy
-                 ? `<button class="btn vvIconBtn" data-reprocess="${item.id}" type="button" aria-label="Reprocess note" title="Reprocess">${VV_ICON_SVG.reprocess}</button>`
-                 : ''
-             }
            </span>`
         : '';
 
@@ -2572,7 +2567,10 @@ async function refreshResults(q = '') {
         <div class="noteSummaryToolbar">
           <span class="noteStatus ready">Ready</span>
           ${fileMetaHtml}
-          <span class="noteToolbarDate noteMeta">${escapeHtml(created)}</span>
+          <span class="noteToolbarDateRow">
+            <span class="noteToolbarDate noteMeta">${escapeHtml(created)}</span>
+            ${toolbarReprocessHtml}
+          </span>
           <span class="noteToolbarSpacer" aria-hidden="true"></span>
           <div class="noteCollapseActions">
             ${headerActionsHtml}
@@ -2593,9 +2591,12 @@ async function refreshResults(q = '') {
             <div class="noteTitle">${listHeadline}</div>
             ${fileMetaHtml}
           </div>
-          <div style="display:flex; align-items:center; gap:10px">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
             ${headerActionsHtml}
-            <div class="noteMeta noteTitleStamp">${created}</div>
+            <div class="noteToolbarDateRow">
+              <div class="noteMeta noteTitleStamp">${created}</div>
+              ${toolbarReprocessHtml}
+            </div>
           </div>
         </div>
         <div style="margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
@@ -2654,6 +2655,7 @@ async function refreshResults(q = '') {
 
     try {
       delete note.dataset.wordsLoaded;
+      delete note.dataset.segmentsLoaded;
       delete note.dataset.vvSearchMatches;
     } catch {
       // ignore
@@ -2701,7 +2703,7 @@ async function refreshResults(q = '') {
         btnToggle.setAttribute('title', 'Collapse');
         scheduleExpandedNoteScroll(note, isLastNote);
         if (status === 'ready') {
-          void ensureNoteWordSpans(item.id, note).catch(() => {});
+          void hydrateExpandedReadyNote(item.id, note, hydrateHighlightMatchesFromDataset(note)).catch(() => {});
         }
         syncCollapsedTranscriptShell();
       }
@@ -2725,7 +2727,7 @@ async function refreshResults(q = '') {
             if (editBox && !editBox.hidden) updateScrollHint(editBody, scrollHint);
           });
           if (status === 'ready') {
-            void ensureNoteWordSpans(item.id, note).catch(() => {});
+            void hydrateExpandedReadyNote(item.id, note, hydrateHighlightMatchesFromDataset(note)).catch(() => {});
           }
         }
         syncCollapsedTranscriptShell();
@@ -2920,7 +2922,7 @@ async function refreshResults(q = '') {
             // ignore
           }
         }
-        await ensureNoteWordSpans(item.id, note);
+        await hydrateExpandedReadyNote(item.id, note, hydrateHighlightMatchesFromDataset(note));
         const bodyEl = note.querySelector('.noteBody');
         startWordFollowAll(audio, bodyEl);
         await audio.play();
@@ -3002,7 +3004,7 @@ async function refreshResults(q = '') {
                 // ignore
               }
             }
-            await ensureNoteWordSpans(item.id, note);
+            await hydrateExpandedReadyNote(item.id, note, hydrateHighlightMatchesFromDataset(note));
             startWordFollowAll(audio, note.querySelector('.noteBody'));
           } catch {
             // ignore
@@ -3371,6 +3373,152 @@ function playClipFromNote(noteId, start, end) {
   playAudioRange(audio, start, end, { loop: loopSegments, rate: playbackRate });
 }
 
+/**
+ * Title row matching the Saved Note expanded-detail layout (play + edit beside title).
+ */
+function segmentTitleRowHtml(noteId, dataPartial = {}) {
+  const nidEsc = escapeHtml(String(noteId ?? ''));
+  const displayTitleRaw = (dataPartial?.display_title ?? '').toString().trim();
+  const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
+  const titleText =
+    displayTitleEsc || escapeHtml((dataPartial?.title ?? '').toString().trim() || 'Untitled');
+  return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><button class="btn vvIconBtn" data-play="${nidEsc}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${nidEsc}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
+}
+
+/** Match segments stored on the grid card for semantic / keyword hits. */
+/** Join STT word tokens (usually no inter-token spaces) into readable text. Mirrors `server/elevenlabs-stt-vv.js` `joinWordTokens`. */
+function vvJoinSttWordParts(parts) {
+  let t = (parts ?? []).map((p) => String(p ?? '')).join(' ').trim();
+  t = t.replace(/\s+/g, ' ');
+  t = t.replace(/\s*,\s*/g, ', ');
+  t = t.replace(/\s*\.\s*/g, '. ');
+  t = t.replace(/\s*\?\s*/g, '? ');
+  t = t.replace(/\s*!\s*/g, '! ');
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+/** Light cleanup for transcripts already stored without spaces after punctuation. */
+function vvPolishStoredTranscriptText(raw) {
+  let t = String(raw ?? '').replace(/\r\n/g, '\n').trim();
+  t = t.replace(/,([^\s\d,.])/g, ', $1');
+  t = t.replace(/\.([A-Za-z])/g, '. $1');
+  t = t.replace(/\s+/g, ' ');
+  return t.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function hydrateHighlightMatchesFromDataset(noteEl) {
+  try {
+    const raw = (noteEl?.dataset?.vvSearchMatches ?? '').toString();
+    if (!raw.trim()) return null;
+    const j = JSON.parse(raw);
+    const arr = normalizeMatchSegments(Array.isArray(j) ? j : [j], { limit: 20 });
+    return arr.length ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mirror server `wordsToSegments` logic with a smaller pause threshold so flowing speech splits into more transcript rows.
+ * @returns {Array<{start:number,end:number,text:string,words:Array<{start:number,end:number,word:string}>}>}
+ */
+function vvCollapseWordsIntoPhrases(wordListRaw, gapSec) {
+  if (!Array.isArray(wordListRaw) || wordListRaw.length === 0) return [];
+
+  const list = [];
+  for (const w of wordListRaw) {
+    const wordTxt = (w.word ?? w.text ?? '').toString();
+    const s = Number(w.start);
+    const e = Number(w.end);
+    if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s || !wordTxt.trim()) continue;
+    list.push({ word: wordTxt, start: s, end: e });
+  }
+  if (!list.length) return [];
+  list.sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const out = [];
+  let cur = {
+    start: list[0].start,
+    end: list[0].end,
+    parts: [list[0].word],
+    words: [{ start: list[0].start, end: list[0].end, word: list[0].word }]
+  };
+
+  const pushCur = () => {
+    const text = vvJoinSttWordParts(cur.parts);
+    const wordsOut = (cur.words || []).filter(
+      (x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start && String(x.word ?? '').trim()
+    );
+    if (text) out.push({ start: cur.start, end: cur.end, text, words: wordsOut });
+  };
+
+  for (let i = 1; i < list.length; i += 1) {
+    const w = list[i];
+    const gap = w.start - cur.end;
+    if (gap > gapSec) {
+      pushCur();
+      cur = {
+        start: w.start,
+        end: w.end,
+        parts: [w.word],
+        words: [{ start: w.start, end: w.end, word: w.word }]
+      };
+    } else {
+      cur.end = Math.max(cur.end, w.end);
+      cur.parts.push(w.word);
+      cur.words.push({ start: w.start, end: w.end, word: w.word });
+    }
+  }
+  pushCur();
+  return out;
+}
+
+/** Split segments that bury many words behind one timeline row into shorter rows for readability. */
+function vvRefineSegmentsForDisplay(segments, { interWordPauseSec = 0.52 } = {}) {
+  if (!Array.isArray(segments) || segments.length === 0) return segments || [];
+
+  const flat = segments.flatMap((seg) => {
+    const ws = Array.isArray(seg?.words) ? seg.words : [];
+    if (!ws.length) return [seg];
+
+    const sub = vvCollapseWordsIntoPhrases(ws, interWordPauseSec);
+    if (!sub || sub.length <= 1) return [seg];
+
+    return sub.map((s) => ({
+      start: Number(s.start),
+      end: Number(s.end),
+      text: String(s.text ?? '').trim(),
+      words: Array.isArray(s.words) ? s.words : []
+    }));
+  });
+
+  return flat.filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start && (s.text ?? '').toString().trim());
+}
+
+/** Prefer readable prose from `body` + segments; fallback to word karaoke when nothing is available. */
+async function hydrateExpandedReadyNote(noteId, noteEl, highlight = null) {
+  const detailsEl = noteEl?.querySelector?.('.noteDetails');
+  if (!detailsEl || detailsEl.hidden) return;
+
+  delete noteEl.dataset.wordsLoaded;
+
+  await loadNoteSegmentsIntoUi(noteId, noteEl, { highlight });
+  if (noteEl.dataset?.segmentsLoaded === '1') return;
+
+  await ensureNoteWordSpans(noteId, noteEl);
+}
+
+/** Editor-style transcript: prefer stored `body`, else join segment texts with blank lines (phrase boundaries). */
+function vvExpandedTranscriptProse(data, refinedSegments) {
+  const bodyRaw = ((data.body ?? '').toString()).trim();
+  const segParas = (refinedSegments ?? [])
+    .map((s) => vvPolishStoredTranscriptText(String(s?.text ?? '').trim()))
+    .filter(Boolean);
+  const fromSegs = segParas.join('\n\n');
+  const primary = bodyRaw.length ? bodyRaw : fromSegs;
+  return vvPolishStoredTranscriptText(primary);
+}
+
 async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPlayMatch = false } = {}) {
   const detailsEl = noteEl?.querySelector?.('.noteDetails');
   const bodyEl = noteEl?.querySelector?.('.noteBody');
@@ -3384,10 +3532,12 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
   const resp = await fetch(`/api/notes/${encodeURIComponent(noteId)}`);
   if (!resp.ok) return;
   const data = await resp.json();
-  const segments = Array.isArray(data?.segments) ? data.segments : [];
-  if (!segments.length) return;
+  const segmentsRaw = Array.isArray(data?.segments) ? data.segments : [];
+  if (!segmentsRaw.length) return;
   noteEl.dataset.segmentsLoaded = '1';
 
+  let segments = vvRefineSegmentsForDisplay(segmentsRaw, { interWordPauseSec: 0.52 });
+  if (!segments.length) segments = segmentsRaw;
   const headerText = extractUploadedFilenameHeader(data);
 
   try {
@@ -3404,176 +3554,85 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
     // ignore
   }
 
-  const displayTitleRaw = (data?.display_title ?? '').toString().trim();
-  const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
-  const titleTextSeg =
-    displayTitleEsc ||
-    escapeHtml((data?.title ?? '').toString().trim() || 'Untitled');
-  const titleBodySepHtml = `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleTextSeg}</span><button class="btn vvIconBtn" data-play="${escapeHtml(
-    String(noteId)
-  )}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${escapeHtml(
-    String(noteId)
-  )}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
+  const titleBodySepHtml = segmentTitleRowHtml(noteId, data);
 
-  // Replace transcript with clickable timestamped segments.
-  bodyEl.innerHTML = titleBodySepHtml + renderSegmentsHtml(segments, { highlight, headerText });
+  let prose = vvExpandedTranscriptProse(data, segments);
+  if (headerText && prose && !prose.includes(headerText)) {
+    prose = `${headerText}\n\n${prose}`.trim();
+  }
 
-  // Delegate clicks to Play buttons (text is not clickable).
-  bodyEl.addEventListener('click', (e) => {
-    const target = e.target;
-    if (!(target instanceof Element)) return;
-    const playBtn = target.closest?.('button[data-seg-play]');
-    if (!playBtn) return;
-    e.preventDefault();
-    e.stopPropagation();
-    closeAllActionMenus();
+  const matchSegsForHl = normalizeMatchSegments(Array.isArray(highlight) ? highlight : highlight ? [highlight] : [], {
+    limit: 22
+  });
+  const proseHtmlInner =
+    matchSegsForHl.length > 0
+      ? highlightTranscriptHtml(prose, matchSegsForHl, { mode: 'search' })
+      : escapeHtml(prose);
 
-    const start = Number(playBtn.getAttribute('data-seg-start') || '0');
-    const end = Number(playBtn.getAttribute('data-seg-end') || '0');
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+  bodyEl.innerHTML =
+    `${titleBodySepHtml}<div class="noteTranscriptProse">${proseHtmlInner}</div>`.trim();
 
-    const setSegBtn = (btnEl, mode) => {
-      if (!(btnEl instanceof HTMLButtonElement)) return;
-      if (mode === 'stop') {
-        btnEl.innerHTML = VV_ICON_SVG.stop;
-        btnEl.setAttribute('aria-label', 'Stop segment');
-        btnEl.setAttribute('title', 'Stop');
-      } else {
-        const tt = `Play ${formatClock(start)}–${formatClock(end)}`;
-        btnEl.innerHTML = VV_ICON_SVG.playSegment;
-        btnEl.setAttribute('aria-label', 'Play segment');
-        btnEl.setAttribute('title', tt);
-      }
-    };
+  try {
+    noteEl.__vvProseSearchAbo?.abort();
+  } catch {
+    // ignore
+  }
 
-    const wantSrc = `/api/notes/${encodeURIComponent(noteId)}/audio`;
-    if (audioEl.src !== new URL(wantSrc, window.location.origin).toString()) {
-      audioEl.src = wantSrc;
-      try {
-        audioEl.load();
-      } catch {
-        // ignore
-      }
-    }
-
-    // Toggle off if this segment is already playing.
-    const activeBtn = audioEl.__vvActiveSegBtn;
-    const activeStart = Number(audioEl.__vvLastSegStart);
-    const activeEnd = Number(audioEl.__vvLastSegEnd);
-    const isActive = activeBtn === playBtn && Number.isFinite(activeStart) && Number.isFinite(activeEnd) && Math.abs(activeStart - start) < 0.001 && Math.abs(activeEnd - end) < 0.001;
-    const isPlaying = !audioEl.paused && !audioEl.ended;
-    if (isActive && isPlaying) {
-      try {
-        if (audioEl.__vvRangeCleanup) audioEl.__vvRangeCleanup();
-        audioEl.pause();
-        audioEl.currentTime = 0;
-      } catch {
-        // ignore
-      }
-      setSegBtn(playBtn, 'play');
-      try {
-        const loopBtn = noteEl?.querySelector?.(`button[data-loop="${CSS.escape(String(noteId))}"]`);
-        if (loopBtn) loopBtn.hidden = true;
-      } catch {
-        // ignore
-      }
-      try {
-        audioEl.__vvActiveSegBtn = null;
-      } catch {
-        // ignore
-      }
-      return;
-    }
-
-    // Reset any previously active segment button.
-    if (activeBtn && activeBtn instanceof HTMLButtonElement && activeBtn !== playBtn) {
-      try {
-        activeBtn.innerHTML = VV_ICON_SVG.play;
-        activeBtn.setAttribute('aria-label', 'Play segment');
-      } catch {
-        // ignore
-      }
-    }
-    setSegBtn(playBtn, 'stop');
-    try {
-      audioEl.__vvActiveSegBtn = playBtn;
-    } catch {
-      // ignore
-    }
-    try {
-      const loopBtn = noteEl?.querySelector?.(`button[data-loop="${CSS.escape(String(noteId))}"]`);
-      if (loopBtn) loopBtn.hidden = false;
-    } catch {
-      // ignore
-    }
-
-    // Highlight words in the clicked segment while playing (if available).
-    const rowEl = playBtn.closest?.('.segRow');
-    try {
-      audioEl.__vvLastSegStart = start;
-      audioEl.__vvLastSegEnd = end;
-    } catch {
-      // ignore
-    }
-    playAudioRange(audioEl, start, end, { loop: loopSegments, rate: playbackRate });
-    startWordHighlight(audioEl, rowEl);
-
-    // Ensure button reverts when the range playback cleans up (end of segment or interruption).
-    const revert = () => {
-      try {
-        if (audioEl.__vvActiveSegBtn === playBtn) {
-          setSegBtn(playBtn, 'play');
-          audioEl.__vvActiveSegBtn = null;
-        }
-      } catch {
-        // ignore
-      }
-      try {
-        const loopBtn = noteEl?.querySelector?.(`button[data-loop="${CSS.escape(String(noteId))}"]`);
-        if (loopBtn) loopBtn.hidden = true;
-      } catch {
-        // ignore
-      }
-    };
-    // playAudioRange sets __vvRangeCleanup asynchronously inside its `run`; wrap it after the call.
-    setTimeout(() => {
-      try {
-        const curCleanup = audioEl.__vvRangeCleanup;
-        if (!curCleanup || curCleanup.__vvWrappedForSegUi) return;
-        const wrapped = () => {
+  try {
+    const ctl = new AbortController();
+    noteEl.__vvProseSearchAbo = ctl;
+    bodyEl.addEventListener(
+      'click',
+      (evt) => {
+        const span = evt.target?.closest?.('.vvSearchHit[data-seg-start][data-seg-end]');
+        if (!span || !bodyEl.contains(span)) return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        const start = Number(span.getAttribute('data-seg-start') || '');
+        const end = Number(span.getAttribute('data-seg-end') || '');
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        closeAllActionMenus();
+        const wantSrc = `/api/notes/${encodeURIComponent(noteId)}/audio`;
+        audioEl.hidden = false;
+        if (audioEl.src !== new URL(wantSrc, window.location.origin).toString()) {
+          audioEl.src = wantSrc;
           try {
-            curCleanup();
-          } finally {
-            revert();
+            audioEl.load();
+          } catch {
+            // ignore
           }
-        };
-        wrapped.__vvWrappedForSegUi = true;
-        audioEl.__vvRangeCleanup = wrapped;
-      } catch {
-        // ignore
-      }
-    }, 0);
-
-    if (rowEl) {
-      requestAnimationFrame(() => {
+        }
         try {
-          rowEl.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-          ensureElementFullyVisible(rowEl, 12);
+          if (audioEl.__vvWordCleanup) {
+            audioEl.__vvWordCleanup();
+            audioEl.__vvWordCleanup = null;
+          }
         } catch {
           // ignore
         }
-      });
-    }
-  });
-
-  // If we have match segments, scroll the first one into view. (No auto-play.)
-  const matchList = normalizeHighlightList(highlight);
-  if (matchList.length) {
-    const h = matchList[0];
-    const matchEl = bodyEl.querySelector(
-      `[data-seg-start="${CSS.escape(String(h.start))}"][data-seg-end="${CSS.escape(String(h.end))}"]`
+        for (const h of bodyEl.querySelectorAll('.vvSearchHit')) h.classList.remove('playing');
+        span.classList.add('playing');
+        const cleanup = () => {
+          try {
+            span.classList.remove('playing');
+          } catch {
+            // ignore
+          }
+        };
+        audioEl.addEventListener('pause', cleanup, { once: true });
+        audioEl.addEventListener('ended', cleanup, { once: true });
+        playAudioRange(audioEl, start, end, { loop: loopSegments, rate: playbackRate });
+      },
+      { signal: ctl.signal }
     );
-    matchEl?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  } catch {
+    // ignore
+  }
+
+  // If we have match segments, scroll the first hit into view. (No auto-play.)
+  if (matchSegsForHl.length) {
+    const hit = bodyEl.querySelector('.vvSearchHit.search, .vvSearchHit');
+    hit?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   }
 }
 
@@ -4101,7 +4160,7 @@ function renderWordsHtmlFromSegments(segments) {
           String(w.end)
         )}">${escapeHtml(w.word)}</span>`
     )
-    .join('');
+    .join(' ');
 }
 
 async function ensureNoteWordSpans(noteId, noteEl) {
@@ -4121,13 +4180,9 @@ async function ensureNoteWordSpans(noteId, noteEl) {
   const wordsHtml = renderWordsHtmlFromSegments(segments);
   if (!wordsHtml) return false;
 
-  const displayTitleRaw = (data?.display_title ?? '').toString().trim();
-  const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
-  const titleBodySepHtml = displayTitleEsc
-    ? `<div class="noteDisplayTitleBlock"><span class="noteDisplayTitleText">${displayTitleEsc}</span></div><hr class="noteTitleBodyDivider" />`
-    : '';
+  const titleBodySepHtml = segmentTitleRowHtml(noteId, data);
 
-  bodyEl.innerHTML = titleBodySepHtml + wordsHtml;
+  bodyEl.innerHTML = `${titleBodySepHtml}<div class="noteWordWall">${wordsHtml}</div>`;
   try {
     const rawMatches = noteEl?.dataset?.vvSearchMatches ?? '';
     if (rawMatches) {
