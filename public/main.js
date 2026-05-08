@@ -4158,11 +4158,20 @@ function applySearchHitsByTime(bodyEl, matchSegs) {
     const ms = Number(m.start);
     const me = Number(m.end);
     if (!Number.isFinite(ms) || !Number.isFinite(me) || me <= ms) continue;
+    // Reduce the highlighted area by trimming edge timing.
+    // Still accurate (segment is the same), but avoids tinting leading/trailing boundary words.
+    const dur = me - ms;
+    const pad = Math.max(0.12, Math.min(0.6, dur * 0.06)); // 6% of segment, clamped
+    const hs = ms + pad;
+    const he = me - pad;
     for (const wEl of words) {
       const ws = Number(wEl.getAttribute('data-ws'));
       const we = Number(wEl.getAttribute('data-we'));
       if (!Number.isFinite(ws) || !Number.isFinite(we)) continue;
-      if (we > ms && ws < me) {
+      // Prefer "fully inside" the trimmed window; fall back to overlap when segment is tiny.
+      const insideTrimmed = he > hs && ws >= hs && we <= he;
+      const overlapsRaw = we > ms && ws < me;
+      if (insideTrimmed || (!insideTrimmed && overlapsRaw && dur < 0.9)) {
         wEl.classList.add('vvSearchHit', 'search');
         wEl.setAttribute('data-seg-start', String(ms));
         wEl.setAttribute('data-seg-end', String(me));
