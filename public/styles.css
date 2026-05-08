@@ -269,10 +269,37 @@ input[type='file'] {
 
 .floatDock {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 4px 2px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.floatDockLeading,
+.floatDockTrailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.floatDockTrailing {
+  margin-left: auto;
+}
+
+@media (max-width: 480px) {
+  .floatDock {
+    flex-wrap: wrap;
+  }
+
+  .floatDockTrailing {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 .floatDockBtn {

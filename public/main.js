@@ -2352,6 +2352,13 @@ async function refreshResults(q = '') {
     }
   }
 
+  // If a search yields no usable match segments, treat it as "No results" rather than
+  // showing an arbitrary hybrid list (which looks like a broken view when nothing matches).
+  if (isSearch && Array.isArray(items) && items.length) {
+    const hasAnyMatch = items.some((it) => normalizeMatchSegments(it?.matches ?? it?.best_match ?? null).length > 0);
+    if (!hasAnyMatch) items = [];
+  }
+
   lastSearchItems = Array.isArray(items) ? items : [];
   lastSearchQuery = isSearch ? queryText : '';
   if (newNotePendingProcessId) {
@@ -2386,6 +2393,18 @@ async function refreshResults(q = '') {
   }
 
   const hideReprocessWhileBusy = items.some((it) => (it?.status ?? '').toString() === 'processing');
+
+  // While any note is processing/reprocessing, keep only those note(s) expanded.
+  // (Prevents the UI from showing multiple expanded transcripts while one job is actively changing.)
+  const processingIds = items
+    .filter((it) => (it?.status ?? '').toString() === 'processing')
+    .map((it) => (it?.id ?? '').toString())
+    .filter(Boolean);
+  if (processingIds.length) {
+    expandedNoteIds.clear();
+    expandedNoteIdsFromSearchMatch.clear();
+    for (const id of processingIds) expandedNoteIds.add(id);
+  }
 
   const renderT0 = performance.now();
   for (let idx = 0; idx < items.length; idx += 1) {
@@ -2867,11 +2886,15 @@ async function refreshResults(q = '') {
 
     // Tags removed.
 
-    const playBtns = Array.from(note.querySelectorAll('button[data-play]'));
     const audio = note.querySelector('audio');
+    /** Play / edit live inside `.noteBody` and get replaced during transcript hydrate — bind via delegation on the card root. */
+    const playBtnsLive = () =>
+      Array.from(note.querySelectorAll('button[data-play]')).filter(
+        (b) => (b.getAttribute('data-play') ?? '').toString() === String(item.id)
+      );
     // Ready notes expose playback controls; processing/error notes omit those controls.
-    if (playBtns.length && audio) {
-    const onToggleFullAudio = async (btn, e) => {
+    if (audio) {
+      const onToggleFullAudio = async (btn, e) => {
       e.stopPropagation();
       const src = `/api/notes/${encodeURIComponent(item.id)}/audio`;
       const isPlaying = !audio.paused && !audio.ended && audio.currentTime > 0;
@@ -2882,7 +2905,7 @@ async function refreshResults(q = '') {
         } catch {
           // ignore
         }
-        for (const b of playBtns) {
+        for (const b of playBtnsLive()) {
           try {
             b.innerHTML = VV_ICON_SVG.play;
             b.setAttribute('aria-label', 'Play audio');
@@ -2923,10 +2946,14 @@ async function refreshResults(q = '') {
           }
         }
         await hydrateExpandedReadyNote(item.id, note, hydrateHighlightMatchesFromDataset(note));
+        note.querySelectorAll('button[data-edit]').forEach((btnEl) => {
+          if ((btnEl.getAttribute('data-edit') ?? '').toString() !== String(item.id)) return;
+          btnEl.hidden = note.classList.contains('isEditing');
+        });
         const bodyEl = note.querySelector('.noteBody');
         startWordFollowAll(audio, bodyEl);
         await audio.play();
-        for (const b of playBtns) {
+        for (const b of playBtnsLive()) {
           try {
             b.innerHTML = VV_ICON_SVG.stop;
             b.setAttribute('aria-label', 'Stop audio');
@@ -2945,12 +2972,16 @@ async function refreshResults(q = '') {
         // ignore autoplay restrictions
       }
     };
-    for (const b of playBtns) {
-      b.addEventListener('click', (e) => onToggleFullAudio(b, e));
-    }
+      note.addEventListener('click', (ev) => {
+        const bp = ev.target?.closest?.('button[data-play]');
+        if (!bp || !note.contains(bp)) return;
+        if ((bp.getAttribute('data-play') ?? '').toString() !== String(item.id)) return;
+        ev.stopPropagation();
+        void onToggleFullAudio(bp, ev);
+      });
 
     audio.addEventListener('ended', () => {
-      for (const b of playBtns) {
+      for (const b of playBtnsLive()) {
         try {
           b.innerHTML = VV_ICON_SVG.play;
           b.setAttribute('aria-label', 'Play audio');
@@ -3031,7 +3062,11 @@ async function refreshResults(q = '') {
     }
 
     const editTitle = note.querySelector('.editTitle');
-    const editBtns = Array.from(note.querySelectorAll('button[data-edit]'));
+    const editBtnsForId = () =>
+      Array.from(note.querySelectorAll('button[data-edit]')).filter(
+        (b) => (b.getAttribute('data-edit') ?? '').toString() === String(item.id)
+      );
+    const editBtns = editBtnsForId();
     const deleteBtns = Array.from(note.querySelectorAll('button[data-delete]'));
     const reprocessBtns = Array.from(note.querySelectorAll('button[data-reprocess]'));
     const dlAudioBtns = Array.from(note.querySelectorAll('button[data-dl-audio]'));
@@ -3065,47 +3100,48 @@ async function refreshResults(q = '') {
     }
 
     const syncEditMenuBtn = () => {
-      for (const b of editBtns) b.hidden = note.classList.contains('isEditing');
+      for (const b of editBtnsForId()) b.hidden = note.classList.contains('isEditing');
     };
     syncEditMenuBtn();
 
-    for (const btnEdit of editBtns) {
-      btnEdit.addEventListener('click', async (e) => {
-      e.stopPropagation();
-        // Editing UI lives inside details; ensure it's visible.
-        if (details?.hidden) {
-          details.hidden = false;
-          note.classList.add('noteExpanded');
-          note.classList.remove('noteCollapsed');
-          if (btnToggle) {
-            btnToggle.innerHTML = VV_ICON_SVG.arrowLeft;
-            btnToggle.setAttribute('aria-label', 'Collapse note');
-            btnToggle.setAttribute('title', 'Collapse');
-          }
-          expandedNoteIds.add(item.id);
-          scheduleExpandedNoteScroll(note, isLastNote);
-          syncCollapsedTranscriptShell();
+    note.addEventListener('click', async (ev) => {
+      const eb = ev.target?.closest?.('button[data-edit]');
+      if (!eb || !note.contains(eb)) return;
+      if ((eb.getAttribute('data-edit') ?? '').toString() !== String(item.id)) return;
+      ev.stopPropagation();
+      // Editing UI lives inside details; ensure it's visible.
+      if (details?.hidden) {
+        details.hidden = false;
+        note.classList.add('noteExpanded');
+        note.classList.remove('noteCollapsed');
+        if (btnToggle) {
+          btnToggle.innerHTML = VV_ICON_SVG.arrowLeft;
+          btnToggle.setAttribute('aria-label', 'Collapse note');
+          btnToggle.setAttribute('title', 'Collapse');
         }
-        const willShow = !!editBox.hidden;
-        editBox.hidden = !willShow;
-        if (transcriptBox) transcriptBox.hidden = willShow;
-        note.classList.toggle('isEditing', willShow);
-        syncEditMenuBtn();
-        if (willShow) {
-          try {
-            const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
-            const full = await safeJson(resp);
-            if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
-            editTitle.value = (full?.display_title ?? full?.title ?? item.display_title ?? item.title ?? '').toString();
-            editBody.value = (full?.body ?? item.body ?? '').toString();
-          } catch {
-            editTitle.value = (item.display_title ?? item.title ?? '').toString();
-      editBody.value = (item.body ?? '').toString();
-          }
-          requestAnimationFrame(refreshEditScrollHint);
+        expandedNoteIds.add(item.id);
+        scheduleExpandedNoteScroll(note, isLastNote);
+        syncCollapsedTranscriptShell();
+      }
+      const willShow = !!editBox.hidden;
+      editBox.hidden = !willShow;
+      if (transcriptBox) transcriptBox.hidden = willShow;
+      note.classList.toggle('isEditing', willShow);
+      syncEditMenuBtn();
+      if (willShow) {
+        try {
+          const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
+          const full = await safeJson(resp);
+          if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
+          editTitle.value = (full?.display_title ?? full?.title ?? item.display_title ?? item.title ?? '').toString();
+          editBody.value = (full?.body ?? item.body ?? '').toString();
+        } catch {
+          editTitle.value = (item.display_title ?? item.title ?? '').toString();
+          editBody.value = (item.body ?? '').toString();
         }
-      });
-    }
+        requestAnimationFrame(refreshEditScrollHint);
+      }
+    });
 
     btnCancel.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3385,7 +3421,6 @@ function segmentTitleRowHtml(noteId, dataPartial = {}) {
   return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><button class="btn vvIconBtn" data-play="${nidEsc}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${nidEsc}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
 }
 
-/** Match segments stored on the grid card for semantic / keyword hits. */
 /** Join STT word tokens (usually no inter-token spaces) into readable text. Mirrors `server/elevenlabs-stt-vv.js` `joinWordTokens`. */
 function vvJoinSttWordParts(parts) {
   let t = (parts ?? []).map((p) => String(p ?? '')).join(' ').trim();
@@ -3397,13 +3432,16 @@ function vvJoinSttWordParts(parts) {
   return t.replace(/\s+/g, ' ').trim();
 }
 
-/** Light cleanup for transcripts already stored without spaces after punctuation. */
+/** Light cleanup for transcripts; keeps paragraph breaks (newlines); normalizes spaces only within each line. */
 function vvPolishStoredTranscriptText(raw) {
-  let t = String(raw ?? '').replace(/\r\n/g, '\n').trim();
-  t = t.replace(/,([^\s\d,.])/g, ', $1');
-  t = t.replace(/\.([A-Za-z])/g, '. $1');
-  t = t.replace(/\s+/g, ' ');
-  return t.replace(/\n{3,}/g, '\n\n').trim();
+  const chunks = String(raw ?? '').replace(/\r\n/g, '\n').split('\n');
+  const polished = chunks.map((line) => {
+    let t = line;
+    t = t.replace(/,([^\s\d,.])/g, ', $1');
+    t = t.replace(/\.([A-Za-z])/g, '. $1');
+    return t.replace(/[ \t]+/g, ' ').trim();
+  });
+  return polished.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function hydrateHighlightMatchesFromDataset(noteEl) {
@@ -3508,15 +3546,52 @@ async function hydrateExpandedReadyNote(noteId, noteEl, highlight = null) {
   await ensureNoteWordSpans(noteId, noteEl);
 }
 
-/** Editor-style transcript: prefer stored `body`, else join segment texts with blank lines (phrase boundaries). */
+/**
+ * Readable prose: phrase/paragraph boundaries from segmentation when `body` has no structural newlines,
+ * otherwise keep the saved `body` (user edits line breaks preserved).
+ */
 function vvExpandedTranscriptProse(data, refinedSegments) {
   const bodyRaw = ((data.body ?? '').toString()).trim();
+  /** True when the transcript already carries intentional paragraphs (multi-line transcript). */
+  const bodyHasStructuralBreaks = /\n[^\s]/m.test(bodyRaw);
   const segParas = (refinedSegments ?? [])
     .map((s) => vvPolishStoredTranscriptText(String(s?.text ?? '').trim()))
     .filter(Boolean);
   const fromSegs = segParas.join('\n\n');
-  const primary = bodyRaw.length ? bodyRaw : fromSegs;
+
+  const primary =
+    bodyRaw.length && bodyHasStructuralBreaks ? bodyRaw : fromSegs.length > 0 ? fromSegs : bodyRaw;
+
   return vvPolishStoredTranscriptText(primary);
+}
+
+/**
+ * Editor-like prose, but rendered as time-coded word spans so playback can highlight words in grey.
+ * Inserts paragraph breaks between refined segments.
+ */
+function renderWordProseHtmlFromSegments(segments) {
+  const segs = Array.isArray(segments) ? segments : [];
+  const blocks = [];
+  for (const s of segs) {
+    const ws = Array.isArray(s?.words) ? s.words : [];
+    const list = ws.length ? ws : syntheticWordsFromSegment(s);
+    const words = [];
+    for (const w of list) {
+      const start = Number(w?.start);
+      const end = Number(w?.end);
+      const word = (w?.word ?? w?.text ?? '').toString().trim();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !word) continue;
+      words.push(
+        `<span class="word" data-ws="${escapeHtml(String(start))}" data-we="${escapeHtml(String(end))}">${escapeHtml(
+          word
+        )}</span>`
+      );
+      if (words.length >= 60_000) break;
+    }
+    if (words.length) blocks.push(words.join(' '));
+    if (blocks.length >= 5000) break;
+  }
+  return blocks.join('<br><br>');
 }
 
 async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPlayMatch = false } = {}) {
@@ -3564,13 +3639,22 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
   const matchSegsForHl = normalizeMatchSegments(Array.isArray(highlight) ? highlight : highlight ? [highlight] : [], {
     limit: 22
   });
-  const proseHtmlInner =
-    matchSegsForHl.length > 0
-      ? highlightTranscriptHtml(prose, matchSegsForHl, { mode: 'search' })
-      : escapeHtml(prose);
-
-  bodyEl.innerHTML =
-    `${titleBodySepHtml}<div class="noteTranscriptProse">${proseHtmlInner}</div>`.trim();
+  const wordsProseHtml = renderWordProseHtmlFromSegments(segments);
+  if (wordsProseHtml) {
+    bodyEl.innerHTML = `${titleBodySepHtml}<div class="noteTranscriptProse noteTranscriptProse--words">${wordsProseHtml}</div>`.trim();
+    try {
+      const proseBox = bodyEl.querySelector('.noteTranscriptProse');
+      if (proseBox && matchSegsForHl.length) applySearchHitsByTime(proseBox, matchSegsForHl);
+    } catch {
+      // ignore
+    }
+  } else {
+    const proseHtmlInner =
+      matchSegsForHl.length > 0
+        ? highlightTranscriptHtml(prose, matchSegsForHl, { mode: 'search' })
+        : escapeHtml(prose);
+    bodyEl.innerHTML = `${titleBodySepHtml}<div class="noteTranscriptProse">${proseHtmlInner}</div>`.trim();
+  }
 
   try {
     noteEl.__vvProseSearchAbo?.abort();
@@ -3634,6 +3718,11 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
     const hit = bodyEl.querySelector('.vvSearchHit.search, .vvSearchHit');
     hit?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   }
+
+  noteEl.querySelectorAll('button[data-edit]').forEach((btnEl) => {
+    if ((btnEl.getAttribute('data-edit') ?? '').toString() !== String(noteId)) return;
+    btnEl.hidden = noteEl.classList.contains('isEditing');
+  });
 }
 
 /**
@@ -4197,6 +4286,11 @@ async function ensureNoteWordSpans(noteId, noteEl) {
   } catch {
     // ignore
   }
+
+  noteEl.querySelectorAll('button[data-edit]').forEach((btnEl) => {
+    if ((btnEl.getAttribute('data-edit') ?? '').toString() !== String(noteId)) return;
+    btnEl.hidden = noteEl.classList.contains('isEditing');
+  });
   return true;
 }
 
