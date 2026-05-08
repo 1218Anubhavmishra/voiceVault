@@ -2464,7 +2464,7 @@ async function refreshResults(q = '') {
         : escapeHtml(rawBody);
     const collapsedBodyPreview =
       status === 'ready' && (item.body ?? '').toString().trim()
-        ? escapeHtml(truncateNotePreviewPlain(item.body || '', 280))
+        ? collapsedPreviewHtml(item.body || '', { maxChars: 280, maxLines: 4 })
         : '';
     const collapsedTitleTextEsc = displayTitleEsc || escapeHtml((item.title ?? '').toString().trim() || 'Untitled');
     const collapsedTitleRowHtml =
@@ -5421,6 +5421,22 @@ function escapeHtml(s) {
         return ch;
     }
   });
+}
+
+function collapsedPreviewHtml(raw, { maxChars = 280, maxLines = 4 } = {}) {
+  const nChars = Math.max(60, Number(maxChars) || 280);
+  const nLines = Math.max(1, Number(maxLines) || 4);
+  const src = (raw ?? '').toString().replace(/\r\n/g, '\n').trim();
+  if (!src) return '';
+  const lines = src
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean);
+  const sliced = lines.slice(0, nLines);
+  let joined = sliced.join('\n');
+  joined = vvPolishStoredTranscriptText(joined);
+  if (joined.length > nChars) joined = `${joined.slice(0, nChars - 1)}…`;
+  return escapeHtml(joined).replace(/\n/g, '<br>');
 }
 
 function truncateNotePreviewPlain(raw, maxLen) {
