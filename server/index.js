@@ -9,13 +9,7 @@ import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'node:url';
 import { getPaths, openDb } from './db.js';
 import { cleanupEphemeralServerCache } from './cleanup-ephemeral.js';
-import {
-  transcribeAudioFile,
-  warmupWhisperPipeline,
-  whisperModelFromEnv,
-  whisperFinalModelFromEnv,
-  writeLangProbeWavClip
-} from './transcribe.js';
+import { transcribeAudioFile, warmupWhisperPipeline, writeLangProbeWavClip } from './transcribe.js';
 import { normalizeSttProvider, sttProviderForAuthoritativeFinal, defaultSttProviderFromEnv } from './stt-providers.js';
 import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic.js';
 import { embedTexts, bufferToFloat32, cosineSim } from './embeddings.js';
@@ -329,10 +323,6 @@ function persistedNoteLanguage(hint, detected) {
   return h || d;
 }
 
-function whisperModelForPipeline() {
-  return whisperModelFromEnv();
-}
-
 /** Trim STT language fields; drop placeholders that should not be stored as a real locale. */
 function normalizeDetectedLanguage(raw) {
   const s = (raw ?? '').toString().trim();
@@ -343,7 +333,7 @@ function normalizeDetectedLanguage(raw) {
 }
 
 /**
- * Re-run STT to fill `notes.language` where it is empty (local Whisper).
+ * Re-run STT to fill `notes.language` where it is empty (ElevenLabs STT).
  * Body: { limit?: number, dry_run?: boolean, language_hint?: string } — hint is passed to transcribe (empty = auto-detect).
  */
 app.post('/api/debug/backfill-note-languages', async (req, res) => {
@@ -371,7 +361,6 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
       });
     }
 
-    const model = whisperModelFromEnv();
     const results = [];
 
     for (const row of rows) {
@@ -392,9 +381,7 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
       try {
         fs.writeFileSync(tmpPath, fs.readFileSync(blobPath));
         const out = await transcribeAudioFile(tmpPath, {
-          model,
-          language: languageHint || '',
-          provider: normalizeSttProvider('')
+          language: languageHint || ''
         });
         const detected = (out?.language ?? '').toString().trim();
         const hint = (row.language ?? '').toString().trim();
@@ -1472,14 +1459,13 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
   const safeLanguage = (req.body?.language ?? '').toString().trim();
-  const safeStt = normalizeSttProvider(req.body?.stt_provider);
 
   const id = nanoid(12);
   const ext = mimeToExt(audio.mimetype) ?? 'webm';
   const tmpPath = path.join(audioDir, `__query_${id}.${ext}`);
   fs.writeFileSync(tmpPath, audio.buffer);
 
-  // Long-running Whisper/STT: disable socket timeout so proxies do not see an idle upstream.
+  // Long-running STT: disable socket timeout so proxies do not see an idle upstream.
   // (Reverse proxies still need proxy_read_timeout high enough—see deployment notes.)
   try {
     req.socket.setTimeout(0);
@@ -1489,9 +1475,7 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
 
     try {
       const out = await transcribeWithLanguageHintFallback(tmpPath, {
-        model: whisperModelForPipeline(),
-        language: safeLanguage,
-        provider: safeStt
+        language: safeLanguage
       });
       res.json({
         transcript: formatTranscript(out?.transcript ?? ''),
@@ -1553,9 +1537,7 @@ app.post('/api/detect-language', upload.single('audio'), async (req, res) => {
 
   try {
     const out = await transcribeAudioFile(audioForDetect, {
-      model: whisperModelFromEnv(),
-      language: '', // force auto-detect
-      provider: normalizeSttProvider(req.body?.stt_provider)
+      language: ''
     });
     res.json({ language: out?.language ?? '', source: haveProbe ? 'probe' : 'full' });
   } catch (e) {
@@ -1586,7 +1568,6 @@ app.post('/api/live-transcribe', upload.single('audio'), async (req, res) => {
   const audio = req.file;
   if (!audio) return res.status(400).json({ error: 'Missing audio file' });
   const safeLanguage = (req.body?.language ?? '').toString().trim();
-  const safeStt = normalizeSttProvider(req.body?.stt_provider);
 
   const id = nanoid(12);
   const ext = mimeToExt(audio.mimetype) ?? 'webm';
@@ -1601,9 +1582,7 @@ app.post('/api/live-transcribe', upload.single('audio'), async (req, res) => {
 
   try {
     const out = await transcribeWithLanguageHintFallback(tmpPath, {
-      model: whisperModelForPipeline(),
-      language: safeLanguage,
-      provider: safeStt
+      language: safeLanguage
     });
     res.json({
       transcript: formatTranscript(out?.transcript ?? ''),
@@ -2337,10 +2316,7 @@ app.listen(PORT, () => {
   clearStartupConsole();
   // eslint-disable-next-line no-console
   console.log(`voiceVault running on http://localhost:${PORT}`);
-  void warmupWhisperPipeline().catch((e) => {
-    // eslint-disable-next-line no-console
-    console.warn('[voicevault] whisper warmup:', e?.message ?? e);
-  });
+  void warmupWhisperPipeline().catch(() => {});
 });
 
 function clampInt(value, min, max, fallback) {
@@ -2604,51 +2580,23 @@ function tryParseClientFinalTranscript(finalTranscriptRaw, durationMs) {
  * If the UI sent a language hint and STT returns no usable text (wrong locale for multilingual speech is common),
  * retry once with auto-detect (empty language string). Matches client-side live/full preview fallback.
  */
-async function transcribeWithLanguageHintFallback(tmpPath, { model, language, provider }) {
+async function transcribeWithLanguageHintFallback(tmpPath, { language }) {
   const hint = (language ?? '').toString().trim();
   const first = await transcribeAudioFile(tmpPath, {
-    model,
-    language: hint,
-    provider
+    language: hint
   });
   const text = formatTranscript(first?.transcript ?? '').trim();
   const segs = Array.isArray(first?.segments) ? first.segments : [];
   const hasSegText = segs.some((s) => ((s?.text ?? '').toString().trim().length > 0));
   if (text || hasSegText || !hint) return first;
   return transcribeAudioFile(tmpPath, {
-    model,
-    language: '',
-    provider
+    language: ''
   });
 }
 
-/**
- * Full-file authoritative STT: first pass + optional Whisper refine model (`WHISPER_REFINE_MODEL`).
- */
-async function transcribeAuthoritativeFullFile(tmpPath, { model, language, provider }) {
-  const stt = normalizeSttProvider(provider);
-  let out = await transcribeWithLanguageHintFallback(tmpPath, {
-    model,
-    language,
-    provider: stt
-  });
-  const refineModel = (process.env.WHISPER_REFINE_MODEL ?? '').toString().trim();
-  if (stt === 'whisper' && refineModel && refineModel !== model) {
-    try {
-      const out2 = await transcribeWithLanguageHintFallback(tmpPath, {
-        model: refineModel,
-        language,
-        provider: stt
-      });
-      const t2 = formatTranscript(out2?.transcript ?? '').trim();
-      const segs2 = Array.isArray(out2?.segments) ? out2.segments : [];
-      const hasSeg2 = segs2.some((s) => ((s?.text ?? '').toString().trim().length > 0));
-      if (t2 || hasSeg2) out = out2;
-    } catch {
-      // keep first pass
-    }
-  }
-  return out;
+/** Full-file authoritative STT via ElevenLabs (word timestamps + segments). */
+async function transcribeAuthoritativeFullFile(tmpPath, { language }) {
+  return transcribeWithLanguageHintFallback(tmpPath, { language });
 }
 
 function formatClock(sec) {
@@ -2968,7 +2916,7 @@ function parseWordsJson(wordsJson) {
       .map((w) => ({
         start: Number(w?.start),
         end: Number(w?.end),
-        word: (w?.word ?? '').toString()
+        word: ((w?.word ?? w?.text ?? '') ?? '').toString()
       }))
       .filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start && w.word.trim());
   } catch {
@@ -3372,12 +3320,8 @@ async function runTranscribeJob(db, { noteId, blobsDir }) {
 
     try {
       const hintForStt = (row.language ?? '').toString().trim();
-      const stt = sttProviderForAuthoritativeFinal(row.stt_provider);
       const out = await transcribeAuthoritativeFullFile(tmpPath, {
-        model: whisperFinalModelFromEnv(),
-        // Only pass explicit UI hint; empty => Whisper auto-detect (matches New note preview). Do not use WHISPER_LANGUAGE here — it forces a locale and breaks multi-language auto-detect vs preview.
-        language: hintForStt,
-        provider: stt
+        language: hintForStt
       });
 
       if (cancelledDuringTranscribe) {
@@ -3429,10 +3373,7 @@ async function runBackfillWordsJob(db, { noteId, blobsDir }) {
 
   try {
     const out = await transcribeAudioFile(tmpPath, {
-      // Use a configurable model for backfill (defaults with whisperFinalModelFromEnv).
-      model: process.env.WHISPER_WORDS_MODEL || whisperFinalModelFromEnv(),
-      language: (row.language ?? '').toString().trim(),
-      provider: normalizeSttProvider(row.stt_provider)
+      language: (row.language ?? '').toString().trim()
     });
 
     // Important: do NOT overwrite notes.body/segments_json for older notes.

@@ -2411,9 +2411,32 @@ async function refreshResults(q = '') {
     const displayTitleRaw = (item.display_title ?? '').toString().trim();
     const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
     const listHeadline = escapeHtml(displayTitleRaw || (item.title ?? '').toString().trim() || 'Untitled');
-    const titleBodySepHtml = displayTitleEsc
-      ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
-      : '';
+    const titleBodySepHtml =
+      status === 'processing' && displayTitleEsc
+        ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
+        : status === 'ready' || status === 'error'
+          ? (() => {
+              const titleText =
+                displayTitleEsc ||
+                escapeHtml((item.title ?? '').toString().trim() || 'Untitled');
+              return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><button class="btn vvIconBtn" data-play="${item.id}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${item.id}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
+            })()
+          : displayTitleEsc
+            ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
+            : '';
+
+    const playbackRowDlTranscriptHtml =
+      status === 'ready' || status === 'error'
+        ? `<button class="btn vvIconBtn" data-dl-text="${item.id}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button>`
+        : '';
+    const playbackRowTailHtml =
+      status === 'ready' || status === 'error'
+        ? `<span class="notePlaybackRowTail"><button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>${
+            status === 'error' || !hideReprocessWhileBusy
+              ? `<button class="btn vvIconBtn" data-reprocess="${item.id}" type="button" aria-label="Reprocess note" title="Reprocess">${VV_ICON_SVG.reprocess}</button>`
+              : ''
+          }</span>`
+        : '';
     const rawBody = (item.body ?? '').toString();
     const matchSegs = isSearch ? normalizeMatchSegments(item?.matches ?? item?.best_match ?? null) : [];
     const body =
@@ -2486,7 +2509,7 @@ async function refreshResults(q = '') {
 
     const headerActionsHtml =
       status === 'ready' || status === 'error'
-        ? `<span class="noteHeaderActions" style="display:inline-flex; align-items:center; gap:8px">
+        ? `<span class="noteHeaderActions noteHeaderActions--summary" style="display:inline-flex; align-items:center; gap:8px">
              <button class="btn vvIconBtn" data-play="${item.id}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button>
              <button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>
              <button class="btn vvIconBtn" data-dl-text="${item.id}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button>
@@ -2513,12 +2536,14 @@ async function refreshResults(q = '') {
           }</div>
         </div>
 
-        <div class="row notePlaybackRow" style="margin-top:8px; margin-bottom:0; gap:10px; flex-wrap:wrap; align-items:center">
+        <div class="row notePlaybackRow">
           <span class="notePlayerCluster">
             <audio class="audio noteInlinePlayer" controls hidden></audio>
             <button class="btn vvIconBtn" data-dl-audio="${item.id}" type="button" aria-label="Download audio" title="Download audio">${VV_ICON_SVG.download}</button>
+            ${playbackRowDlTranscriptHtml}
             <button class="btn" data-loop="${item.id}" type="button" aria-pressed="false" title="Loop played segments" hidden>Loop segment</button>
           </span>
+          ${playbackRowTailHtml}
         </div>
 
         <div class="editBox" hidden>
@@ -2627,6 +2652,23 @@ async function refreshResults(q = '') {
     `;
     }
 
+    try {
+      delete note.dataset.wordsLoaded;
+      delete note.dataset.vvSearchMatches;
+    } catch {
+      // ignore
+    }
+    if (isSearch && status === 'ready') {
+      const msm = normalizeMatchSegments(item?.matches ?? item?.best_match ?? null);
+      if (msm.length) {
+        try {
+          note.dataset.vvSearchMatches = JSON.stringify(msm);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     const summary = note.querySelector('.noteSummary');
     const actionsMenu = null;
     const details = note.querySelector('.noteDetails');
@@ -2658,6 +2700,9 @@ async function refreshResults(q = '') {
         btnToggle.setAttribute('aria-label', 'Collapse note');
         btnToggle.setAttribute('title', 'Collapse');
         scheduleExpandedNoteScroll(note, isLastNote);
+        if (status === 'ready') {
+          void ensureNoteWordSpans(item.id, note).catch(() => {});
+        }
         syncCollapsedTranscriptShell();
       }
       btnToggle.addEventListener('click', (e) => {
@@ -2679,6 +2724,9 @@ async function refreshResults(q = '') {
           requestAnimationFrame(() => {
             if (editBox && !editBox.hidden) updateScrollHint(editBody, scrollHint);
           });
+          if (status === 'ready') {
+            void ensureNoteWordSpans(item.id, note).catch(() => {});
+          }
         }
         syncCollapsedTranscriptShell();
       });
@@ -2853,17 +2901,29 @@ async function refreshResults(q = '') {
       audio.hidden = false;
       if (audio.src !== new URL(src, window.location.origin).toString()) {
         audio.src = src;
+        try {
+          audio.load();
+        } catch {
+          // ignore
+        }
       }
       try {
+        try {
+          audio.playbackRate = playbackRate || 1;
+        } catch {
+          // ignore
+        }
+        if (audio.__vvWordCleanup) {
           try {
-            audio.playbackRate = playbackRate || 1;
+            audio.__vvWordCleanup();
           } catch {
             // ignore
           }
+        }
+        await ensureNoteWordSpans(item.id, note);
+        const bodyEl = note.querySelector('.noteBody');
+        startWordFollowAll(audio, bodyEl);
         await audio.play();
-          // Follow along word-by-word (ElevenLabs word timestamps).
-          await ensureNoteWordSpans(item.id, note);
-          startWordFollowAll(audio, note.querySelector('.noteBody'));
         for (const b of playBtns) {
           try {
             b.innerHTML = VV_ICON_SVG.stop;
@@ -2934,8 +2994,14 @@ async function refreshResults(q = '') {
           }
 
           s.classList.add('playing');
-          // Ensure we can highlight each word while the match-range plays.
           try {
+            if (audio.__vvWordCleanup) {
+              try {
+                audio.__vvWordCleanup();
+              } catch {
+                // ignore
+              }
+            }
             await ensureNoteWordSpans(item.id, note);
             startWordFollowAll(audio, note.querySelector('.noteBody'));
           } catch {
@@ -3340,13 +3406,14 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
 
   const displayTitleRaw = (data?.display_title ?? '').toString().trim();
   const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
-  const titleBodySepHtml = displayTitleEsc
-    ? `<div class="noteDisplayTitleBlock"><span class="noteDisplayTitleText">${displayTitleEsc}</span><span class="noteDisplayTitleActions"><button class="btn vvIconBtn" data-dl-text="${escapeHtml(
-        String(noteId)
-      )}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button><button class="btn vvIconBtn" data-edit="${escapeHtml(
-        String(noteId)
-      )}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></span></div><hr class="noteTitleBodyDivider" />`
-    : '';
+  const titleTextSeg =
+    displayTitleEsc ||
+    escapeHtml((data?.title ?? '').toString().trim() || 'Untitled');
+  const titleBodySepHtml = `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleTextSeg}</span><button class="btn vvIconBtn" data-play="${escapeHtml(
+    String(noteId)
+  )}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${escapeHtml(
+    String(noteId)
+  )}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
 
   // Replace transcript with clickable timestamped segments.
   bodyEl.innerHTML = titleBodySepHtml + renderSegmentsHtml(segments, { highlight, headerText });
@@ -3510,6 +3577,72 @@ async function loadNoteSegmentsIntoUi(noteId, noteEl, { highlight = null, autoPl
   }
 }
 
+/**
+ * Attach cleanup that survives the synthetic `pause()` inside `playAudioRange` during seek/setup.
+ * `pause { once: true }` listeners were consuming that programmatic pause and stopping karaoke early.
+ *
+ * Finalize runs after we've seen `playing`, or immediately on hard stops (`ended`/`error`/`abort`).
+ *
+ * @param {HTMLMediaElement | null | undefined} audioEl
+ * @param {() => void} onCleanup
+ * @returns {() => void} Call to detach early (runs onCleanup exactly once).
+ */
+function armAudioPlaybackCleanup(audioEl, onCleanup) {
+  if (!audioEl || typeof onCleanup !== 'function') return () => {};
+  try {
+    if (typeof audioEl.__vvDetachPlaybackCleanup === 'function') {
+      audioEl.__vvDetachPlaybackCleanup();
+    }
+  } catch {
+    // ignore
+  }
+  audioEl.__vvDetachPlaybackCleanup = null;
+
+  let done = false;
+  const finalize = () => {
+    if (done) return;
+    done = true;
+    try {
+      audioEl.removeEventListener('playing', onPlaying);
+      audioEl.removeEventListener('pause', onPause);
+      audioEl.removeEventListener('ended', onEnded);
+      audioEl.removeEventListener('error', onHardStop);
+      audioEl.removeEventListener('abort', onHardStop);
+    } catch {
+      // ignore
+    }
+    audioEl.__vvDetachPlaybackCleanup = null;
+    try {
+      onCleanup();
+    } catch {
+      // ignore
+    }
+  };
+
+  let sawPlaying = false;
+  const onPlaying = () => {
+    sawPlaying = true;
+  };
+  const onPause = () => {
+    if (!sawPlaying) return;
+    finalize();
+  };
+  const onEnded = () => {
+    finalize();
+  };
+  const onHardStop = () => {
+    finalize();
+  };
+
+  audioEl.addEventListener('playing', onPlaying);
+  audioEl.addEventListener('pause', onPause);
+  audioEl.addEventListener('ended', onEnded);
+  audioEl.addEventListener('error', onHardStop);
+  audioEl.addEventListener('abort', onHardStop);
+  audioEl.__vvDetachPlaybackCleanup = finalize;
+  return finalize;
+}
+
 function startWordHighlight(audioEl, segRowEl) {
   if (!audioEl || !segRowEl) return;
   const words = Array.from(segRowEl.querySelectorAll?.('.word[data-ws][data-we]') ?? []);
@@ -3536,9 +3669,16 @@ function startWordHighlight(audioEl, segRowEl) {
       }
       audioEl.__vvWordCleanup = null;
     }
-    audioEl.__vvWordCleanup = cleanup;
-    audioEl.addEventListener('pause', cleanup, { once: true });
-    audioEl.addEventListener('ended', cleanup, { once: true });
+    armAudioPlaybackCleanup(audioEl, cleanup);
+    audioEl.__vvWordCleanup = () => {
+      try {
+        if (typeof audioEl.__vvDetachPlaybackCleanup === 'function') {
+          audioEl.__vvDetachPlaybackCleanup();
+        }
+      } catch {
+        // ignore
+      }
+    };
     return;
   }
 
@@ -3583,19 +3723,30 @@ function startWordHighlight(audioEl, segRowEl) {
       // ignore
     }
   };
-  audioEl.__vvWordCleanup = cleanup;
-
-  audioEl.addEventListener(
-    'pause',
-    () => {
-      cleanup();
-    },
-    { once: true }
-  );
+  armAudioPlaybackCleanup(audioEl, cleanup);
+  audioEl.__vvWordCleanup = () => {
+    try {
+      if (typeof audioEl.__vvDetachPlaybackCleanup === 'function') {
+        audioEl.__vvDetachPlaybackCleanup();
+      }
+    } catch {
+      // ignore
+    }
+  };
 }
 
 function startSegRowFollowAll(audioEl, containerEl) {
   if (!audioEl || !containerEl) return;
+
+  // Word-level follower may leave `__vvWordCleanup`; clear it before row-mode takes over.
+  if (audioEl.__vvWordCleanup) {
+    try {
+      audioEl.__vvWordCleanup();
+    } catch {
+      // ignore
+    }
+    audioEl.__vvWordCleanup = null;
+  }
 
   // Stop any previous row-highlighter on this audio element.
   if (audioEl.__vvSegRowCleanup) {
@@ -3646,9 +3797,16 @@ function startSegRowFollowAll(audioEl, containerEl) {
     }
     clear();
   };
-  audioEl.__vvSegRowCleanup = cleanup;
-  audioEl.addEventListener('pause', cleanup, { once: true });
-  audioEl.addEventListener('ended', cleanup, { once: true });
+  armAudioPlaybackCleanup(audioEl, cleanup);
+  audioEl.__vvSegRowCleanup = () => {
+    try {
+      if (typeof audioEl.__vvDetachPlaybackCleanup === 'function') {
+        audioEl.__vvDetachPlaybackCleanup();
+      }
+    } catch {
+      // ignore
+    }
+  };
 }
 
 function startWordFollowAll(audioEl, containerEl) {
@@ -3658,6 +3816,16 @@ function startWordFollowAll(audioEl, containerEl) {
   if (words.length === 0) {
     startSegRowFollowAll(audioEl, containerEl);
     return;
+  }
+
+  // Row-mode follower (used when spans are missing) must not coexist with karaoke.
+  if (audioEl.__vvSegRowCleanup) {
+    try {
+      audioEl.__vvSegRowCleanup();
+    } catch {
+      // ignore
+    }
+    audioEl.__vvSegRowCleanup = null;
   }
 
   // Stop any previous highlighter on this audio element.
@@ -3724,9 +3892,16 @@ function startWordFollowAll(audioEl, containerEl) {
       // ignore
     }
   };
-  audioEl.__vvWordCleanup = cleanup;
-
-  audioEl.addEventListener('pause', cleanup, { once: true });
+  armAudioPlaybackCleanup(audioEl, cleanup);
+  audioEl.__vvWordCleanup = () => {
+    try {
+      if (typeof audioEl.__vvDetachPlaybackCleanup === 'function') {
+        audioEl.__vvDetachPlaybackCleanup();
+      }
+    } catch {
+      // ignore
+    }
+  };
 }
 
 function renderSegmentsHtml(segments, { highlight = null, headerText = '' } = {}) {
@@ -3804,6 +3979,51 @@ function normalizeMatchSegments(matches, { limit = 12 } = {}) {
   return out;
 }
 
+function syntheticWordsFromSegment(seg) {
+  const start = Number(seg?.start);
+  const end = Number(seg?.end);
+  const text = (seg?.text ?? '').toString().trim();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) return [];
+  const parts = text.split(/\s+/).filter(Boolean);
+  if (!parts.length) return [];
+  const dur = end - start;
+  const weights = parts.map((w) => Math.max(1, w.length));
+  const tot = weights.reduce((a, b) => a + b, 0) || 1;
+  const out = [];
+  let t = start;
+  for (let i = 0; i < parts.length; i++) {
+    const frac = weights[i] / tot;
+    const wdur = Math.max(0.04, dur * frac);
+    const wend = i === parts.length - 1 ? end : Math.min(end, t + wdur);
+    const token = parts[i] + (i < parts.length - 1 ? ' ' : '');
+    out.push({ start: t, end: wend, word: token });
+    t = wend;
+  }
+  return out;
+}
+
+function applySearchHitsByTime(bodyEl, matchSegs) {
+  if (!bodyEl || !matchSegs?.length) return;
+  const matches = normalizeMatchSegments(matchSegs, { limit: 20 });
+  const words = Array.from(bodyEl.querySelectorAll('.word[data-ws][data-we]'));
+  for (const m of matches) {
+    const ms = Number(m.start);
+    const me = Number(m.end);
+    if (!Number.isFinite(ms) || !Number.isFinite(me) || me <= ms) continue;
+    for (const wEl of words) {
+      const ws = Number(wEl.getAttribute('data-ws'));
+      const we = Number(wEl.getAttribute('data-we'));
+      if (!Number.isFinite(ws) || !Number.isFinite(we)) continue;
+      if (we > ms && ws < me) {
+        wEl.classList.add('vvSearchHit', 'search');
+        wEl.setAttribute('data-seg-start', String(ms));
+        wEl.setAttribute('data-seg-end', String(me));
+        wEl.setAttribute('title', 'Play matched segment');
+      }
+    }
+  }
+}
+
 function highlightTranscriptHtml(rawText, matchSegments, { mode = 'search' } = {}) {
   const raw = (rawText ?? '').toString();
   const segs = Array.isArray(matchSegments) ? matchSegments : [];
@@ -3853,14 +4073,22 @@ function renderWordsHtmlFromSegments(segments) {
   const segs = Array.isArray(segments) ? segments : [];
   const words = [];
   for (const s of segs) {
-    const ws = Array.isArray(s?.words) ? s.words : [];
-    for (const w of ws) {
-      const start = Number(w?.start);
-      const end = Number(w?.end);
-      const word = (w?.word ?? '').toString();
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !word) continue;
-      words.push({ start, end, word });
-      if (words.length >= 60_000) break;
+    let ws = Array.isArray(s?.words) ? s.words : [];
+    const beforeSeg = words.length;
+    const pushWordList = (list) => {
+      for (const w of list) {
+        const start = Number(w?.start);
+        const end = Number(w?.end);
+        const word = (w?.word ?? w?.text ?? '').toString();
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !word) continue;
+        words.push({ start, end, word });
+        if (words.length >= 60_000) break;
+      }
+    };
+    pushWordList(ws);
+    if (words.length === beforeSeg && (s?.text ?? '').toString().trim()) {
+      const syn = syntheticWordsFromSegment(s);
+      if (syn?.length) pushWordList(syn);
     }
     if (words.length >= 60_000) break;
   }
@@ -3900,6 +4128,15 @@ async function ensureNoteWordSpans(noteId, noteEl) {
     : '';
 
   bodyEl.innerHTML = titleBodySepHtml + wordsHtml;
+  try {
+    const rawMatches = noteEl?.dataset?.vvSearchMatches ?? '';
+    if (rawMatches) {
+      const parsed = JSON.parse(rawMatches);
+      applySearchHitsByTime(bodyEl, parsed);
+    }
+  } catch {
+    // ignore
+  }
   try {
     noteEl.dataset.wordsLoaded = '1';
   } catch {

@@ -2,7 +2,6 @@ import { spawn, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { transcribeAudioWithElevenLabs } from './elevenlabs-stt-vv.js';
-import { defaultSttProviderFromEnv } from './stt-providers.js';
 
 let _ffmpegBin;
 
@@ -83,50 +82,16 @@ function writeSilentPcmWav16kMono(outPath, durationSec) {
   fs.writeFileSync(outPath, buf);
 }
 
-let _pythonCmd;
-
 /**
- * Python used to run `server/transcribe.py`. On Linux hosts `python` is often missing (only `python3`);
- * local Windows dev typically uses `.venv\\Scripts\\python.exe`. Override with `VOICEVAULT_PYTHON` or `PYTHON`.
+ * Transcription is ElevenLabs STT only (`transcribeAudioWithElevenLabs`).
+ * The `model` / `provider` arguments are ignored and kept only for backwards-compatible call sites.
  */
-export function pythonExecutable() {
-  if (_pythonCmd) return _pythonCmd;
-  _pythonCmd = resolvePythonExecutableUncached();
-  return _pythonCmd;
-}
-
-function resolvePythonExecutableUncached() {
-  const fromEnv = (process.env.VOICEVAULT_PYTHON || process.env.PYTHON || '')
-    .toString()
-    .trim()
-    .replace(/^["']|["']$/g, '');
-  if (fromEnv) {
-    if (path.isAbsolute(fromEnv) && fs.existsSync(fromEnv)) return fromEnv;
-    const rel = path.resolve(process.cwd(), fromEnv);
-    if (fs.existsSync(rel)) return rel;
-    return fromEnv;
-  }
-  const root = process.cwd();
-  if (process.platform === 'win32') {
-    const venvWin = path.join(root, '.venv', 'Scripts', 'python.exe');
-    if (fs.existsSync(venvWin)) return venvWin;
-    return 'python';
-  }
-  const venvPy3 = path.join(root, '.venv', 'bin', 'python3');
-  if (fs.existsSync(venvPy3)) return venvPy3;
-  const venvPy = path.join(root, '.venv', 'bin', 'python');
-  if (fs.existsSync(venvPy)) return venvPy;
-  return 'python3';
-}
-
-export async function transcribeAudioFile(audioPath, { model = 'small', language = '', provider = '' } = {}) {
-  const scriptPath = path.resolve(process.cwd(), 'server', 'transcribe.py');
-  const pythonCmd = pythonExecutable();
+export async function transcribeAudioFile(audioPath, { model = '', language = '', provider = '' } = {}) {
+  void model;
+  void provider;
 
   const dataDir = process.env.VV_DATA_DIR ? path.resolve(process.env.VV_DATA_DIR) : path.resolve(process.cwd(), 'data');
 
-  // Preprocess audio via ffmpeg for better STT robustness (16kHz mono WAV).
-  // Optional extra robustness: denoise + loudness normalization.
   const wantDenoise = (process.env.VOICEVAULT_DENOISE ?? '').toString().trim() === '1';
   const wantLoudnorm = (process.env.VOICEVAULT_LOUDNORM ?? '').toString().trim() !== '0';
   const wantHp = (process.env.VOICEVAULT_FFMPEG_SPEECH_HP ?? '').toString().trim() === '1';
@@ -141,11 +106,9 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
       af.push('highpass=f=80');
     }
     if (wantDenoise) {
-      // Light denoise tuned for speech (kept conservative to avoid artifacts).
       af.push('afftdn=nf=-25');
     }
     if (wantLoudnorm) {
-      // Gentle broadcast-style normalization.
       af.push('loudnorm=I=-16:LRA=11:TP=-1.5');
     }
     const args = [
@@ -189,69 +152,12 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
         throw err;
       }
     } catch (e) {
-      // If silence detection itself fails, proceed with STT (do not block transcription).
       if ((e?.code ?? '') === 'AUDIO_SILENT') throw e;
     }
   }
 
-  // voiceVault now uses ElevenLabs STT for transcript + segmentation (word timestamps).
-  // Keep the `provider` param for API compatibility, but force ElevenLabs to avoid Whisper dependency.
-  const pv = (provider ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
-  if (pv === 'whisper' || !pv || pv === 'default') {
-    provider = 'elevenlabs';
-  }
-  const pv2 = (provider ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
-  if (pv2 === 'elevenlabs' || pv2 === 'eleven_labs') {
-    try {
-      return await transcribeAudioWithElevenLabs(audioForStt, { language });
-    } finally {
-      try {
-        if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const args = [
-    scriptPath,
-    '--audio',
-    audioForStt,
-    '--model',
-    model,
-    '--json'
-  ];
-  if (language) {
-    args.push('--language', language);
-  }
-
-  const { stdout, stderr, exitCode } = await run(pythonCmd, args, {
-    env: {
-      ...process.env,
-      PYTHONUTF8: '1'
-    }
-  });
-
-  if (exitCode !== 0) {
-    const hint =
-      'Transcription failed. Install Python 3.10+, ffmpeg, and `pip install -r server/requirements.txt` in your venv. On Linux set `VOICEVAULT_PYTHON` to your venv interpreter if `python3` is wrong.';
-    const msg = [hint, stderr?.trim()].filter(Boolean).join('\n');
-    const err = new Error(msg);
-    err.code = 'TRANSCRIBE_FAILED';
-    throw err;
-  }
-
-  const raw = (stdout ?? '').toString().trim();
   try {
-    const parsed = JSON.parse(raw);
-    return {
-      transcript: (parsed?.transcript ?? '').toString().trim(),
-      language: (parsed?.language ?? '').toString().trim(),
-      segments: Array.isArray(parsed?.segments) ? parsed.segments : []
-    };
-  } catch {
-    // Backward compatibility if python script is old / prints plain text
-    return { transcript: raw, language: '', segments: [] };
+    return await transcribeAudioWithElevenLabs(audioForStt, { language: (language ?? '').toString() });
   } finally {
     try {
       if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);
@@ -261,91 +167,19 @@ export async function transcribeAudioFile(audioPath, { model = 'small', language
   }
 }
 
-/** Same resolution as server pipeline (`WHISPER_LANG_MODEL` → `WHISPER_FAST_MODEL` → `WHISPER_MODEL` → small). */
-export function whisperModelFromEnv() {
-  return (
-    process.env.WHISPER_LANG_MODEL ||
-    process.env.WHISPER_FAST_MODEL ||
-    process.env.WHISPER_MODEL ||
-    'small'
-  )
-    .toString()
-    .trim() || 'small';
-}
-
-/** Heavier / final-pass model for queued server transcription (defaults to same as `whisperModelFromEnv`). */
-export function whisperFinalModelFromEnv() {
-  const v = (process.env.WHISPER_FINAL_MODEL ?? '').toString().trim();
-  if (v) return v;
-  return whisperModelFromEnv();
-}
-
-/**
- * Load faster-whisper once at startup so the first user note pays less cold-start latency.
- * Set `VOICEVAULT_WHISPER_WARMUP=0` to skip (e.g. CI).
- */
+/** No-op: legacy Whisper warmup removed — STT is ElevenLabs-only. */
 export async function warmupWhisperPipeline() {
-  const off = (process.env.VOICEVAULT_WHISPER_WARMUP ?? '').toString().trim() === '0';
-  if (off) return;
-  if (defaultSttProviderFromEnv() === 'elevenlabs') return;
-  const dataDir = process.env.VV_DATA_DIR ? path.resolve(process.env.VV_DATA_DIR) : path.resolve(process.cwd(), 'data');
-  const audioDir = path.join(dataDir, 'audio');
-  try {
-    fs.mkdirSync(audioDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-  const tmpPath = path.join(audioDir, `__warm_${Date.now()}_${Math.random().toString(16).slice(2)}.wav`);
-  const { exitCode } = await runFfmpeg(
-    [
-      '-nostdin',
-      '-y',
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      '-f',
-      'lavfi',
-      '-i',
-      'anullsrc=r=16000:cl=mono',
-      '-t',
-      '1.0',
-      '-c:a',
-      'pcm_s16le',
-      tmpPath
-    ],
-    { env: process.env }
-  );
-  if (exitCode !== 0 || !fs.existsSync(tmpPath)) {
-    try {
-      writeSilentPcmWav16kMono(tmpPath, 1.0);
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[voicevault] whisper warmup: ffmpeg lavfi failed; using synthetic WAV so faster-whisper still loads (set VOICEVAULT_FFMPEG if real audio transcode fails too)'
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('[voicevault] whisper warmup: no audio fixture:', e?.message ?? e);
-      return;
-    }
-  }
-  try {
-    await transcribeAudioFile(tmpPath, {
-      model: whisperModelFromEnv(),
-      language: '',
-      provider: 'whisper'
-    });
-    // eslint-disable-next-line no-console
-    console.log('[voicevault] whisper warmup finished');
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn('[voicevault] whisper warmup failed:', e?.message ?? e);
-  } finally {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {
-      // ignore
-    }
-  }
+  return;
+}
+
+/** @deprecated Kept only for accidental imports; transcription does not use Whisper. */
+export function whisperModelFromEnv() {
+  return '';
+}
+
+/** @deprecated Kept only for accidental imports; transcription does not use Whisper. */
+export function whisperFinalModelFromEnv() {
+  return '';
 }
 
 function runFfmpeg(args, opts = {}) {
@@ -355,7 +189,6 @@ function runFfmpeg(args, opts = {}) {
 
 /**
  * First ~N seconds as 16 kHz mono WAV for cheap language detection (avoids full-file STT on long uploads).
- * @returns {Promise<boolean>} true if destPath was written
  */
 export async function writeLangProbeWavClip(sourcePath, destPath, maxSeconds = 55) {
   const lim = Math.max(12, Math.min(180, Number(maxSeconds) || 55));
@@ -416,8 +249,6 @@ async function isLikelySilentAudio(audioPath) {
   const meanDb = meanM ? Number(meanM[1]) : NaN;
   if (!Number.isFinite(maxDb) && !Number.isFinite(meanDb)) return false;
 
-  // Conservative thresholds: treat extremely quiet audio as muted/silent.
-  // (For speech, max usually rises above -30 dBFS unless the mic is muted or far away.)
   if (Number.isFinite(maxDb) && maxDb <= -45) return true;
   if (Number.isFinite(meanDb) && meanDb <= -55) return true;
   return false;
@@ -441,4 +272,3 @@ function run(cmd, args, { env } = {}) {
     );
   });
 }
-

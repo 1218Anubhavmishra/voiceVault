@@ -704,6 +704,23 @@ select {
   margin: 0;
 }
 
+.notePlaybackRow {
+  margin-top: 8px;
+  margin-bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.notePlaybackRow .notePlaybackRowTail {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
 .notePlaybackRow .notePlayerCluster {
   display: inline-flex;
   align-items: center;
@@ -720,6 +737,24 @@ select {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .notePlaybackRow .notePlaybackRowTail {
+    margin-left: 0;
+  }
+}
+
+/* Collapsed summaries keep the old grouped actions; expanded view uses the detail layout instead. */
+.note.noteExpanded .noteHeaderActions.noteHeaderActions--summary {
+  display: none !important;
+}
+
+.noteDisplayTitleBlock.noteExpandedTitleRow {
+  justify-content: flex-start;
+}
+
+.noteExpandedTitleSpacer {
+  flex: 1 1 auto;
+  min-width: 8px;
 }
 
 .noteDisplayTitleBlock {

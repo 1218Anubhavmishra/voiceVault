@@ -25,7 +25,6 @@ export function normalizeSttProvider(raw) {
     .toLowerCase()
     .replace(/-/g, '_');
   if (s === 'elevenlabs' || s === 'eleven_labs') return 'elevenlabs';
-  if (s === 'whisper') return 'whisper';
   return defaultSttProviderFromEnv();
 }
 
@@ -37,6 +36,5 @@ export function sttProviderForAuthoritativeFinal(rowSttRaw) {
     .toLowerCase()
     .replace(/-/g, '_');
   if (s === 'elevenlabs' || s === 'eleven_labs') return 'elevenlabs';
-  if (s === 'whisper') return 'whisper';
   return defaultSttProviderFromEnv();
 }
