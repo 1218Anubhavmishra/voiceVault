@@ -746,47 +746,75 @@ select {
   flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
-  overflow-x: auto;
-  overflow-y: visible;
-  max-width: 100%;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.notePlaybackRow .notePlaybackRowTail {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: nowrap;
-  flex-shrink: 0;
-  margin-left: auto;
+/* Audio on its own row on slim widths so expanded native controls aren’t cramped with icons. */
+.notePlaybackRow .noteInlineAudioShell {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
 }
 
-.notePlaybackRow .notePlayerCluster {
+.notePlaybackBelowBar {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
+  flex-shrink: 0;
   flex-wrap: nowrap;
-  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.notePlaybackLoopBtn {
+  flex: 0 0 auto;
   flex-shrink: 0;
 }
 
+.notePlaybackSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  margin-left: 0;
+}
+
 @media (max-width: 560px) {
-  /* Same row as desktop: shrink player width; horizontal scroll carries any overflow */
-  .notePlaybackRow .notePlayerCluster {
-    flex-direction: row;
-    align-items: center;
-    flex-shrink: 0;
+  .notePlaybackRow {
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
-  .notePlaybackRow .notePlaybackRowTail {
-    margin-left: auto;
-    flex-shrink: 0;
+  .notePlaybackRow .noteInlineAudioShell {
+    flex: 1 1 100%;
+    width: 100%;
+    order: 0;
   }
 
-  .note .audio.noteInlinePlayer {
-    width: min(220px, 55vw);
+  .notePlaybackRow .noteInlineAudioShell .audio.noteInlinePlayer {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .notePlaybackBelowBar {
+    order: 1;
+    width: 100%;
+    justify-content: space-between;
+    box-sizing: border-box;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .notePlaybackSecondary {
+    width: auto;
+    justify-content: flex-end;
   }
 }
 
@@ -800,7 +828,17 @@ select {
 }
 
 .noteDisplayTitleBlock.noteExpandedTitleRow .noteDisplayTitleText {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Play + Edit sit to the right of the title on wide layouts; spacer no longer needed. */
+.noteExpandedTitleActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .noteExpandedTitleSpacer {
@@ -852,6 +890,26 @@ select {
     justify-content: flex-start;
     flex-wrap: wrap;
     gap: 10px;
+  }
+
+  /* Expanded transcript title: force full-width title row, then Play (left) + Edit (right). */
+  .noteDisplayTitleBlock.noteExpandedTitleRow {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 8px;
+    column-gap: 10px;
+  }
+
+  .noteDisplayTitleBlock.noteExpandedTitleRow .noteDisplayTitleText {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .noteExpandedTitleActions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
   }
 }
 

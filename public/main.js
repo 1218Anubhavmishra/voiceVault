@@ -2437,7 +2437,7 @@ async function refreshResults(q = '') {
               const titleText =
                 displayTitleEsc ||
                 escapeHtml((item.title ?? '').toString().trim() || 'Untitled');
-              return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><button class="btn vvIconBtn" data-play="${item.id}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${item.id}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
+              return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><span class="noteExpandedTitleActions"><button class="btn vvIconBtn" data-play="${item.id}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><button class="btn vvIconBtn noteExpandedEditBtn" data-edit="${item.id}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></span></div><hr class="noteTitleBodyDivider" />`;
             })()
           : displayTitleEsc
             ? `<div class="noteDisplayTitleBlock">${displayTitleEsc}</div><hr class="noteTitleBodyDivider" />`
@@ -2447,9 +2447,21 @@ async function refreshResults(q = '') {
       status === 'ready' || status === 'error'
         ? `<button class="btn vvIconBtn" data-dl-text="${item.id}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button>`
         : '';
-    const playbackRowTailHtml =
+    const playbackLoopBtnHtml =
       status === 'ready' || status === 'error'
-        ? `<span class="notePlaybackRowTail"><button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button></span>`
+        ? `<button class="btn notePlaybackLoopBtn" data-loop="${item.id}" type="button" aria-pressed="false" title="Loop played segments" hidden>Loop segment</button>`
+        : '';
+    const playbackSecondaryHtml =
+      status === 'ready' || status === 'error'
+        ? `<span class="notePlaybackSecondary">
+            <button class="btn vvIconBtn" data-dl-audio="${item.id}" type="button" aria-label="Download audio" title="Download audio">${VV_ICON_SVG.download}</button>
+            ${playbackRowDlTranscriptHtml}
+            <button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>
+          </span>`
+        : '';
+    const playbackBelowBarHtml =
+      status === 'ready' || status === 'error'
+        ? `<span class="notePlaybackBelowBar">${playbackLoopBtnHtml}${playbackSecondaryHtml}</span>`
         : '';
     const toolbarReprocessHtml =
       (status === 'ready' || status === 'error') && (status === 'error' || !hideReprocessWhileBusy)
@@ -2550,13 +2562,10 @@ async function refreshResults(q = '') {
         </div>
 
         <div class="row notePlaybackRow">
-          <span class="notePlayerCluster">
+          <span class="noteInlineAudioShell">
             <audio class="audio noteInlinePlayer" controls hidden></audio>
-            <button class="btn vvIconBtn" data-dl-audio="${item.id}" type="button" aria-label="Download audio" title="Download audio">${VV_ICON_SVG.download}</button>
-            ${playbackRowDlTranscriptHtml}
-            <button class="btn" data-loop="${item.id}" type="button" aria-pressed="false" title="Loop played segments" hidden>Loop segment</button>
           </span>
-          ${playbackRowTailHtml}
+          ${playbackBelowBarHtml}
         </div>
 
         <div class="editBox" hidden>
@@ -3417,7 +3426,7 @@ function segmentTitleRowHtml(noteId, dataPartial = {}) {
   const displayTitleEsc = displayTitleRaw ? escapeHtml(displayTitleRaw) : '';
   const titleText =
     displayTitleEsc || escapeHtml((dataPartial?.title ?? '').toString().trim() || 'Untitled');
-  return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><button class="btn vvIconBtn" data-play="${nidEsc}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><span class="noteExpandedTitleSpacer" aria-hidden="true"></span><button class="btn vvIconBtn" data-edit="${nidEsc}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></div><hr class="noteTitleBodyDivider" />`;
+  return `<div class="noteDisplayTitleBlock noteExpandedTitleRow"><span class="noteDisplayTitleText">${titleText}</span><span class="noteExpandedTitleActions"><button class="btn vvIconBtn" data-play="${nidEsc}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button><button class="btn vvIconBtn noteExpandedEditBtn" data-edit="${nidEsc}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button></span></div><hr class="noteTitleBodyDivider" />`;
 }
 
 /** Join STT word tokens (usually no inter-token spaces) into readable text. Mirrors `server/elevenlabs-stt-vv.js` `joinWordTokens`. */
