@@ -121,6 +121,40 @@ const advancedSearchCardEl = document.getElementById('advancedSearchCard'); // r
 const btnNewNoteToggleEl = document.getElementById('btnNewNoteToggle');
 const newNoteBodyEl = document.getElementById('newNoteBody');
 const mainGridEl = document.getElementById('mainGrid');
+const authOverlayEl = document.getElementById('authOverlay');
+const authEmailEl = document.getElementById('authEmail');
+const authPasswordEl = document.getElementById('authPassword');
+const authDisplayNameEl = document.getElementById('authDisplayName');
+const authErrorEl = document.getElementById('authError');
+const btnAuthLoginEl = document.getElementById('btnAuthLogin');
+const btnAuthRegisterEl = document.getElementById('btnAuthRegister');
+const profileWrapEl = document.getElementById('profileWrap');
+const btnProfileMenuEl = document.getElementById('btnProfileMenu');
+const profileDropdownEl = document.getElementById('profileDropdown');
+const profileAvatarFallbackEl = document.getElementById('profileAvatarFallback');
+const profileAvatarImgEl = document.getElementById('profileAvatarImg');
+const menuOpenProfileEl = document.getElementById('menuOpenProfile');
+const menuLogoutEl = document.getElementById('menuLogout');
+const profileOverlayEl = document.getElementById('profileOverlay');
+const btnProfileCloseEl = document.getElementById('btnProfileClose');
+const profileViewModeEl = document.getElementById('profileViewMode');
+const profileEditModeEl = document.getElementById('profileEditMode');
+const profileModalFallbackEl = document.getElementById('profileModalFallback');
+const profileModalImgEl = document.getElementById('profileModalImg');
+const profileViewNameEl = document.getElementById('profileViewName');
+const profileViewEmailEl = document.getElementById('profileViewEmail');
+const profileErrorEl = document.getElementById('profileError');
+const btnProfileEditEl = document.getElementById('btnProfileEdit');
+const btnProfileCancelEl = document.getElementById('btnProfileCancel');
+const btnProfileSaveEl = document.getElementById('btnProfileSave');
+const profileEditNameEl = document.getElementById('profileEditName');
+const profileEditEmailEl = document.getElementById('profileEditEmail');
+const profileEditNewPassEl = document.getElementById('profileEditNewPass');
+const profileEditCurPassEl = document.getElementById('profileEditCurPass');
+const profileEditAvatarEl = document.getElementById('profileEditAvatar');
+const btnProfileEditPhotoEl = document.getElementById('btnProfileEditPhoto');
+const profileEditFallbackEl = document.getElementById('profileEditFallback');
+const profileEditImgEl = document.getElementById('profileEditImg');
 const btnIngestPauseEl = document.getElementById('btnIngestPause');
 const btnIngestResumeEl = document.getElementById('btnIngestResume');
 const btnProcessesCloseEl = document.getElementById('btnProcessesClose');
@@ -275,6 +309,332 @@ const PROCESSING_TIME_ESTIMATE_RATIO = 0.45;
 
 /** Synced from `GET /api/client-config` so it matches `VOICEVAULT_STT_PROVIDER` on the server. */
 let serverPreferredSttProvider = 'whisper';
+
+/** Cookie-session auth: ensure SameSite cookies are sent for `/api/*`. */
+const __origFetch = window.fetch.bind(window);
+window.fetch = function patchedFetch(input, init = {}) {
+  const nextInit =
+    typeof init === 'object' && init
+      ? { credentials: init.credentials ?? 'include', ...init }
+      : { credentials: 'include' };
+  return __origFetch(input, nextInit);
+};
+
+let sessionUser = null;
+let profileAvatarBust = 0;
+/** Blob preview URL while editing profile photo (revoked when closing edit or after save). */
+let profileEditAvatarPreviewUrl = null;
+
+function revokeProfileEditAvatarPreview() {
+  if (!profileEditAvatarPreviewUrl) return;
+  try {
+    URL.revokeObjectURL(profileEditAvatarPreviewUrl);
+  } catch {
+    // ignore
+  }
+  profileEditAvatarPreviewUrl = null;
+}
+
+function syncProfileEditHeroFromSession() {
+  if (!sessionUser || !profileEditFallbackEl) return;
+  profileEditFallbackEl.textContent = userInitialsFromUser(sessionUser);
+  const has = !!sessionUser.has_avatar;
+  const avatarUrl = `/api/auth/avatar?v=${profileAvatarBust}`;
+  if (profileEditImgEl) {
+    if (has) {
+      if (profileEditImgEl.getAttribute('src') !== avatarUrl) profileEditImgEl.src = avatarUrl;
+      profileEditImgEl.hidden = false;
+      profileEditFallbackEl.style.display = 'none';
+    } else {
+      profileEditImgEl.hidden = true;
+      profileEditImgEl.removeAttribute('src');
+      profileEditFallbackEl.style.display = '';
+    }
+  }
+}
+
+function setAuthError(message) {
+  if (!authErrorEl) return;
+  const msg = (message ?? '').toString().trim();
+  if (!msg) {
+    authErrorEl.style.display = 'none';
+    authErrorEl.textContent = '';
+    return;
+  }
+  authErrorEl.style.display = '';
+  authErrorEl.textContent = msg;
+}
+
+function setAuthUiLoggedIn(user) {
+  sessionUser = user || null;
+  const loggedIn = !!sessionUser;
+  if (mainGridEl) mainGridEl.hidden = !loggedIn;
+  if (authOverlayEl) authOverlayEl.hidden = loggedIn;
+  if (profileWrapEl) profileWrapEl.hidden = !loggedIn;
+  if (loggedIn) {
+    syncProfileChrome();
+  } else {
+    closeProfileDropdown();
+    if (profileOverlayEl) profileOverlayEl.hidden = true;
+    if (profileAvatarImgEl) {
+      profileAvatarImgEl.hidden = true;
+      profileAvatarImgEl.removeAttribute('src');
+    }
+    if (profileAvatarFallbackEl) profileAvatarFallbackEl.textContent = '';
+  }
+  try {
+    document.documentElement.style.overflow = loggedIn ? '' : 'hidden';
+  } catch {
+    // ignore
+  }
+}
+
+function userInitialsFromUser(u) {
+  const name = (u?.display_name ?? '').toString().trim();
+  const em = (u?.email ?? '').toString().trim();
+  if (name) return name.slice(0, 2).toUpperCase();
+  if (em) return em.slice(0, 2).toUpperCase();
+  return '??';
+}
+
+function bumpProfileAvatarCache() {
+  profileAvatarBust = Date.now();
+}
+
+function syncProfileChrome() {
+  if (!sessionUser) return;
+  const initials = userInitialsFromUser(sessionUser);
+  if (profileAvatarFallbackEl) profileAvatarFallbackEl.textContent = initials;
+  if (profileModalFallbackEl) profileModalFallbackEl.textContent = initials;
+  const has = !!sessionUser.has_avatar;
+  const avatarUrl = `/api/auth/avatar?v=${profileAvatarBust}`;
+  if (profileAvatarImgEl) {
+    if (has) {
+      if (profileAvatarImgEl.getAttribute('src') !== avatarUrl) profileAvatarImgEl.src = avatarUrl;
+      profileAvatarImgEl.hidden = false;
+      if (profileAvatarFallbackEl) profileAvatarFallbackEl.style.display = 'none';
+    } else {
+      profileAvatarImgEl.hidden = true;
+      profileAvatarImgEl.removeAttribute('src');
+      if (profileAvatarFallbackEl) profileAvatarFallbackEl.style.display = '';
+    }
+  }
+  if (profileModalImgEl) {
+    if (has) {
+      if (profileModalImgEl.getAttribute('src') !== avatarUrl) profileModalImgEl.src = avatarUrl;
+      profileModalImgEl.hidden = false;
+      if (profileModalFallbackEl) profileModalFallbackEl.style.display = 'none';
+    } else {
+      profileModalImgEl.hidden = true;
+      profileModalImgEl.removeAttribute('src');
+      if (profileModalFallbackEl) profileModalFallbackEl.style.display = '';
+    }
+  }
+}
+
+function closeProfileDropdown() {
+  if (profileDropdownEl) profileDropdownEl.hidden = true;
+  if (btnProfileMenuEl) btnProfileMenuEl.setAttribute('aria-expanded', 'false');
+}
+
+function openProfileDropdown() {
+  if (profileDropdownEl) profileDropdownEl.hidden = false;
+  if (btnProfileMenuEl) btnProfileMenuEl.setAttribute('aria-expanded', 'true');
+}
+
+function setProfileError(msg) {
+  if (!profileErrorEl) return;
+  const s = (msg ?? '').toString().trim();
+  if (!s) {
+    profileErrorEl.style.display = 'none';
+    profileErrorEl.textContent = '';
+    return;
+  }
+  profileErrorEl.style.display = '';
+  profileErrorEl.textContent = s;
+}
+
+function showProfileViewMode() {
+  if (profileViewModeEl) profileViewModeEl.hidden = false;
+  if (profileEditModeEl) profileEditModeEl.hidden = true;
+  setProfileError('');
+}
+
+function showProfileEditMode() {
+  if (profileViewModeEl) profileViewModeEl.hidden = true;
+  if (profileEditModeEl) profileEditModeEl.hidden = false;
+  revokeProfileEditAvatarPreview();
+  if (sessionUser) {
+    if (profileEditNameEl) profileEditNameEl.value = (sessionUser.display_name ?? '').toString();
+    if (profileEditEmailEl) profileEditEmailEl.value = (sessionUser.email ?? '').toString();
+    if (profileEditNewPassEl) profileEditNewPassEl.value = '';
+    if (profileEditCurPassEl) profileEditCurPassEl.value = '';
+    if (profileEditAvatarEl) profileEditAvatarEl.value = '';
+    syncProfileEditHeroFromSession();
+  }
+  setProfileError('');
+}
+
+function populateProfileViewFromSession() {
+  if (!sessionUser) return;
+  if (profileViewNameEl) profileViewNameEl.textContent = (sessionUser.display_name ?? '').toString().trim() || '—';
+  if (profileViewEmailEl) profileViewEmailEl.textContent = (sessionUser.email ?? '').toString().trim() || '—';
+  syncProfileChrome();
+}
+
+async function openProfileModal() {
+  closeProfileDropdown();
+  try {
+    await refreshSessionUser();
+  } catch {
+    // ignore
+  }
+  if (!sessionUser) return;
+  populateProfileViewFromSession();
+  showProfileViewMode();
+  if (profileOverlayEl) profileOverlayEl.hidden = false;
+}
+
+function closeProfileModal() {
+  revokeProfileEditAvatarPreview();
+  if (profileOverlayEl) profileOverlayEl.hidden = true;
+  showProfileViewMode();
+  setProfileError('');
+  if (profileEditAvatarEl) profileEditAvatarEl.value = '';
+}
+
+async function saveProfileEdits() {
+  setProfileError('');
+  const name = (profileEditNameEl?.value ?? '').toString().trim();
+  const email = (profileEditEmailEl?.value ?? '').toString().trim().toLowerCase();
+  const newPass = (profileEditNewPassEl?.value ?? '').toString();
+  const curPass = (profileEditCurPassEl?.value ?? '').toString();
+  const file = profileEditAvatarEl?.files?.[0];
+
+  const nameChanged = name !== (sessionUser?.display_name ?? '').toString().trim();
+  const emailChanged = email !== (sessionUser?.email ?? '').toString().trim().toLowerCase();
+  const passChanged = newPass.length > 0;
+  const needsPatch = nameChanged || emailChanged || passChanged;
+  const avatarTouched = !!file;
+
+  if (!needsPatch && !avatarTouched) {
+    populateProfileViewFromSession();
+    showProfileViewMode();
+    return;
+  }
+
+  try {
+    if (needsPatch) {
+      const body = { display_name: name, email };
+      if (passChanged) body.password = newPass;
+      if (emailChanged || passChanged) {
+        if (!curPass) {
+          setProfileError('Current password is required to change email or password.');
+          return;
+        }
+        body.current_password = curPass;
+      }
+
+      const r = await fetch('/api/auth/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const j = await safeJson(r);
+      if (!r.ok) throw new Error((j?.error ?? '').toString().trim() || `Update failed (${r.status})`);
+      if (j?.user) sessionUser = j.user;
+    }
+
+    if (file) {
+      const fd = new FormData();
+      fd.append('avatar', file);
+      const r = await fetch('/api/auth/avatar', { method: 'POST', body: fd });
+      const j = await safeJson(r);
+      if (!r.ok) throw new Error((j?.error ?? '').toString().trim() || `Upload failed (${r.status})`);
+      if (sessionUser) sessionUser.has_avatar = true;
+      revokeProfileEditAvatarPreview();
+      if (profileEditAvatarEl) profileEditAvatarEl.value = '';
+    }
+
+    await refreshSessionUser();
+    bumpProfileAvatarCache();
+    populateProfileViewFromSession();
+    showProfileViewMode();
+    syncProfileChrome();
+    setStatus('Profile updated');
+  } catch (err) {
+    setProfileError(err?.message ?? String(err));
+  }
+}
+
+async function logoutSession() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch {
+    // ignore
+  }
+  closeProfileDropdown();
+  closeProfileModal();
+  resetLibraryUiForAccountSwitch();
+  sessionUser = null;
+  setAuthUiLoggedIn(null);
+  setAuthError('');
+}
+
+function openLoginUi() {
+  closeProfileDropdown();
+  closeProfileModal();
+  resetLibraryUiForAccountSwitch();
+  setAuthUiLoggedIn(null);
+  setAuthError('');
+}
+
+async function refreshSessionUser() {
+  const r = await fetch('/api/auth/me');
+  if (r.status === 401) {
+    sessionUser = null;
+    return null;
+  }
+  let j = null;
+  try {
+    j = await r.json();
+  } catch {
+    j = null;
+  }
+  const user = j?.user ?? null;
+  sessionUser = user;
+  return user;
+}
+
+async function ensureAuthenticated() {
+  const u = await refreshSessionUser();
+  if (!u) {
+    openLoginUi();
+    throw new Error('AUTH_REQUIRED');
+  }
+  bumpProfileAvatarCache();
+  setAuthUiLoggedIn(u);
+  return u;
+}
+
+async function postJsonAuth(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {})
+  });
+  let j = null;
+  try {
+    j = await r.json();
+  } catch {
+    j = null;
+  }
+  if (!r.ok) {
+    const msg = (j?.error ?? '').toString().trim() || `Request failed (${r.status})`;
+    throw new Error(msg);
+  }
+  return j;
+}
 
 async function refreshServerPreferredSttProvider() {
   try {
@@ -604,6 +964,34 @@ let lastSearchQuery = '';
 
 /** Per-note processing timer: pause freezes percent left (`frozenPercentLeft`) and budget fields; resume sets `baseIso`. */
 const procTimerByNoteId = new Map();
+
+function resetLibraryUiForAccountSwitch() {
+  try {
+    expandedNoteIds.clear();
+    expandedNoteIdsFromSearchMatch.clear();
+  } catch {
+    // ignore
+  }
+  lastSearchItems = [];
+  lastSearchQuery = '';
+  newNotePendingProcessId = '';
+  try {
+    hideNewNoteProcessingStatus();
+  } catch {
+    // ignore
+  }
+  try {
+    procTimerByNoteId.clear();
+  } catch {
+    // ignore
+  }
+  if (resultsEl) resultsEl.innerHTML = '';
+  if (answerWrapEl) {
+    answerWrapEl.hidden = true;
+    answerWrapEl.innerHTML = '';
+  }
+  if (qEl) qEl.value = '';
+}
 
 /**
  * Approximate **percent of transcription left** (100 = start of window, 1 = past-estimate floor).
@@ -1341,7 +1729,18 @@ try {
 await refreshServerPreferredSttProvider();
 wire();
 setSemanticMode(semanticMode);
-await refreshResults();
+try {
+  await ensureAuthenticated();
+} catch {
+  // Stay on login overlay until `/api/auth/*` succeeds.
+}
+try {
+  if (sessionUser) {
+    await refreshResults();
+  }
+} catch {
+  // ignore
+}
 refreshIngestionUi().catch(() => {
   // ignore
 });
@@ -1351,9 +1750,13 @@ startProcessingTimers();
 function beaconStopAllProcessing() {
   try {
     const url = `${window.location.origin}/api/processing/stop-all`;
-    const blob = new Blob(['{}'], { type: 'application/json' });
-    if (navigator.sendBeacon) navigator.sendBeacon(url, blob);
-    else fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true });
+    void fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      keepalive: true,
+      credentials: 'include'
+    });
   } catch {
     // ignore
   }
@@ -1362,6 +1765,119 @@ window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
+  btnAuthLoginEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      btnAuthLoginEl.disabled = true;
+      setAuthError('');
+      resetLibraryUiForAccountSwitch();
+      const email = (authEmailEl?.value ?? '').toString().trim();
+      const password = (authPasswordEl?.value ?? '').toString();
+      await postJsonAuth('/api/auth/login', { email, password });
+      await ensureAuthenticated();
+      await refreshResults((qEl?.value ?? '').toString()).catch(() => {});
+      refreshIngestionUi().catch(() => {});
+      setStatus(`Signed in as ${(sessionUser?.email ?? '').toString()}`);
+    } catch (err) {
+      setAuthError(err?.message ?? String(err));
+    } finally {
+      btnAuthLoginEl.disabled = false;
+    }
+  });
+
+  btnAuthRegisterEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      btnAuthRegisterEl.disabled = true;
+      setAuthError('');
+      resetLibraryUiForAccountSwitch();
+      const email = (authEmailEl?.value ?? '').toString().trim();
+      const password = (authPasswordEl?.value ?? '').toString();
+      const display_name = (authDisplayNameEl?.value ?? '').toString().trim();
+      await postJsonAuth('/api/auth/register', { email, password, display_name });
+      await ensureAuthenticated();
+      await refreshResults((qEl?.value ?? '').toString()).catch(() => {});
+      refreshIngestionUi().catch(() => {});
+      setStatus(`Welcome — signed in as ${(sessionUser?.email ?? '').toString()}`);
+    } catch (err) {
+      setAuthError(err?.message ?? String(err));
+    } finally {
+      btnAuthRegisterEl.disabled = false;
+    }
+  });
+
+  btnProfileMenuEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!profileDropdownEl) return;
+    if (profileDropdownEl.hidden) openProfileDropdown();
+    else closeProfileDropdown();
+  });
+
+  menuOpenProfileEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await openProfileModal();
+  });
+
+  menuLogoutEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await logoutSession();
+    setStatus('Signed out');
+  });
+
+  btnProfileCloseEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    closeProfileModal();
+  });
+
+  profileOverlayEl?.addEventListener('click', (e) => {
+    if (e.target === profileOverlayEl) closeProfileModal();
+  });
+
+  btnProfileEditEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    showProfileEditMode();
+  });
+
+  btnProfileCancelEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    revokeProfileEditAvatarPreview();
+    if (profileEditAvatarEl) profileEditAvatarEl.value = '';
+    populateProfileViewFromSession();
+    showProfileViewMode();
+  });
+
+  btnProfileSaveEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await saveProfileEdits();
+  });
+
+  btnProfileEditPhotoEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    profileEditAvatarEl?.click();
+  });
+
+  profileEditAvatarEl?.addEventListener('change', () => {
+    revokeProfileEditAvatarPreview();
+    const f = profileEditAvatarEl?.files?.[0];
+    if (!f) {
+      syncProfileEditHeroFromSession();
+      return;
+    }
+    profileEditAvatarPreviewUrl = URL.createObjectURL(f);
+    if (profileEditImgEl) {
+      profileEditImgEl.src = profileEditAvatarPreviewUrl;
+      profileEditImgEl.hidden = false;
+    }
+    if (profileEditFallbackEl) profileEditFallbackEl.style.display = 'none';
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!profileWrapEl || profileWrapEl.hidden) return;
+    if (profileWrapEl.contains(e.target)) return;
+    closeProfileDropdown();
+  });
+
   // Ensure New note language UI is clean on refresh/reload.
   stopNoteLangDetectCountdown();
   noteLangDetectionComplete = false;
@@ -2241,6 +2757,11 @@ async function refreshResults(q = '') {
     const fetchT0 = performance.now();
     const url = new URL('/api/notes', window.location.origin);
   const resp = await fetch(url.toString());
+  if (resp.status === 401) {
+    openLoginUi();
+    setStatus('Signed out — please log in', true);
+    return;
+  }
   if (!resp.ok) {
       resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
@@ -2273,6 +2794,11 @@ async function refreshResults(q = '') {
     urlFts.searchParams.set('limit', '50');
 
     const [semResp, ftsResp] = await Promise.all([fetch(urlSem.toString()), fetch(urlFts.toString())]);
+    if (semResp.status === 401 || ftsResp.status === 401) {
+      openLoginUi();
+      setStatus('Signed out — please log in', true);
+      return;
+    }
     if (!semResp.ok && !ftsResp.ok) {
       resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
@@ -2379,7 +2905,11 @@ async function refreshResults(q = '') {
   // Advanced search UI removed.
 
   if (items.length === 0) {
-    resultsEl.innerHTML = `<div class="note resultsBanner"><div class="pill">No results</div></div>`;
+    if (!isSearch) {
+      resultsEl.innerHTML = `<div class="note resultsEmptySaved" role="status" aria-label="No saved notes"><div class="resultsEmptySavedInner">No saved notes yet</div></div>`;
+    } else {
+      resultsEl.innerHTML = `<div class="note resultsBanner"><div class="pill">No results</div></div>`;
+    }
     syncProcessingNotesPoll([]);
     if (!isSearch) setStatus('Ready');
     return;
@@ -5017,6 +5547,10 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
   let summary = null;
   try {
     const summaryResp = await fetch('/api/processes/summary');
+    if (summaryResp.status === 401) {
+      openLoginUi();
+      return;
+    }
     if (summaryResp.ok) summary = await summaryResp.json();
   } catch {
     summary = null;
@@ -5027,6 +5561,10 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
   else {
     try {
       const ir = await fetch('/api/ingestion');
+      if (ir.status === 401) {
+        openLoginUi();
+        return;
+      }
       if (ir.ok) {
         const ij = await ir.json();
         paused = !!ij?.paused;
@@ -5089,6 +5627,10 @@ async function refreshIngestionUi({ toggleList = false, forceShow = null } = {})
     url.searchParams.set('limit', '60');
     if (procStatusFilter) url.searchParams.set('status', procStatusFilter);
     const resp = await fetch(url.toString());
+    if (resp.status === 401) {
+      openLoginUi();
+      return;
+    }
     if (!resp.ok) {
       let hint = `${resp.status}`;
       try {

@@ -7,6 +7,8 @@ import path from 'node:path';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { fileURLToPath } from 'node:url';
+import cookieSession from 'cookie-session';
+import bcrypt from 'bcryptjs';
 import { getPaths, openDb } from './db.js';
 import { cleanupEphemeralServerCache } from './cleanup-ephemeral.js';
 import { transcribeAudioFile, warmupWhisperPipeline, writeLangProbeWavClip } from './transcribe.js';
@@ -19,6 +21,13 @@ import archiver from 'archiver';
 import unzipper from 'unzipper';
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5177;
+
+const SESSION_MAX_AGE_MS = (() => {
+  const raw = (process.env.VOICEVAULT_SESSION_MAX_AGE_MS ?? '').toString().trim();
+  const n = Number.parseInt(raw, 10);
+  if (Number.isFinite(n) && n > 0) return n;
+  return 1000 * 60 * 60 * 24 * 365 * 10; // default ~10 years; cleared only on logout
+})();
 
 /** User-visible note title (separate from stored audio filename and from FTS `title`). */
 function stemFilenameForDisplayTitle(name) {
@@ -109,11 +118,179 @@ function attachProcessingEtaFields(db, rows) {
 }
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true
+  })
+);
 app.use(express.json({ limit: '1mb' }));
 
 let db = openDb();
 const { dataDir, audioDir, blobsDir, dbPath } = getPaths();
+
+function getOrCreateSessionSecret(dbInst) {
+  const envSecret = (process.env.VOICEVAULT_SESSION_SECRET ?? '').toString().trim();
+  if (envSecret) return envSecret;
+  try {
+    const row = dbInst.prepare(`SELECT value FROM app_state WHERE key = 'session_secret'`).get();
+    const cur = (row?.value ?? '').toString().trim();
+    if (cur) return cur;
+  } catch {
+    // ignore
+  }
+  const gen = crypto.randomBytes(32).toString('hex');
+  try {
+    dbInst
+      .prepare(
+        `INSERT INTO app_state (key, value, updated_at)
+         VALUES ('session_secret', @value, @updated_at)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .run({ value: gen, updated_at: new Date().toISOString() });
+  } catch {
+    // ignore
+  }
+  return gen;
+}
+
+app.use(
+  cookieSession({
+    name: 'vv_session',
+    secret: getOrCreateSessionSecret(db),
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: false, // local dev / local app; set to true behind HTTPS
+    maxAge: SESSION_MAX_AGE_MS
+  })
+);
+
+function currentUserId(req) {
+  const uid = req?.session?.user_id;
+  return uid ? String(uid) : '';
+}
+
+function requireUser(req, res, next) {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  req.user_id = uid;
+  next();
+}
+
+function redirectFirstUserIfNeeded() {
+  try {
+    const userCount = Number(db.prepare(`SELECT count(1) AS c FROM users`).get()?.c ?? 0) || 0;
+    if (userCount !== 1) return;
+    const orphanNotes = Number(db.prepare(`SELECT count(1) AS c FROM notes WHERE trim(user_id) = ''`).get()?.c ?? 0) || 0;
+    if (orphanNotes === 0) return;
+    const u = db.prepare(`SELECT id FROM users ORDER BY created_at ASC LIMIT 1`).get();
+    const uid = (u?.id ?? '').toString().trim();
+    if (!uid) return;
+    const upd = db.prepare(`UPDATE notes SET user_id = ? WHERE trim(user_id) = ''`);
+    upd.run(uid);
+    try {
+      db.prepare(`UPDATE folders SET user_id = ? WHERE trim(user_id) = ''`).run(uid);
+    } catch {
+      // ignore
+    }
+    try {
+      db.prepare(`UPDATE tags SET user_id = ? WHERE trim(user_id) = ''`).run(uid);
+    } catch {
+      // ignore
+    }
+    try {
+      db.prepare(`UPDATE saved_searches SET user_id = ? WHERE trim(user_id) = ''`).run(uid);
+    } catch {
+      // ignore
+    }
+    try {
+      db.prepare(`UPDATE note_drafts SET user_id = ? WHERE trim(user_id) = ''`).run(uid);
+    } catch {
+      // ignore
+    }
+    try {
+      db.prepare(`UPDATE note_processing_state SET user_id = ? WHERE trim(user_id) = ''`).run(uid);
+    } catch {
+      // ignore
+    }
+    try {
+      db.prepare(`UPDATE job_events SET user_id = ? WHERE trim(user_id) = ''`).run(uid);
+    } catch {
+      // ignore
+    }
+    try {
+      db.prepare(
+        `UPDATE ingestion_jobs
+         SET user_id = ?
+         WHERE trim(user_id) = ''
+           AND note_id IN (SELECT id FROM notes WHERE user_id = ?)`
+      ).run(uid, uid);
+    } catch {
+      // ignore
+    }
+  } catch {
+    // ignore
+  }
+}
+
+redirectFirstUserIfNeeded();
+
+// Protect all API routes except auth + health/debug + initial client config.
+app.use('/api', (req, res, next) => {
+  const p = (req.path ?? '').toString();
+  if (
+    p.startsWith('/auth/') ||
+    p === '/auth' ||
+    p.startsWith('/health') ||
+    p === '/client-config'
+  ) {
+    return next();
+  }
+  return requireUser(req, res, next);
+});
+
+function debugApiAllowed() {
+  return (process.env.VOICEVAULT_ENABLE_DEBUG_API ?? '').toString().trim() === '1';
+}
+
+function assertDebugApi(req, res) {
+  if (!debugApiAllowed()) {
+    res.status(404).json({ ok: false, error: 'Not found' });
+    return false;
+  }
+  return true;
+}
+
+function countUsers() {
+  try {
+    return Number(db.prepare(`SELECT count(1) AS c FROM users`).get()?.c ?? 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function allowGlobalMachineControls() {
+  if ((process.env.VOICEVAULT_ALLOW_GLOBAL_CONTROLS ?? '').toString().trim() === '1') return true;
+  return countUsers() <= 1;
+}
+
+function assertGlobalMachineControls(req, res) {
+  if (allowGlobalMachineControls()) return true;
+  res.status(403).json({
+    error: 'Global processing controls are disabled when multiple profiles exist',
+    hint: 'Set VOICEVAULT_ALLOW_GLOBAL_CONTROLS=1 on the server to enable (machine admin only).'
+  });
+  return false;
+}
+
+function assertFullDatabaseExportImport(req, res) {
+  if (allowGlobalMachineControls()) return true;
+  res.status(403).json({
+    error: 'Full-database export/import is disabled when multiple profiles exist',
+    hint: 'Set VOICEVAULT_ALLOW_GLOBAL_CONTROLS=1 on the server to enable (machine admin only).'
+  });
+  return false;
+}
 if ((process.env.VOICEVAULT_CLEAN_EPHEMERAL ?? '1').toString().trim() !== '0') {
   try {
     const s = cleanupEphemeralServerCache({ dataDir, audioDir });
@@ -146,6 +323,35 @@ const upload = multer({
   }
 });
 
+const uploadAvatar = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 4 * 1024 * 1024
+  }
+});
+
+function userToPublicJson(row) {
+  if (!row) return null;
+  const hasAvatar = !!(row.avatar_blob_id ?? '').toString().trim();
+  return {
+    id: row.id,
+    email: row.email,
+    display_name: row.display_name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    has_avatar: hasAvatar
+  };
+}
+
+function imageContentTypeFromBuffer(buf) {
+  if (!buf || !Buffer.isBuffer(buf) || buf.length < 3) return 'application/octet-stream';
+  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif';
+  if (buf.length >= 12 && buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return 'image/webp';
+  return 'application/octet-stream';
+}
+
 function writeBlobIfMissing(blobId, buffer) {
   const bid = (blobId ?? '').toString().trim();
   if (!bid || !buffer?.length) return;
@@ -159,17 +365,23 @@ function writeBlobIfMissing(blobId, buffer) {
 
 function countBlobRefs(dbInst, blobId) {
   const b = (blobId ?? '').toString().trim();
-  if (!b) return { notes: 999, drafts: 999 };
+  if (!b) return { notes: 999, drafts: 999, users: 999 };
   const n1 = Number(dbInst.prepare(`SELECT count(1) AS c FROM notes WHERE audio_blob_id = ?`).get(b)?.c ?? 0) || 0;
   const n2 = Number(dbInst.prepare(`SELECT count(1) AS c FROM note_drafts WHERE audio_blob_id = ?`).get(b)?.c ?? 0) || 0;
-  return { notes: n1, drafts: n2 };
+  let n3 = 0;
+  try {
+    n3 = Number(dbInst.prepare(`SELECT count(1) AS c FROM users WHERE avatar_blob_id = ?`).get(b)?.c ?? 0) || 0;
+  } catch {
+    n3 = 999;
+  }
+  return { notes: n1, drafts: n2, users: n3 };
 }
 
 function maybeUnlinkBlob(dbInst, blobDirPath, blobId) {
   const b = (blobId ?? '').toString().trim();
   if (!b) return;
-  const { notes, drafts } = countBlobRefs(dbInst, b);
-  if (notes > 0 || drafts > 0) return;
+  const { notes, drafts, users } = countBlobRefs(dbInst, b);
+  if (notes > 0 || drafts > 0 || users > 0) return;
   try {
     fs.unlinkSync(path.join(blobDirPath, b));
   } catch {
@@ -225,7 +437,197 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, ingestion: { paused: isIngestionPaused(db) } });
 });
 
+// --- Auth (local profiles) ---
+
+app.get('/api/auth/me', (req, res) => {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  const row = db
+    .prepare(`SELECT id, email, display_name, avatar_blob_id, created_at, updated_at FROM users WHERE id = ?`)
+    .get(uid);
+  if (!row) return res.status(401).json({ error: 'Session invalid' });
+  res.json({ user: userToPublicJson(row) });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    req.session = null;
+  } catch {
+    // ignore
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/register', (req, res) => {
+  const email = (req.body?.email ?? '').toString().trim().toLowerCase();
+  const password = (req.body?.password ?? '').toString();
+  const displayName = (req.body?.display_name ?? '').toString().trim();
+  if (!email) return res.status(400).json({ error: 'Missing email' });
+  if (!password || password.length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
+
+  const id = nanoid(12);
+  const now = new Date().toISOString();
+  const hash = bcrypt.hashSync(password, 10);
+  try {
+    db.prepare(
+      `INSERT INTO users (id, email, password_hash, display_name, avatar_blob_id, created_at, updated_at)
+       VALUES (@id, @email, @password_hash, @display_name, @avatar_blob_id, @created_at, @updated_at)`
+    ).run({
+      id,
+      email,
+      password_hash: hash,
+      display_name: displayName,
+      avatar_blob_id: '',
+      created_at: now,
+      updated_at: now
+    });
+  } catch (e) {
+    const msg = (e?.message ?? '').toString();
+    if (msg.includes('UNIQUE') || msg.toLowerCase().includes('idx_users_email')) {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    return res.status(500).json({ error: 'Register failed', details: e?.message ?? String(e) });
+  }
+
+  try {
+    req.session.user_id = id;
+  } catch {
+    // ignore
+  }
+  redirectFirstUserIfNeeded();
+  const user = db.prepare(`SELECT id, email, display_name, avatar_blob_id, created_at, updated_at FROM users WHERE id = ?`).get(id);
+  res.status(201).json({ ok: true, user: userToPublicJson(user) });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const email = (req.body?.email ?? '').toString().trim().toLowerCase();
+  const password = (req.body?.password ?? '').toString();
+  if (!email) return res.status(400).json({ error: 'Missing email' });
+  if (!password) return res.status(400).json({ error: 'Missing password' });
+
+  const row = db
+    .prepare(`SELECT id, email, password_hash, display_name, avatar_blob_id, created_at, updated_at FROM users WHERE email = ?`)
+    .get(email);
+  if (!row) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!row.password_hash || row.password_hash === '!') return res.status(401).json({ error: 'Invalid credentials' });
+  const ok = bcrypt.compareSync(password, row.password_hash);
+  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+
+  try {
+    req.session.user_id = row.id;
+  } catch {
+    // ignore
+  }
+  redirectFirstUserIfNeeded();
+  const { password_hash: _ph, ...rest } = row;
+  res.json({ ok: true, user: userToPublicJson(rest) });
+});
+
+app.patch('/api/auth/profile', (req, res) => {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  const displayName = (req.body?.display_name ?? '').toString().trim();
+  const newEmail = (req.body?.email ?? '').toString().trim().toLowerCase();
+  const newPassword = (req.body?.password ?? '').toString();
+  const curPass = (req.body?.current_password ?? '').toString();
+
+  const row = db.prepare(`SELECT id, email, password_hash FROM users WHERE id = ?`).get(uid);
+  if (!row) return res.status(401).json({ error: 'Session invalid' });
+
+  const parts = [];
+  const params = { id: uid, updated_at: new Date().toISOString() };
+
+  if (displayName !== undefined && displayName !== null) {
+    parts.push(`display_name = @display_name`);
+    params.display_name = displayName;
+  }
+
+  const wantsEmailChange = newEmail && newEmail !== (row.email ?? '').toString().toLowerCase();
+  const wantsPassChange = newPassword && newPassword.length > 0;
+
+  if (wantsEmailChange || wantsPassChange) {
+    if (!curPass) return res.status(400).json({ error: 'Current password required' });
+    const okCur = bcrypt.compareSync(curPass, row.password_hash);
+    if (!okCur) return res.status(401).json({ error: 'Invalid current password' });
+  }
+
+  if (wantsEmailChange) {
+    parts.push(`email = @email`);
+    params.email = newEmail;
+  }
+
+  if (wantsPassChange) {
+    if (newPassword.length < 6) return res.status(400).json({ error: 'Password too short (min 6)' });
+    parts.push(`password_hash = @password_hash`);
+    params.password_hash = bcrypt.hashSync(newPassword, 10);
+  }
+
+  if (!parts.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  parts.push(`updated_at = @updated_at`);
+  try {
+    db.prepare(`UPDATE users SET ${parts.join(', ')} WHERE id = @id`).run(params);
+  } catch (e) {
+    const msg = (e?.message ?? '').toString();
+    if (msg.includes('UNIQUE') || msg.toLowerCase().includes('idx_users_email')) {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    return res.status(500).json({ error: 'Update failed', details: e?.message ?? String(e) });
+  }
+
+  const user = db.prepare(`SELECT id, email, display_name, avatar_blob_id, created_at, updated_at FROM users WHERE id = ?`).get(uid);
+  res.json({ ok: true, user: userToPublicJson(user) });
+});
+
+app.get('/api/auth/avatar', (req, res) => {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).end();
+  const row = db.prepare(`SELECT avatar_blob_id FROM users WHERE id = ?`).get(uid);
+  const bid = (row?.avatar_blob_id ?? '').toString().trim();
+  if (!bid || !/^[a-f0-9]{64}$/i.test(bid)) return res.status(404).end();
+  const p = path.join(blobsDir, bid);
+  if (!fs.existsSync(p)) return res.status(404).end();
+  try {
+    const buf = fs.readFileSync(p);
+    const ct = imageContentTypeFromBuffer(buf);
+    res.setHeader('Content-Type', ct.startsWith('image/') ? ct : 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    return res.end(buf);
+  } catch {
+    return res.status(404).end();
+  }
+});
+
+app.post('/api/auth/avatar', uploadAvatar.single('avatar'), (req, res) => {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  const buf = req.file?.buffer;
+  if (!buf || !Buffer.isBuffer(buf) || buf.length === 0) return res.status(400).json({ error: 'Missing image' });
+  const ct = imageContentTypeFromBuffer(buf);
+  if (!ct.startsWith('image/')) return res.status(400).json({ error: 'File must be an image (JPEG, PNG, GIF, or WebP)' });
+  const blobId = crypto.createHash('sha256').update(buf).digest('hex');
+  writeBlobIfMissing(blobId, buf);
+  const prev = db.prepare(`SELECT avatar_blob_id FROM users WHERE id = ?`).get(uid);
+  const oldBid = (prev?.avatar_blob_id ?? '').toString().trim();
+  const now = new Date().toISOString();
+  db.prepare(`UPDATE users SET avatar_blob_id = @bid, updated_at = @u WHERE id = @id`).run({ bid: blobId, u: now, id: uid });
+  if (oldBid && oldBid !== blobId) maybeUnlinkBlob(db, blobsDir, oldBid);
+  return res.json({ ok: true, has_avatar: true });
+});
+
+app.delete('/api/auth/avatar', (req, res) => {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  const row = db.prepare(`SELECT avatar_blob_id FROM users WHERE id = ?`).get(uid);
+  const oldBid = (row?.avatar_blob_id ?? '').toString().trim();
+  const now = new Date().toISOString();
+  db.prepare(`UPDATE users SET avatar_blob_id = '', updated_at = ? WHERE id = ?`).run(now, uid);
+  if (oldBid) maybeUnlinkBlob(db, blobsDir, oldBid);
+  return res.json({ ok: true, has_avatar: false });
+});
+
 app.get('/api/debug/paths', (_req, res) => {
+  if (!assertDebugApi(_req, res)) return;
   try {
     const p = getPaths();
     res.json({
@@ -246,6 +648,7 @@ app.get('/api/client-config', (_req, res) => {
 });
 
 app.get('/api/debug/embeddings', (_req, res) => {
+  if (!assertDebugApi(_req, res)) return;
   try {
     const chunks = Number(db.prepare(`SELECT count(1) AS c FROM note_chunks`).get()?.c ?? 0) || 0;
     const embedded =
@@ -261,6 +664,7 @@ app.get('/api/debug/embeddings', (_req, res) => {
 });
 
 app.get('/api/debug/semantic-score', async (req, res) => {
+  if (!assertDebugApi(req, res)) return;
   const q = (req.query.q ?? 'recording').toString().trim();
   try {
     const [qVec] = await embedTexts([q]);
@@ -268,9 +672,11 @@ app.get('/api/debug/semantic-score', async (req, res) => {
       .prepare(
         `SELECT nc.note_id, nc.chunk_idx, nc.text, nc.embedding
          FROM note_chunks nc
+         JOIN notes n ON n.id = nc.note_id
+         WHERE n.user_id = ?
          LIMIT 1`
       )
-      .get();
+      .get(req.user_id);
     const docVec = bufferToFloat32(row?.embedding);
     const sem = cosineSim(qVec, docVec);
     res.json({
@@ -287,6 +693,7 @@ app.get('/api/debug/semantic-score', async (req, res) => {
 });
 
 app.get('/api/debug/embed', async (req, res) => {
+  if (!assertDebugApi(req, res)) return;
   const q = (req.query.q ?? 'recording').toString().trim();
   try {
     const [v] = await embedTexts([q]);
@@ -301,9 +708,10 @@ app.get('/api/debug/embed', async (req, res) => {
 });
 
 app.post('/api/debug/force-semantic', async (req, res) => {
+  if (!assertDebugApi(req, res)) return;
   const q = (req.body?.q ?? 'recording').toString().trim();
   try {
-    const out = await semanticSearch(db, { query: q, topK: 10 });
+    const out = await semanticSearch(db, { query: q, topK: 10, filters: { user_id: req.user_id } });
     const embedded =
       Number(
         db
@@ -337,6 +745,7 @@ function normalizeDetectedLanguage(raw) {
  * Body: { limit?: number, dry_run?: boolean, language_hint?: string } — hint is passed to transcribe (empty = auto-detect).
  */
 app.post('/api/debug/backfill-note-languages', async (req, res) => {
+  if (!assertDebugApi(req, res)) return;
   const limit = clampInt(req.body?.limit, 1, 500, 25);
   const dryRun = !!(req.body?.dry_run ?? false);
   const languageHint = (req.body?.language_hint ?? '').toString().trim();
@@ -346,11 +755,13 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
       .prepare(
         `SELECT id, audio_blob_id, audio_mime, language
          FROM notes
-         WHERE (language IS NULL OR trim(language) = '') AND status = 'ready'
+         WHERE user_id = ?
+           AND (language IS NULL OR trim(language) = '')
+           AND status = 'ready'
          ORDER BY updated_at DESC
          LIMIT ?`
       )
-      .all(limit);
+      .all(req.user_id, limit);
 
     if (dryRun) {
       return res.json({
@@ -388,8 +799,9 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
         const finalLang = persistedNoteLanguage(hint, detected);
         if (finalLang) {
           const updatedAt = new Date().toISOString();
-          db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id`).run({
+          db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`).run({
             id: noteId,
+            user_id: req.user_id,
             language: finalLang,
             updated_at: updatedAt
           });
@@ -414,7 +826,8 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
   }
 });
 
-app.get('/api/export.zip', (_req, res) => {
+app.get('/api/export.zip', (req, res) => {
+  if (!assertFullDatabaseExportImport(req, res)) return;
   const exportedAt = new Date().toISOString();
 
   let counts = { notes: 0, segments: 0, chunks: 0, jobs: 0, tags: 0, folders: 0 };
@@ -476,6 +889,7 @@ app.get('/api/export.zip', (_req, res) => {
 });
 
 app.post('/api/import', uploadZip.single('backup'), async (req, res) => {
+  if (!assertFullDatabaseExportImport(req, res)) return;
   const filePath = (req.file?.path ?? '').toString();
   if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Missing backup file' });
 
@@ -601,33 +1015,41 @@ app.get('/api/ingestion', (_req, res) => {
   res.json({ paused: isIngestionPaused(db) });
 });
 
-app.post('/api/ingestion/pause', (_req, res) => {
+app.post('/api/ingestion/pause', (req, res) => {
+  if (!assertGlobalMachineControls(req, res)) return;
   setAppState(db, 'ingestion_paused', '1');
   res.json({ ok: true, paused: true });
 });
 
-app.post('/api/ingestion/resume', (_req, res) => {
+app.post('/api/ingestion/resume', (req, res) => {
+  if (!assertGlobalMachineControls(req, res)) return;
   setAppState(db, 'ingestion_paused', '0');
   res.json({ ok: true, paused: false });
 });
 
 app.get('/api/jobs', (req, res) => {
+  const uid = req.user_id;
   const status = (req.query.status ?? '').toString().trim();
   const limit = clampInt(req.query.limit, 1, 200, 40);
-  const where = status ? `WHERE j.status = ?` : '';
-  const args = status ? [status, limit] : [limit];
+  const whereParts = [`n.user_id = ?`];
+  const args = [uid];
+  if (status) {
+    whereParts.push(`j.status = ?`);
+    args.push(status);
+  }
+  const whereSql = `WHERE ${whereParts.join(' AND ')}`;
   const rows = db
     .prepare(
       `SELECT j.id, j.job_type, j.note_id, j.status, j.attempts, j.max_attempts, j.locked_at, j.last_error, j.created_at, j.updated_at,
               j.available_at,
               COALESCE(NULLIF(trim(n.display_title), ''), n.title) AS note_title, n.status AS note_status
        FROM ingestion_jobs j
-       LEFT JOIN notes n ON n.id = j.note_id
-       ${where}
+       JOIN notes n ON n.id = j.note_id
+       ${whereSql}
        ORDER BY j.updated_at DESC
        LIMIT ?`
     )
-    .all(...args);
+    .all(...args, limit);
   res.json({ paused: isIngestionPaused(db), items: rows });
 });
 
@@ -636,6 +1058,16 @@ app.get('/api/jobs/:id/events', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Missing id' });
   const limit = clampInt(req.query.limit, 1, 500, 200);
   try {
+    const owns = db
+      .prepare(
+        `SELECT 1 AS ok
+         FROM ingestion_jobs j
+         JOIN notes n ON n.id = j.note_id
+         WHERE j.id = ? AND n.user_id = ?
+         LIMIT 1`
+      )
+      .get(id, req.user_id);
+    if (!owns) return res.status(404).json({ ok: false, error: 'Not found' });
     const items = db
       .prepare(
         `SELECT id, job_id, note_id, event_type, message, meta_json, created_at
@@ -651,17 +1083,19 @@ app.get('/api/jobs/:id/events', (req, res) => {
   }
 });
 
-app.get('/api/processes/summary', (_req, res) => {
+app.get('/api/processes/summary', (req, res) => {
   const paused = isIngestionPaused(db);
   const maxParallel = getIngestionMaxParallel(db);
   const now = new Date().toISOString();
   const counts = db
     .prepare(
-      `SELECT status, count(1) AS c
-       FROM ingestion_jobs
-       GROUP BY status`
+      `SELECT j.status, count(1) AS c
+       FROM ingestion_jobs j
+       JOIN notes n ON n.id = j.note_id
+       WHERE n.user_id = ?
+       GROUP BY j.status`
     )
-    .all();
+    .all(req.user_id);
   const byStatus = {};
   for (const r of counts) byStatus[(r?.status ?? '').toString()] = Number(r?.c ?? 0) || 0;
 
@@ -669,9 +1103,10 @@ app.get('/api/processes/summary', (_req, res) => {
     .prepare(
       `SELECT status, count(1) AS c
        FROM notes
+       WHERE user_id = ?
        GROUP BY status`
     )
-    .all();
+    .all(req.user_id);
   const notesByStatus = {};
   for (const r of notes) notesByStatus[(r?.status ?? '').toString()] = Number(r?.c ?? 0) || 0;
 
@@ -680,12 +1115,14 @@ app.get('/api/processes/summary', (_req, res) => {
     const row = db
       .prepare(
         `SELECT count(1) AS c
-         FROM ingestion_jobs
-         WHERE status = 'queued'
-           AND available_at != ''
-           AND available_at > ?`
+         FROM ingestion_jobs j
+         JOIN notes n ON n.id = j.note_id
+         WHERE j.status = 'queued'
+           AND j.available_at != ''
+           AND j.available_at > ?
+           AND n.user_id = ?`
       )
-      .get(now);
+      .get(now, req.user_id);
     delayedQueued = Number(row?.c ?? 0) || 0;
   } catch {
     delayedQueued = 0;
@@ -695,11 +1132,11 @@ app.get('/api/processes/summary', (_req, res) => {
     .prepare(
       `SELECT id, title, substr(error, 1, 240) AS error, updated_at
        FROM notes
-       WHERE status = 'error'
+       WHERE status = 'error' AND user_id = ?
        ORDER BY updated_at DESC
        LIMIT 10`
     )
-    .all();
+    .all(req.user_id);
 
   res.json({
     paused,
@@ -716,12 +1153,14 @@ app.get('/api/processes/summary', (_req, res) => {
 });
 
 app.post('/api/processes/max-parallel', (req, res) => {
+  if (!assertGlobalMachineControls(req, res)) return;
   const n = clampInt(req.body?.max_parallel, 1, 6, 1);
   setAppState(db, 'ingestion_max_parallel', String(n));
   res.json({ ok: true, max_parallel: n });
 });
 
 app.post('/api/processes/backoff', (req, res) => {
+  if (!assertGlobalMachineControls(req, res)) return;
   const base = clampInt(req.body?.base_sec, 1, 60, 5);
   const max = clampInt(req.body?.max_sec, 5, 3600, 300);
   setAppState(db, 'ingestion_backoff_base_sec', String(base));
@@ -729,13 +1168,21 @@ app.post('/api/processes/backoff', (req, res) => {
   res.json({ ok: true, backoff_base_sec: base, backoff_max_sec: max });
 });
 
-app.post('/api/processes/retry-all-errors', (_req, res) => {
+app.post('/api/processes/retry-all-errors', (req, res) => {
   const now2 = new Date().toISOString();
   let changed = 0;
   try {
     let ids = [];
     try {
-      ids = db.prepare(`SELECT id, note_id, job_type FROM ingestion_jobs WHERE status = 'error' LIMIT 500`).all();
+      ids = db
+        .prepare(
+          `SELECT j.id, j.note_id, j.job_type
+           FROM ingestion_jobs j
+           JOIN notes n ON n.id = j.note_id
+           WHERE j.status = 'error' AND n.user_id = ?
+           LIMIT 500`
+        )
+        .all(req.user_id);
     } catch {
       ids = [];
     }
@@ -748,9 +1195,10 @@ app.post('/api/processes/retry-all-errors', (_req, res) => {
              available_at = '',
              last_error = '',
              updated_at = @now
-         WHERE status = 'error'`
+         WHERE status = 'error'
+           AND note_id IN (SELECT id FROM notes WHERE user_id = @user_id)`
       )
-      .run({ now: now2 });
+      .run({ now: now2, user_id: req.user_id });
     changed = Number(r?.changes ?? 0) || 0;
     if (changed > 0 && ids.length) {
       for (const j of ids) {
@@ -769,17 +1217,17 @@ app.post('/api/processes/retry-all-errors', (_req, res) => {
   res.json({ ok: true, retried: changed });
 });
 
-app.post('/api/processes/unlock-stale', (_req, res) => {
-  const count = unlockStaleJobs(db, { force: true });
+app.post('/api/processes/unlock-stale', (req, res) => {
+  const count = unlockStaleJobs(db, { force: true, userId: req.user_id });
   res.json({ ok: true, unlocked: count });
 });
 
 // --- Library metadata: folders/tags (local-only) ---
 
-app.get('/api/folders', (_req, res) => {
+app.get('/api/folders', (req, res) => {
   const items = db
-    .prepare(`SELECT id, name, created_at, updated_at FROM folders ORDER BY name ASC`)
-    .all();
+    .prepare(`SELECT id, name, created_at, updated_at FROM folders WHERE user_id = ? ORDER BY name ASC`)
+    .all(req.user_id);
   res.json({ items });
 });
 
@@ -790,9 +1238,9 @@ app.post('/api/folders', (req, res) => {
   const now = new Date().toISOString();
   try {
     db.prepare(
-      `INSERT INTO folders (id, name, created_at, updated_at)
-       VALUES (@id, @name, @created_at, @updated_at)`
-    ).run({ id, name, created_at: now, updated_at: now });
+      `INSERT INTO folders (id, user_id, name, created_at, updated_at)
+       VALUES (@id, @user_id, @name, @created_at, @updated_at)`
+    ).run({ id, user_id: req.user_id, name, created_at: now, updated_at: now });
     res.status(201).json({ ok: true, id, name });
   } catch (e) {
     res.status(409).json({ error: 'Folder already exists', details: e?.message ?? String(e) });
@@ -807,8 +1255,8 @@ app.patch('/api/folders/:id', (req, res) => {
   const now = new Date().toISOString();
   try {
     const r = db
-      .prepare(`UPDATE folders SET name = @name, updated_at = @updated_at WHERE id = @id`)
-      .run({ id, name, updated_at: now });
+      .prepare(`UPDATE folders SET name = @name, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`)
+      .run({ id, user_id: req.user_id, name, updated_at: now });
     if (!r.changes) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id, name });
   } catch (e) {
@@ -821,11 +1269,12 @@ app.delete('/api/folders/:id', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Missing id' });
   const now = new Date().toISOString();
   try {
-    db.prepare(`UPDATE notes SET folder_id = '', updated_at = @updated_at WHERE folder_id = @id`).run({
+    db.prepare(`UPDATE notes SET folder_id = '', updated_at = @updated_at WHERE folder_id = @id AND user_id = @user_id`).run({
       id,
+      user_id: req.user_id,
       updated_at: now
     });
-    const r = db.prepare(`DELETE FROM folders WHERE id = ?`).run(id);
+    const r = db.prepare(`DELETE FROM folders WHERE id = ? AND user_id = ?`).run(id, req.user_id);
     if (!r.changes) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id });
   } catch (e) {
@@ -833,8 +1282,10 @@ app.delete('/api/folders/:id', (req, res) => {
   }
 });
 
-app.get('/api/tags', (_req, res) => {
-  const items = db.prepare(`SELECT id, name, created_at, updated_at FROM tags ORDER BY name ASC`).all();
+app.get('/api/tags', (req, res) => {
+  const items = db
+    .prepare(`SELECT id, name, created_at, updated_at FROM tags WHERE user_id = ? ORDER BY name ASC`)
+    .all(req.user_id);
   res.json({ items });
 });
 
@@ -844,12 +1295,15 @@ app.post('/api/tags', (req, res) => {
   const id = nanoid(12);
   const now = new Date().toISOString();
   try {
-    db.prepare(`INSERT INTO tags (id, name, created_at, updated_at) VALUES (@id,@name,@created_at,@updated_at)`).run({
-      id,
-      name,
-      created_at: now,
-      updated_at: now
-    });
+    db
+      .prepare(`INSERT INTO tags (id, user_id, name, created_at, updated_at) VALUES (@id,@user_id,@name,@created_at,@updated_at)`)
+      .run({
+        id,
+        user_id: req.user_id,
+        name,
+        created_at: now,
+        updated_at: now
+      });
     res.status(201).json({ ok: true, id, name });
   } catch (e) {
     res.status(409).json({ error: 'Tag already exists', details: e?.message ?? String(e) });
@@ -863,11 +1317,14 @@ app.patch('/api/tags/:id', (req, res) => {
   if (!name) return res.status(400).json({ error: 'Missing name' });
   const now = new Date().toISOString();
   try {
-    const r = db.prepare(`UPDATE tags SET name = @name, updated_at = @updated_at WHERE id = @id`).run({
-      id,
-      name,
-      updated_at: now
-    });
+    const r = db
+      .prepare(`UPDATE tags SET name = @name, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`)
+      .run({
+        id,
+        user_id: req.user_id,
+        name,
+        updated_at: now
+      });
     if (!r.changes) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id, name });
   } catch (e) {
@@ -880,7 +1337,7 @@ app.delete('/api/tags/:id', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Missing id' });
   try {
     db.prepare(`DELETE FROM note_tags WHERE tag_id = ?`).run(id);
-    const r = db.prepare(`DELETE FROM tags WHERE id = ?`).run(id);
+    const r = db.prepare(`DELETE FROM tags WHERE id = ? AND user_id = ?`).run(id, req.user_id);
     if (!r.changes) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id });
   } catch (e) {
@@ -891,15 +1348,17 @@ app.delete('/api/tags/:id', (req, res) => {
 app.get('/api/notes/:id/tags', (req, res) => {
   const id = (req.params?.id ?? '').toString().trim();
   if (!id) return res.status(400).json({ error: 'Missing id' });
+  const owns = db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(id, req.user_id);
+  if (!owns) return res.status(404).json({ error: 'Not found' });
   const items = db
     .prepare(
       `SELECT t.id, t.name
        FROM note_tags nt
        JOIN tags t ON t.id = nt.tag_id
-       WHERE nt.note_id = ?
+       WHERE nt.note_id = ? AND t.user_id = ?
        ORDER BY t.name ASC`
     )
-    .all(id);
+    .all(id, req.user_id);
   res.json({ note_id: id, items });
 });
 
@@ -915,16 +1374,20 @@ app.post('/api/notes/:id/tags', (req, res) => {
   // Replace semantics: clear then insert.
   const now = new Date().toISOString();
   try {
+    const owns = db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(noteId, req.user_id);
+    if (!owns) return res.status(404).json({ error: 'Not found' });
     db.prepare(`DELETE FROM note_tags WHERE note_id = ?`).run(noteId);
     for (const name of cleaned) {
-      let row = db.prepare(`SELECT id FROM tags WHERE name = ?`).get(name);
+      let row = db.prepare(`SELECT id FROM tags WHERE name = ? AND user_id = ?`).get(name, req.user_id);
       if (!row) {
         const id = nanoid(12);
         try {
-          db.prepare(`INSERT INTO tags (id, name, created_at, updated_at) VALUES (?,?,?,?)`).run(id, name, now, now);
+          db
+            .prepare(`INSERT INTO tags (id, user_id, name, created_at, updated_at) VALUES (?,?,?,?,?)`)
+            .run(id, req.user_id, name, now, now);
           row = { id };
         } catch {
-          row = db.prepare(`SELECT id FROM tags WHERE name = ?`).get(name);
+          row = db.prepare(`SELECT id FROM tags WHERE name = ? AND user_id = ?`).get(name, req.user_id);
         }
       }
       const tagId = (row?.id ?? '').toString();
@@ -947,10 +1410,10 @@ app.post('/api/notes/:id/tags', (req, res) => {
 
 // --- Saved searches (local-only) ---
 
-app.get('/api/saved-searches', (_req, res) => {
+app.get('/api/saved-searches', (req, res) => {
   const items = db
-    .prepare(`SELECT id, name, query, created_at, updated_at FROM saved_searches ORDER BY updated_at DESC`)
-    .all();
+    .prepare(`SELECT id, name, query, created_at, updated_at FROM saved_searches WHERE user_id = ? ORDER BY updated_at DESC`)
+    .all(req.user_id);
   res.json({ items });
 });
 
@@ -963,9 +1426,9 @@ app.post('/api/saved-searches', (req, res) => {
   const now = new Date().toISOString();
   try {
     db.prepare(
-      `INSERT INTO saved_searches (id, name, query, created_at, updated_at)
-       VALUES (@id, @name, @query, @created_at, @updated_at)`
-    ).run({ id, name, query, created_at: now, updated_at: now });
+      `INSERT INTO saved_searches (id, user_id, name, query, created_at, updated_at)
+       VALUES (@id, @user_id, @name, @query, @created_at, @updated_at)`
+    ).run({ id, user_id: req.user_id, name, query, created_at: now, updated_at: now });
     res.status(201).json({ ok: true, id, name, query });
   } catch (e) {
     res.status(500).json({ error: 'Create failed', details: e?.message ?? String(e) });
@@ -985,8 +1448,8 @@ app.patch('/api/saved-searches/:id', (req, res) => {
   parts.push(`updated_at = @updated_at`);
   try {
     const r = db
-      .prepare(`UPDATE saved_searches SET ${parts.join(', ')} WHERE id = @id`)
-      .run({ id, name, query, updated_at: now });
+      .prepare(`UPDATE saved_searches SET ${parts.join(', ')} WHERE id = @id AND user_id = @user_id`)
+      .run({ id, user_id: req.user_id, name, query, updated_at: now });
     if (!r.changes) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id });
   } catch (e) {
@@ -998,7 +1461,7 @@ app.delete('/api/saved-searches/:id', (req, res) => {
   const id = (req.params?.id ?? '').toString().trim();
   if (!id) return res.status(400).json({ error: 'Missing id' });
   try {
-    const r = db.prepare(`DELETE FROM saved_searches WHERE id = ?`).run(id);
+    const r = db.prepare(`DELETE FROM saved_searches WHERE id = ? AND user_id = ?`).run(id, req.user_id);
     if (!r.changes) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id });
   } catch (e) {
@@ -1013,11 +1476,13 @@ app.post('/api/notes/:id/pause-processing', (req, res) => {
   if (!noteId) return res.status(400).json({ error: 'Missing id' });
   const now = new Date().toISOString();
   try {
+    const owns = db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(noteId, req.user_id);
+    if (!owns) return res.status(404).json({ error: 'Not found' });
     db.prepare(
-      `INSERT INTO note_processing_state (note_id, paused, updated_at)
-       VALUES (@note_id, 1, @updated_at)
-       ON CONFLICT(note_id) DO UPDATE SET paused = 1, updated_at = excluded.updated_at`
-    ).run({ note_id: noteId, updated_at: now });
+      `INSERT INTO note_processing_state (note_id, user_id, paused, updated_at)
+       VALUES (@note_id, @user_id, 1, @updated_at)
+       ON CONFLICT(note_id) DO UPDATE SET user_id = excluded.user_id, paused = 1, updated_at = excluded.updated_at`
+    ).run({ note_id: noteId, user_id: req.user_id, updated_at: now });
     res.json({ ok: true, note_id: noteId, paused: true });
   } catch (e) {
     res.status(500).json({ error: 'Pause failed', details: e?.message ?? String(e) });
@@ -1029,36 +1494,50 @@ app.post('/api/notes/:id/resume-processing', (req, res) => {
   if (!noteId) return res.status(400).json({ error: 'Missing id' });
   const now = new Date().toISOString();
   try {
+    const owns = db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(noteId, req.user_id);
+    if (!owns) return res.status(404).json({ error: 'Not found' });
     db.prepare(
-      `INSERT INTO note_processing_state (note_id, paused, updated_at)
-       VALUES (@note_id, 0, @updated_at)
-       ON CONFLICT(note_id) DO UPDATE SET paused = 0, updated_at = excluded.updated_at`
-    ).run({ note_id: noteId, updated_at: now });
+      `INSERT INTO note_processing_state (note_id, user_id, paused, updated_at)
+       VALUES (@note_id, @user_id, 0, @updated_at)
+       ON CONFLICT(note_id) DO UPDATE SET user_id = excluded.user_id, paused = 0, updated_at = excluded.updated_at`
+    ).run({ note_id: noteId, user_id: req.user_id, updated_at: now });
     res.json({ ok: true, note_id: noteId, paused: false });
   } catch (e) {
     res.status(500).json({ error: 'Resume failed', details: e?.message ?? String(e) });
   }
 });
 
-function requestStopNoteJobs(db, noteId) {
+function requestStopNoteJobs(db, noteId, userId) {
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO note_processing_state (note_id, paused, cancel_requested, updated_at)
-     VALUES (@note_id, 0, 1, @updated_at)
-     ON CONFLICT(note_id) DO UPDATE SET cancel_requested = 1, updated_at = excluded.updated_at`
-  ).run({ note_id: noteId, updated_at: now });
+    `INSERT INTO note_processing_state (note_id, user_id, paused, cancel_requested, updated_at)
+     VALUES (@note_id, @user_id, 0, 1, @updated_at)
+     ON CONFLICT(note_id) DO UPDATE SET user_id = excluded.user_id, cancel_requested = 1, updated_at = excluded.updated_at`
+  ).run({ note_id: noteId, user_id: userId, updated_at: now });
   db.prepare(
     `UPDATE ingestion_jobs
      SET status = 'cancelled', last_error = 'Stopped', updated_at = @updated_at
-     WHERE note_id = @note_id AND status = 'queued'`
-  ).run({ note_id: noteId, updated_at: now });
+     WHERE note_id = @note_id
+       AND status = 'queued'
+       AND EXISTS (SELECT 1 FROM notes n WHERE n.id = @note_id AND n.user_id = @user_id)`
+  ).run({ note_id: noteId, user_id: userId, updated_at: now });
 
-  const running = db.prepare(`SELECT id FROM ingestion_jobs WHERE note_id = ? AND status = 'running'`).get(noteId);
+  const running = db
+    .prepare(
+      `SELECT j.id
+       FROM ingestion_jobs j
+       JOIN notes n ON n.id = j.note_id
+       WHERE j.note_id = ?
+         AND j.status = 'running'
+         AND n.user_id = ?`
+    )
+    .get(noteId, userId);
   if (!running) {
     db.prepare(
-      `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND status = 'processing'`
+      `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND user_id = @user_id AND status = 'processing'`
     ).run({
       id: noteId,
+      user_id: userId,
       error: 'Stopped by user',
       updated_at: now
     });
@@ -1070,13 +1549,22 @@ function requestStopNoteJobs(db, noteId) {
 }
 
 function consumeCancelIfRequested(db, noteId) {
-  const row = db.prepare(`SELECT COALESCE(cancel_requested, 0) AS c FROM note_processing_state WHERE note_id = ?`).get(noteId);
+  const row = db
+    .prepare(
+      `SELECT COALESCE(nps.cancel_requested, 0) AS c, n.user_id AS user_id
+       FROM note_processing_state nps
+       JOIN notes n ON n.id = nps.note_id
+       WHERE nps.note_id = ?`
+    )
+    .get(noteId);
   if (Number(row?.c ?? 0) !== 1) return false;
+  const userId = (row?.user_id ?? '').toString().trim();
   const now = new Date().toISOString();
   db.prepare(
-    `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND status = 'processing'`
+    `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND user_id = @user_id AND status = 'processing'`
   ).run({
     id: noteId,
+    user_id: userId,
     error: 'Stopped by user',
     updated_at: now
   });
@@ -1110,19 +1598,23 @@ app.post('/api/notes/:id/stop-processing', (req, res) => {
   const noteId = (req.params?.id ?? '').toString().trim();
   if (!noteId) return res.status(400).json({ error: 'Missing id' });
   try {
-    requestStopNoteJobs(db, noteId);
+    const owns = db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(noteId, req.user_id);
+    if (!owns) return res.status(404).json({ error: 'Not found' });
+    requestStopNoteJobs(db, noteId, req.user_id);
     res.json({ ok: true, note_id: noteId });
   } catch (e) {
     res.status(500).json({ error: e?.message ?? String(e) });
   }
 });
 
-app.post('/api/processing/stop-all', (_req, res) => {
+app.post('/api/processing/stop-all', (req, res) => {
   try {
-    const rows = db.prepare(`SELECT id FROM notes WHERE status = 'processing'`).all();
+    const rows = db
+      .prepare(`SELECT id FROM notes WHERE status = 'processing' AND user_id = ?`)
+      .all(req.user_id);
     for (const r of rows) {
       const id = (r?.id ?? '').toString().trim();
-      if (id) requestStopNoteJobs(db, id);
+      if (id) requestStopNoteJobs(db, id, req.user_id);
     }
     res.json({ ok: true, count: rows.length });
   } catch (e) {
@@ -1136,11 +1628,15 @@ app.post('/api/notes/:id/priority', (req, res) => {
   const p = clampInt(req.body?.priority, -5, 5, 0);
   const now = new Date().toISOString();
   try {
+    const owns = db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(noteId, req.user_id);
+    if (!owns) return res.status(404).json({ error: 'Not found' });
     db.prepare(
       `UPDATE ingestion_jobs
        SET priority = @priority, updated_at = @updated_at
-       WHERE note_id = @note_id AND status = 'queued'`
-    ).run({ note_id: noteId, priority: p, updated_at: now });
+       WHERE note_id = @note_id
+         AND status = 'queued'
+         AND EXISTS (SELECT 1 FROM notes n WHERE n.id = @note_id AND n.user_id = @user_id)`
+    ).run({ note_id: noteId, user_id: req.user_id, priority: p, updated_at: now });
     res.json({ ok: true, note_id: noteId, priority: p });
   } catch (e) {
     res.status(500).json({ error: 'Priority update failed', details: e?.message ?? String(e) });
@@ -1150,7 +1646,14 @@ app.post('/api/notes/:id/priority', (req, res) => {
 app.post('/api/jobs/:id/cancel', (req, res) => {
   const id = (req.params?.id ?? '').toString().trim();
   if (!id) return res.status(400).json({ error: 'Missing id' });
-  const job = db.prepare(`SELECT id, note_id, job_type, status FROM ingestion_jobs WHERE id = ?`).get(id);
+  const job = db
+    .prepare(
+      `SELECT j.id, j.note_id, j.job_type, j.status
+       FROM ingestion_jobs j
+       JOIN notes n ON n.id = j.note_id
+       WHERE j.id = ? AND n.user_id = ?`
+    )
+    .get(id, req.user_id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   const st = (job?.status ?? '').toString();
   if (st === 'running') return res.status(409).json({ error: 'Job is running; pause processing first' });
@@ -1171,13 +1674,20 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   res.json({ ok: true, id, status: 'cancelled' });
 });
 
-function removeIngestionJobRow(res, idRaw) {
+function removeIngestionJobRow(res, idRaw, userId) {
   const id = (idRaw ?? '').toString().trim();
   if (!id) {
     res.status(400).json({ error: 'Missing id' });
     return;
   }
-  const job = db.prepare(`SELECT id, status, note_id FROM ingestion_jobs WHERE id = ?`).get(id);
+  const job = db
+    .prepare(
+      `SELECT j.id, j.status, j.note_id
+       FROM ingestion_jobs j
+       JOIN notes n ON n.id = j.note_id
+       WHERE j.id = ? AND n.user_id = ?`
+    )
+    .get(id, userId);
   if (!job) {
     res.status(404).json({ error: 'Not found' });
     return;
@@ -1189,10 +1699,10 @@ function removeIngestionJobRow(res, idRaw) {
   }
 
   const noteId = (job?.note_id ?? '').toString().trim();
-  const noteStillExists = noteId ? !!db.prepare(`SELECT id FROM notes WHERE id = ?`).get(noteId) : false;
+  const noteStillExists = noteId ? !!db.prepare(`SELECT id FROM notes WHERE id = ? AND user_id = ?`).get(noteId, userId) : false;
 
   if (noteStillExists) {
-    deleteNoteCascade(noteId);
+    deleteNoteCascade(noteId, userId);
     res.json({ ok: true, id, note_id: noteId, note_deleted: true });
     return;
   }
@@ -1207,18 +1717,25 @@ function removeIngestionJobRow(res, idRaw) {
 }
 
 app.delete('/api/jobs/:id', (req, res) => {
-  removeIngestionJobRow(res, req.params?.id);
+  removeIngestionJobRow(res, req.params?.id, req.user_id);
 });
 
 /** Same as DELETE — some proxies strip DELETE; UI uses POST for reliability. */
 app.post('/api/jobs/:id/remove', (req, res) => {
-  removeIngestionJobRow(res, req.params?.id);
+  removeIngestionJobRow(res, req.params?.id, req.user_id);
 });
 
 app.post('/api/jobs/:id/retry', (req, res) => {
   const id = (req.params?.id ?? '').toString().trim();
   if (!id) return res.status(400).json({ error: 'Missing id' });
-  const job = db.prepare(`SELECT id, note_id, job_type FROM ingestion_jobs WHERE id = ?`).get(id);
+  const job = db
+    .prepare(
+      `SELECT j.id, j.note_id, j.job_type
+       FROM ingestion_jobs j
+       JOIN notes n ON n.id = j.note_id
+       WHERE j.id = ? AND n.user_id = ?`
+    )
+    .get(id, req.user_id);
   if (!job) return res.status(404).json({ error: 'Not found' });
 
   const now = new Date().toISOString();
@@ -1230,6 +1747,7 @@ app.post('/api/jobs/:id/retry', (req, res) => {
   appendJobEvent(db, {
     jobId: id,
     noteId: (job?.note_id ?? '').toString(),
+    userId: req.user_id,
     eventType: 'manual_retry',
     message: 'Job manually re-queued',
     meta: { job_type: (job?.job_type ?? '').toString() }
@@ -1247,10 +1765,11 @@ app.post('/api/note-drafts', upload.single('audio'), (req, res) => {
     const now = new Date().toISOString();
     const dm = clampInt(req.body?.duration_ms, 0, 24 * 60 * 60 * 1000, 0);
     db.prepare(
-      `INSERT INTO note_drafts (id, audio_blob_id, audio_mime, audio_bytes, duration_ms, created_at, updated_at)
-       VALUES (@id, @audio_blob_id, @audio_mime, @audio_bytes, @duration_ms, @created_at, @updated_at)`
+      `INSERT INTO note_drafts (id, user_id, audio_blob_id, audio_mime, audio_bytes, duration_ms, created_at, updated_at)
+       VALUES (@id, @user_id, @audio_blob_id, @audio_mime, @audio_bytes, @duration_ms, @created_at, @updated_at)`
     ).run({
       id,
+      user_id: req.user_id,
       audio_blob_id: blobId,
       audio_mime: audio.mimetype || 'application/octet-stream',
       audio_bytes: audio.size,
@@ -1270,7 +1789,9 @@ app.put('/api/note-drafts/:id', upload.single('audio'), (req, res) => {
     const audio = req.file;
     if (!id) return res.status(400).json({ error: 'Missing draft id' });
     if (!audio?.buffer?.length) return res.status(400).json({ error: 'Missing audio file' });
-    const existing = db.prepare(`SELECT id, audio_blob_id FROM note_drafts WHERE id = ?`).get(id);
+    const existing = db
+      .prepare(`SELECT id, audio_blob_id FROM note_drafts WHERE id = ? AND user_id = ?`)
+      .get(id, req.user_id);
     if (!existing) return res.status(404).json({ error: 'Draft not found' });
     const oldBid = (existing?.audio_blob_id ?? '').toString().trim();
     const blobId = sha256Hex(audio.buffer);
@@ -1279,9 +1800,10 @@ app.put('/api/note-drafts/:id', upload.single('audio'), (req, res) => {
     const dm = clampInt(req.body?.duration_ms, 0, 24 * 60 * 60 * 1000, 0);
     db.prepare(
       `UPDATE note_drafts SET audio_blob_id = @audio_blob_id, audio_mime = @audio_mime, audio_bytes = @audio_bytes,
-       duration_ms = @duration_ms, updated_at = @updated_at WHERE id = @id`
+       duration_ms = @duration_ms, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`
     ).run({
       id,
+      user_id: req.user_id,
       audio_blob_id: blobId,
       audio_mime: audio.mimetype || 'application/octet-stream',
       audio_bytes: audio.size,
@@ -1300,8 +1822,8 @@ app.get('/api/note-drafts/:id', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Missing draft id' });
   try {
     const row = db
-      .prepare(`SELECT id, audio_bytes, audio_mime, duration_ms, updated_at FROM note_drafts WHERE id = ?`)
-      .get(id);
+      .prepare(`SELECT id, audio_bytes, audio_mime, duration_ms, updated_at FROM note_drafts WHERE id = ? AND user_id = ?`)
+      .get(id, req.user_id);
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, ...row });
   } catch (e) {
@@ -1313,10 +1835,10 @@ app.delete('/api/note-drafts/:id', (req, res) => {
   const id = (req.params?.id ?? '').toString().trim();
   if (!id) return res.status(400).json({ error: 'Missing draft id' });
   try {
-    const row = db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE id = ?`).get(id);
+    const row = db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE id = ? AND user_id = ?`).get(id, req.user_id);
     if (!row) return res.status(404).json({ error: 'Not found' });
     const bid = (row.audio_blob_id ?? '').toString().trim();
-    db.prepare(`DELETE FROM note_drafts WHERE id = ?`).run(id);
+    db.prepare(`DELETE FROM note_drafts WHERE id = ? AND user_id = ?`).run(id, req.user_id);
     maybeUnlinkBlob(db, blobsDir, bid);
     res.json({ ok: true });
   } catch (e) {
@@ -1339,7 +1861,9 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
       audioMime = audio.mimetype || audioMime;
       audioSize = audio.size || audioBuffer.length;
     } else if (draftId) {
-      const row = db.prepare(`SELECT audio_blob_id, audio_mime, audio_bytes FROM note_drafts WHERE id = ?`).get(draftId);
+      const row = db
+        .prepare(`SELECT audio_blob_id, audio_mime, audio_bytes FROM note_drafts WHERE id = ? AND user_id = ?`)
+        .get(draftId, req.user_id);
       const bid = (row?.audio_blob_id ?? '').toString().trim();
       const bytes = Number(row?.audio_bytes ?? 0) || 0;
       if (bid && bytes > 0) {
@@ -1379,10 +1903,11 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
 
     const createdAt = new Date().toISOString();
     db.prepare(
-      `INSERT INTO notes (id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, language, stt_provider, created_at, updated_at, status, error)
-       VALUES (@id, @title, @display_title, @body, @segments_json, @audio_filename, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @language, @stt_provider, @created_at, @updated_at, @status, @error)`
+      `INSERT INTO notes (id, user_id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, language, stt_provider, created_at, updated_at, status, error)
+       VALUES (@id, @user_id, @title, @display_title, @body, @segments_json, @audio_filename, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @language, @stt_provider, @created_at, @updated_at, @status, @error)`
     ).run({
       id,
+      user_id: req.user_id,
       title: ftsTitle,
       display_title: initialDisplayTitle,
       body: '',
@@ -1403,7 +1928,7 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
 
     if (draftId) {
       try {
-        const dr = db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE id = ?`).get(draftId);
+        const dr = db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE id = ? AND user_id = ?`).get(draftId, req.user_id);
         const oldDraftBid = (dr?.audio_blob_id ?? '').toString().trim();
         db.prepare(`DELETE FROM note_drafts WHERE id = ?`).run(draftId);
         if (oldDraftBid && oldDraftBid !== blobId) maybeUnlinkBlob(db, blobsDir, oldDraftBid);
@@ -1420,10 +1945,10 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
     if (preview) {
       const rowAfter = db
         .prepare(
-          `SELECT id, title, display_title, body, segments_json, language, stt_provider
-           FROM notes WHERE id = ?`
+          `SELECT id, user_id, title, display_title, body, segments_json, language, stt_provider, duration_ms
+           FROM notes WHERE id = ? AND user_id = ?`
         )
-        .get(id);
+        .get(id, req.user_id);
       await finalizeNoteFromSttOutput(db, id, rowAfter, {
         transcriptRaw: preview.transcript,
         segments: preview.segments,
@@ -1434,10 +1959,10 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
     } else if (clientFinal) {
       const rowAfter = db
         .prepare(
-          `SELECT id, title, display_title, body, segments_json, language, stt_provider
-           FROM notes WHERE id = ?`
+          `SELECT id, user_id, title, display_title, body, segments_json, language, stt_provider, duration_ms
+           FROM notes WHERE id = ? AND user_id = ?`
         )
-        .get(id);
+        .get(id, req.user_id);
       await finalizeNoteFromSttOutput(db, id, rowAfter, {
         transcriptRaw: clientFinal.transcript,
         segments: clientFinal.segments,
@@ -1446,9 +1971,9 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
       });
       res.status(201).json({ id, status: 'ready', transcribe_mode: '', preview_applied: true, client_text_applied: true });
     } else {
-      db.prepare(`UPDATE notes SET transcribe_mode = 'retranscribe' WHERE id = ?`).run(id);
+      db.prepare(`UPDATE notes SET transcribe_mode = 'retranscribe' WHERE id = ? AND user_id = ?`).run(id, req.user_id);
       res.status(201).json({ id, status: 'processing', transcribe_mode: 'retranscribe', preview_applied: false });
-      enqueueJob(db, { job_type: 'transcribe_note', note_id: id });
+      enqueueJob(db, { job_type: 'transcribe_note', note_id: id, user_id: req.user_id });
     }
   } catch (e) {
     if (!res.headersSent) res.status(500).json({ error: e?.message ?? String(e) });
@@ -1608,6 +2133,7 @@ app.post('/api/live-transcribe', upload.single('audio'), async (req, res) => {
 });
 
 app.get('/api/notes', (req, res) => {
+  const userId = currentUserId(req);
   const q = (req.query.q ?? '').toString().trim();
   const limit = clampInt(req.query.limit, 1, 100, 50);
   const offset = clampInt(req.query.offset, 0, 100000, 0);
@@ -1688,11 +2214,11 @@ app.get('/api/notes', (req, res) => {
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
          LEFT JOIN note_processing_state nps ON nps.note_id = n.id
-         WHERE 1=1${extraSql}
+         WHERE n.user_id = ?${extraSql}
          ORDER BY n.created_at DESC
          LIMIT ? OFFSET ?`
       )
-      .all(...extraArgs, limit, offset);
+      .all(userId, ...extraArgs, limit, offset);
   } else if ((!qText || !ftsQ) && hasTimeFilter) {
     rows = db
       .prepare(
@@ -1701,11 +2227,11 @@ app.get('/api/notes', (req, res) => {
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
          LEFT JOIN note_processing_state nps ON nps.note_id = n.id
-         WHERE n.created_at >= ? AND n.created_at <= ?${extraSql}
+         WHERE n.user_id = ? AND n.created_at >= ? AND n.created_at <= ?${extraSql}
          ORDER BY n.created_at DESC
          LIMIT ? OFFSET ?`
       )
-      .all(fromIso, toIso, ...extraArgs, limit, offset);
+      .all(userId, fromIso, toIso, ...extraArgs, limit, offset);
   } else {
     try {
       rows = db
@@ -1718,12 +2244,18 @@ app.get('/api/notes', (req, res) => {
            JOIN notes n ON n.rowid = notes_fts.rowid
            LEFT JOIN note_processing_state nps ON nps.note_id = n.id
            WHERE notes_fts MATCH ?
+           AND n.user_id = ?
            ${hasTimeFilter ? 'AND n.created_at >= ? AND n.created_at <= ?' : ''}
            ${extraSql}
            ORDER BY rank
            LIMIT ? OFFSET ?`
         )
-        .all(...(hasTimeFilter ? [ftsQ, fromIso, toIso] : [ftsQ]), ...extraArgs, limit, offset);
+        .all(
+          ...(hasTimeFilter ? [ftsQ, userId, fromIso, toIso] : [ftsQ, userId]),
+          ...extraArgs,
+          limit,
+          offset
+        );
     } catch {
       // FTS queries can throw on punctuation/operators from transcription.
       // Fall back to a safe substring search so the endpoint never hard-fails.
@@ -1735,14 +2267,15 @@ app.get('/api/notes', (req, res) => {
                   COALESCE(nps.paused, 0) AS processing_paused
            FROM notes n
            LEFT JOIN note_processing_state nps ON nps.note_id = n.id
-           WHERE (n.display_title LIKE ? ESCAPE '\\' OR n.title LIKE ? ESCAPE '\\' OR n.body LIKE ? ESCAPE '\\')
+           WHERE n.user_id = ?
+           AND (n.display_title LIKE ? ESCAPE '\\' OR n.title LIKE ? ESCAPE '\\' OR n.body LIKE ? ESCAPE '\\')
            ${hasTimeFilter ? 'AND n.created_at >= ? AND n.created_at <= ?' : ''}
            ${extraSql}
            ORDER BY n.created_at DESC
            LIMIT ? OFFSET ?`
         )
         .all(
-          ...(hasTimeFilter ? [like, like, like, fromIso, toIso] : [like, like, like]),
+          ...(hasTimeFilter ? [userId, like, like, like, fromIso, toIso] : [userId, like, like, like]),
           ...extraArgs,
           limit,
           offset
@@ -1777,9 +2310,9 @@ app.get('/api/notes/:id', (req, res) => {
     .prepare(
       `SELECT id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider, created_at, updated_at, status, error, folder_id, is_favorite, transcribe_mode
        FROM notes
-       WHERE id = ?`
+       WHERE id = ? AND user_id = ?`
     )
-    .get(id);
+    .get(id, currentUserId(req));
 
   if (!row) return res.status(404).json({ error: 'Not found' });
 
@@ -1824,6 +2357,7 @@ app.get('/api/semantic', async (req, res) => {
       toIso,
       topK,
       filters: {
+        user_id: currentUserId(req),
         folder_id: (req.query.folder_id ?? '').toString().trim() || adv.folder_id || '',
         status: (req.query.status ?? '').toString().trim() || adv.status || '',
         tag: (req.query.tag ?? '').toString().trim() || adv.tag || '',
@@ -2006,8 +2540,15 @@ app.patch('/api/notes/:id', (req, res) => {
   const hasFavorite = typeof favoriteRaw !== 'undefined';
   const isFavorite = hasFavorite ? ((favoriteRaw ?? 0).toString().trim() === '1' || favoriteRaw === true ? 1 : 0) : null;
 
-  const prev = db.prepare(`SELECT id, title, display_title, body, language, stt_provider FROM notes WHERE id = ?`).get(id);
+  const prev = db
+    .prepare(`SELECT id, title, display_title, body, language, stt_provider FROM notes WHERE id = ? AND user_id = ?`)
+    .get(id, req.user_id);
   if (!prev) return res.status(404).json({ error: 'Not found' });
+
+  if (folderId) {
+    const okFolder = db.prepare(`SELECT id FROM folders WHERE id = ? AND user_id = ?`).get(folderId, req.user_id);
+    if (!okFolder) return res.status(400).json({ error: 'Invalid folder' });
+  }
 
   const displayTitle = hasDisplayKey
     ? (bodyIn.display_title ?? '').toString().trim()
@@ -2030,9 +2571,10 @@ app.patch('/api/notes/:id', (req, res) => {
   if (folderId) parts.push(`folder_id = @folder_id`);
   if (hasFavorite) parts.push(`is_favorite = @is_favorite`);
   if (hasSttKey) parts.push(`stt_provider = @stt_provider`);
-  const sql = `UPDATE notes SET ${parts.join(', ')} WHERE id = @id`;
+  const sql = `UPDATE notes SET ${parts.join(', ')} WHERE id = @id AND user_id = @user_id`;
   const runParams = {
     id,
+    user_id: req.user_id,
     title: ftsTitle,
     display_title: displayTitle,
     body,
@@ -2044,16 +2586,18 @@ app.patch('/api/notes/:id', (req, res) => {
     updated_at: updatedAt
   };
   if (hasSttKey) runParams.stt_provider = normalizeSttProvider(bodyIn.stt_provider);
-  db.prepare(sql).run(runParams);
+  const run = db.prepare(sql).run(runParams);
+  if (!run.changes) return res.status(404).json({ error: 'Not found' });
 
   res.json({ ok: true, id });
 });
 
 /** Permanently removes note + dependent rows + on-disk audio file. Returns true if a row was deleted. */
-function deleteNoteCascade(noteId) {
+function deleteNoteCascade(noteId, userId) {
   const nid = (noteId ?? '').toString().trim();
-  if (!nid) return false;
-  const row = db.prepare(`SELECT audio_filename FROM notes WHERE id = ?`).get(nid);
+  const uid = (userId ?? '').toString().trim();
+  if (!nid || !uid) return false;
+  const row = db.prepare(`SELECT audio_filename FROM notes WHERE id = ? AND user_id = ?`).get(nid, uid);
   if (!row) return false;
 
   const deleteTxn = db.transaction(() => {
@@ -2064,7 +2608,7 @@ function deleteNoteCascade(noteId) {
     db.prepare(`DELETE FROM note_segments WHERE note_id = ?`).run(nid);
     db.prepare(`DELETE FROM note_chunks WHERE note_id = ?`).run(nid);
     db.prepare(`DELETE FROM note_tags WHERE note_id = ?`).run(nid);
-    db.prepare(`DELETE FROM notes WHERE id = ?`).run(nid);
+    db.prepare(`DELETE FROM notes WHERE id = ? AND user_id = ?`).run(nid, uid);
   });
   deleteTxn();
 
@@ -2082,7 +2626,7 @@ app.delete('/api/notes/:id', (req, res) => {
   const nid = (id ?? '').toString().trim();
   if (!nid) return res.status(400).json({ error: 'Missing id' });
 
-  if (!deleteNoteCascade(nid)) return res.status(404).json({ error: 'Not found' });
+  if (!deleteNoteCascade(nid, req.user_id)) return res.status(404).json({ error: 'Not found' });
 
   res.json({ ok: true, id: nid });
 });
@@ -2090,8 +2634,8 @@ app.delete('/api/notes/:id', (req, res) => {
 app.get('/api/notes/:id/audio', (req, res) => {
   const { id } = req.params;
   const row = db
-    .prepare(`SELECT audio_filename, audio_blob_id, audio_mime, audio_blob FROM notes WHERE id = ?`)
-    .get(id);
+    .prepare(`SELECT audio_filename, audio_blob_id, audio_mime, audio_blob FROM notes WHERE id = ? AND user_id = ?`)
+    .get(id, req.user_id);
   if (!row) return res.status(404).end();
 
   // Prefer durable blob-store URL (enables clean media URLs + streaming).
@@ -2105,8 +2649,9 @@ app.get('/api/notes/:id/audio', (req, res) => {
         const blobPath = path.join(blobsDir, blobId);
         if (!fs.existsSync(blobPath)) fs.writeFileSync(blobPath, blob);
         try {
-          db.prepare(`UPDATE notes SET audio_blob_id = @audio_blob_id WHERE id = @id`).run({
+          db.prepare(`UPDATE notes SET audio_blob_id = @audio_blob_id WHERE id = @id AND user_id = @user_id`).run({
             id,
+            user_id: req.user_id,
             audio_blob_id: blobId
           });
         } catch {
@@ -2167,11 +2712,16 @@ app.get('/api/blobs/:id', (req, res) => {
   const p = path.join(blobsDir, blobId);
   if (!fs.existsSync(p)) return res.status(404).end();
 
+  const allowed = db
+    .prepare(`SELECT 1 AS ok FROM notes WHERE audio_blob_id = ? AND user_id = ? LIMIT 1`)
+    .get(blobId, req.user_id);
+  if (!allowed) return res.status(404).end();
+
   // Content-Type: best-effort from notes table (fallback octet-stream).
   // If multiple notes reference a blob, pick any matching mime.
   const mimeRow = db
-    .prepare(`SELECT audio_mime FROM notes WHERE audio_blob_id = ? AND audio_mime != '' LIMIT 1`)
-    .get(blobId);
+    .prepare(`SELECT audio_mime FROM notes WHERE audio_blob_id = ? AND user_id = ? AND audio_mime != '' LIMIT 1`)
+    .get(blobId, req.user_id);
   const contentType = (mimeRow?.audio_mime ?? 'application/octet-stream').toString() || 'application/octet-stream';
 
   res.setHeader('Content-Type', contentType);
@@ -2197,9 +2747,9 @@ app.post('/api/notes/:id/retry', (req, res) => {
   const row = db
     .prepare(
       `SELECT id, audio_filename, audio_mime, audio_blob, audio_blob_id, language, stt_provider
-       FROM notes WHERE id = ?`
+       FROM notes WHERE id = ? AND user_id = ?`
     )
-    .get(id);
+    .get(id, req.user_id);
   if (!row) return res.status(404).json({ error: 'Not found' });
 
   // Ensure we have a durable audio_blob_id for ingestion jobs (they read from blobsDir).
@@ -2222,8 +2772,9 @@ app.post('/api/notes/:id/retry', (req, res) => {
       return res.status(500).json({ error: 'Failed to persist audio blob', details: e?.message ?? String(e) });
     }
     try {
-      db.prepare(`UPDATE notes SET audio_blob_id = @audio_blob_id WHERE id = @id`).run({
+      db.prepare(`UPDATE notes SET audio_blob_id = @audio_blob_id WHERE id = @id AND user_id = @user_id`).run({
         id,
+        user_id: req.user_id,
         audio_blob_id: blobId
       });
     } catch {
@@ -2238,23 +2789,30 @@ app.post('/api/notes/:id/retry', (req, res) => {
          transcribe_mode = @transcribe_mode,
          error = @error,
          updated_at = @updated_at
-     WHERE id = @id`
-  ).run({ id, status: 'processing', transcribe_mode: 'retranscribe', error: '', updated_at: now });
+     WHERE id = @id AND user_id = @user_id`
+  ).run({
+    id,
+    user_id: req.user_id,
+    status: 'processing',
+    transcribe_mode: 'retranscribe',
+    error: '',
+    updated_at: now
+  });
 
   // Resume any paused pipeline for this note and clear stop flags so queued workers can run; timer uses fresh updated_at.
   try {
     db.prepare(
-      `INSERT INTO note_processing_state (note_id, paused, cancel_requested, updated_at)
-       VALUES (@note_id, 0, 0, @updated_at)
-       ON CONFLICT(note_id) DO UPDATE SET paused = 0, cancel_requested = 0, updated_at = excluded.updated_at`
-    ).run({ note_id: id, updated_at: now });
+      `INSERT INTO note_processing_state (note_id, user_id, paused, cancel_requested, updated_at)
+       VALUES (@note_id, @user_id, 0, 0, @updated_at)
+       ON CONFLICT(note_id) DO UPDATE SET user_id = excluded.user_id, paused = 0, cancel_requested = 0, updated_at = excluded.updated_at`
+    ).run({ note_id: id, user_id: req.user_id, updated_at: now });
   } catch {
     // ignore if columns mismatch old DB
   }
 
   // Durable jobs so they show up in Processes panel and can be retried/cancelled.
-  enqueueJob(db, { job_type: 'transcribe_note', note_id: id, priority: 1 });
-  enqueueJob(db, { job_type: 'backfill_words', note_id: id, priority: 0 });
+  enqueueJob(db, { job_type: 'transcribe_note', note_id: id, user_id: req.user_id, priority: 1 });
+  enqueueJob(db, { job_type: 'backfill_words', note_id: id, user_id: req.user_id, priority: 0 });
 
   res.json({ ok: true, id, status: 'processing' });
 });
@@ -2831,6 +3389,8 @@ async function finalizeNoteFromSttOutput(
 
   const mode = (transcribe_mode ?? '').toString().trim();
 
+  const uid = (row?.user_id ?? '').toString().trim();
+  if (!uid) return false;
   const r = db
     .prepare(
       `UPDATE notes
@@ -2843,10 +3403,11 @@ async function finalizeNoteFromSttOutput(
            error = '',
            transcribe_mode = @transcribe_mode,
            updated_at = @updated_at
-       WHERE id = @id AND status = 'processing'`
+       WHERE id = @id AND status = 'processing' AND user_id = @user_id`
     )
     .run({
       id: noteId,
+      user_id: uid,
       title: ftsTitle,
       display_title: finalDisplayTitle,
       body: transcript || '',
@@ -2958,17 +3519,18 @@ function sha256Hex(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
-function enqueueJob(db, { job_type, note_id, max_attempts = 3, priority = 0 } = {}) {
+function enqueueJob(db, { job_type, note_id, user_id = '', max_attempts = 3, priority = 0 } = {}) {
   try {
     const id = nanoid(12);
     const now = new Date().toISOString();
     db.prepare(
-      `INSERT INTO ingestion_jobs (id, job_type, note_id, status, attempts, max_attempts, locked_at, available_at, priority, last_error, created_at, updated_at)
-       VALUES (@id, @job_type, @note_id, @status, @attempts, @max_attempts, @locked_at, @available_at, @priority, @last_error, @created_at, @updated_at)`
+      `INSERT INTO ingestion_jobs (id, job_type, note_id, user_id, status, attempts, max_attempts, locked_at, available_at, priority, last_error, created_at, updated_at)
+       VALUES (@id, @job_type, @note_id, @user_id, @status, @attempts, @max_attempts, @locked_at, @available_at, @priority, @last_error, @created_at, @updated_at)`
     ).run({
       id,
       job_type: (job_type ?? '').toString(),
       note_id: (note_id ?? '').toString(),
+      user_id: (user_id ?? '').toString(),
       status: 'queued',
       attempts: 0,
       max_attempts,
@@ -2983,6 +3545,7 @@ function enqueueJob(db, { job_type, note_id, max_attempts = 3, priority = 0 } = 
       appendJobEvent(db, {
         jobId: id,
         noteId: (note_id ?? '').toString(),
+        userId: (user_id ?? '').toString(),
         eventType: 'queued',
         message: `Job enqueued: ${(job_type ?? '').toString() || 'unknown'}`,
         meta: { priority: clampInt(priority, -5, 5, 0) }
@@ -2995,11 +3558,28 @@ function enqueueJob(db, { job_type, note_id, max_attempts = 3, priority = 0 } = 
   }
 }
 
-function appendJobEvent(db, { jobId, noteId = '', eventType, message = '', meta = null } = {}) {
+function appendJobEvent(db, { jobId, noteId = '', userId = '', eventType, message = '', meta = null } = {}) {
   const id = nanoid(12);
   const now = new Date().toISOString();
   const job_id = (jobId ?? '').toString().trim();
   const note_id = (noteId ?? '').toString().trim();
+  let user_id = (userId ?? '').toString().trim();
+  if (!user_id && note_id) {
+    try {
+      const r = db.prepare(`SELECT user_id FROM notes WHERE id = ?`).get(note_id);
+      user_id = (r?.user_id ?? '').toString().trim();
+    } catch {
+      user_id = '';
+    }
+  }
+  if (!user_id && job_id) {
+    try {
+      const r = db.prepare(`SELECT user_id FROM ingestion_jobs WHERE id = ?`).get(job_id);
+      user_id = (r?.user_id ?? '').toString().trim();
+    } catch {
+      user_id = '';
+    }
+  }
   const event_type = (eventType ?? '').toString().trim() || 'event';
   const msg = (message ?? '').toString().slice(0, 2000);
   let meta_json = '';
@@ -3013,12 +3593,13 @@ function appendJobEvent(db, { jobId, noteId = '', eventType, message = '', meta 
   if (!job_id) return;
   try {
     db.prepare(
-      `INSERT INTO job_events (id, job_id, note_id, event_type, message, meta_json, created_at)
-       VALUES (@id, @job_id, @note_id, @event_type, @message, @meta_json, @created_at)`
+      `INSERT INTO job_events (id, job_id, note_id, user_id, event_type, message, meta_json, created_at)
+       VALUES (@id, @job_id, @note_id, @user_id, @event_type, @message, @meta_json, @created_at)`
     ).run({
       id,
       job_id,
       note_id,
+      user_id,
       event_type,
       message: msg,
       meta_json,
@@ -3099,8 +3680,9 @@ async function processNextJob(db, { blobsDir }) {
   // Acquire one queued job.
   const job = db
     .prepare(
-      `SELECT j.id, j.job_type, j.note_id, j.attempts, j.max_attempts, j.available_at, j.priority
+      `SELECT j.id, j.job_type, j.note_id, j.attempts, j.max_attempts, j.available_at, j.priority, n.user_id AS note_user_id
        FROM ingestion_jobs j
+       JOIN notes n ON n.id = j.note_id
        LEFT JOIN note_processing_state nps ON nps.note_id = j.note_id
        WHERE j.status = 'queued'
          AND (j.available_at = '' OR j.available_at <= @now)
@@ -3193,52 +3775,94 @@ async function processNextJob(db, { blobsDir }) {
     // Only mark the note itself as error for primary transcription jobs.
     if (terminal && job.job_type === 'transcribe_note') {
       db.prepare(
-        `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id`
-      ).run({ id: job.note_id, error: msg, updated_at: new Date().toISOString() });
+        `UPDATE notes SET status = 'error', error = @error, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`
+      ).run({
+        id: job.note_id,
+        user_id: (job.note_user_id ?? '').toString(),
+        error: msg,
+        updated_at: new Date().toISOString()
+      });
     }
   }
 }
 
-function unlockStaleJobs(db, { force = false } = {}) {
+function unlockStaleJobs(db, { force = false, userId = '' } = {}) {
   const timeoutSec = clampInt(process.env.INGESTION_LOCK_TIMEOUT_SEC, 60, 24 * 60 * 60, 20 * 60);
   const cutoff = new Date(Date.now() - timeoutSec * 1000).toISOString();
   const now = new Date().toISOString();
+  const uid = (userId ?? '').toString().trim();
   try {
     let stale = [];
     try {
-      stale = db
-        .prepare(
-          `SELECT id, note_id, job_type, locked_at
-           FROM ingestion_jobs
-           WHERE status = 'running'
-             AND locked_at != ''
-             AND locked_at < @cutoff
-           LIMIT 200`
-        )
-        .all({ cutoff });
+      stale = uid
+        ? db
+            .prepare(
+              `SELECT j.id, j.note_id, j.job_type, j.locked_at
+               FROM ingestion_jobs j
+               JOIN notes n ON n.id = j.note_id
+               WHERE j.status = 'running'
+                 AND j.locked_at != ''
+                 AND j.locked_at < @cutoff
+                 AND n.user_id = @user_id
+               LIMIT 200`
+            )
+            .all({ cutoff, user_id: uid })
+        : db
+            .prepare(
+              `SELECT id, note_id, job_type, locked_at
+               FROM ingestion_jobs
+               WHERE status = 'running'
+                 AND locked_at != ''
+                 AND locked_at < @cutoff
+               LIMIT 200`
+            )
+            .all({ cutoff });
     } catch {
       stale = [];
     }
-    const r = db
-      .prepare(
-      `UPDATE ingestion_jobs
-       SET status = 'queued',
-           locked_at = '',
-           available_at = @now,
-           last_error = CASE
-             WHEN last_error = '' THEN @msg
-             ELSE substr(last_error || '\n' || @msg, 1, 2000)
-           END,
-           updated_at = @now
-       WHERE status = 'running'
-         AND locked_at != ''
-         AND locked_at < @cutoff`
-      )
-      .run({
-      now,
-      cutoff,
-      msg: `Unlocked stale running job (lock>${timeoutSec}s)`
-    });
+    const r = uid
+      ? db
+          .prepare(
+            `UPDATE ingestion_jobs
+             SET status = 'queued',
+                 locked_at = '',
+                 available_at = @now,
+                 last_error = CASE
+                   WHEN last_error = '' THEN @msg
+                   ELSE substr(last_error || '\n' || @msg, 1, 2000)
+                 END,
+                 updated_at = @now
+             WHERE status = 'running'
+               AND locked_at != ''
+               AND locked_at < @cutoff
+               AND note_id IN (SELECT id FROM notes WHERE user_id = @user_id)`
+          )
+          .run({
+            now,
+            cutoff,
+            user_id: uid,
+            msg: `Unlocked stale running job (lock>${timeoutSec}s)`
+          })
+      : db
+          .prepare(
+            `UPDATE ingestion_jobs
+             SET status = 'queued',
+                 locked_at = '',
+                 available_at = @now,
+                 last_error = CASE
+                   WHEN last_error = '' THEN @msg
+                   ELSE substr(last_error || '\n' || @msg, 1, 2000)
+                 END,
+                 updated_at = @now
+             WHERE status = 'running'
+               AND locked_at != ''
+               AND locked_at < @cutoff`
+          )
+          .run({
+            now,
+            cutoff,
+            msg: `Unlocked stale running job (lock>${timeoutSec}s)`
+          });
     const changes = Number(r?.changes ?? 0) || 0;
     if (changes > 0 && stale.length) {
       for (const s of stale) {
@@ -3291,7 +3915,7 @@ function getBackoffMaxSec(db) {
 async function runTranscribeJob(db, { noteId, blobsDir }) {
   const row = db
     .prepare(
-      `SELECT id, title, display_title, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider
+      `SELECT id, user_id, title, display_title, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider
        FROM notes
        WHERE id = ?`
     )
@@ -3356,7 +3980,7 @@ async function runTranscribeJob(db, { noteId, blobsDir }) {
 async function runBackfillWordsJob(db, { noteId, blobsDir }) {
   const row = db
     .prepare(
-      `SELECT id, audio_blob_id, audio_mime, language, stt_provider
+      `SELECT id, user_id, audio_blob_id, audio_mime, language, stt_provider
        FROM notes
        WHERE id = ?`
     )
@@ -3385,8 +4009,9 @@ async function runBackfillWordsJob(db, { noteId, blobsDir }) {
     const detectedLang = normalizeDetectedLanguage(out?.language);
     const storedLang = persistedNoteLanguage(hintLang, detectedLang);
     if (!hintLang && storedLang) {
-      db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id`).run({
+      db.prepare(`UPDATE notes SET language = @language, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`).run({
         id: noteId,
+        user_id: (row.user_id ?? '').toString(),
         language: storedLang,
         updated_at: new Date().toISOString()
       });

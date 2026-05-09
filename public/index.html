@@ -15,7 +15,28 @@
           <div class="brand">voiceVault</div>
           <div class="subtle">Record • Replay • Store • Search across all notes</div>
         </div>
-        <div class="status" id="status"></div>
+        <div class="topbarActions">
+          <div class="status" id="status"></div>
+          <div class="profileWrap" id="profileWrap" hidden>
+            <button
+              type="button"
+              class="profileAvatarBtn"
+              id="btnProfileMenu"
+              aria-label="Account menu"
+              aria-expanded="false"
+              aria-haspopup="true"
+            >
+              <span class="profileAvatarFallback" id="profileAvatarFallback" aria-hidden="true"></span>
+              <img id="profileAvatarImg" class="profileAvatarImg" alt="" width="40" height="40" hidden />
+            </button>
+            <div id="profileDropdown" class="profileDropdown" role="menu" hidden>
+              <button type="button" class="profileDropdownItem" id="menuOpenProfile" role="menuitem">Profile</button>
+              <button type="button" class="profileDropdownItem profileDropdownDanger" id="menuLogout" role="menuitem">
+                Log out
+              </button>
+            </div>
+          </div>
+        </div>
       </header>
 
       <main class="grid mainGrid--dock" id="mainGrid">
@@ -276,6 +297,75 @@
       </main>
     </div>
 
+    <div id="profileOverlay" class="overlay" hidden>
+      <div class="dialog profileDialog" style="max-width: 440px">
+        <div class="profileDialogHeader">
+          <div style="font-weight: 850; font-size: 17px">Profile</div>
+          <button id="btnProfileClose" class="btn vvIconBtn" type="button" aria-label="Close profile" title="Close">
+            <svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+        </div>
+        <div id="profileError" class="note err" style="margin: 10px 0 0; display: none"></div>
+        <div id="profileViewMode" class="profileBody">
+          <div class="profileHero">
+            <div class="profileHeroAvatar">
+              <span class="profileAvatarFallback profileAvatarFallback--large" id="profileModalFallback"></span>
+              <img id="profileModalImg" class="profileModalImg" alt="" width="96" height="96" hidden />
+            </div>
+            <div class="profileHeroText">
+              <div id="profileViewName" class="profileViewName">—</div>
+              <div id="profileViewEmail" class="profileViewEmail subtle">—</div>
+              <div class="profilePwdHint subtle">Password: <span id="profilePwdMasked">••••••••</span></div>
+            </div>
+          </div>
+          <div class="row" style="justify-content: flex-end; gap: 10px; margin-top: 14px">
+            <button type="button" class="btn primary" id="btnProfileEdit">Edit</button>
+          </div>
+        </div>
+        <div id="profileEditMode" class="profileBody" hidden>
+          <div class="profileEditHero">
+            <div class="profileHeroAvatar">
+              <span class="profileAvatarFallback profileAvatarFallback--large" id="profileEditFallback"></span>
+              <img id="profileEditImg" class="profileModalImg" alt="" width="96" height="96" hidden />
+            </div>
+            <input
+              id="profileEditAvatar"
+              class="profileEditAvatarInput"
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              tabindex="-1"
+              aria-hidden="true"
+            />
+            <button type="button" class="btn" id="btnProfileEditPhoto" aria-label="Choose profile photo">
+              Edit photo
+            </button>
+          </div>
+          <label class="label" style="margin: 0">
+            Display name
+            <input id="profileEditName" class="input" type="text" autocomplete="nickname" />
+          </label>
+          <label class="label" style="margin: 0">
+            Email
+            <input id="profileEditEmail" class="input" type="email" autocomplete="email" />
+          </label>
+          <label class="label" style="margin: 0">
+            New password <span class="subtle">(optional)</span>
+            <input id="profileEditNewPass" class="input" type="password" autocomplete="new-password" />
+          </label>
+          <label class="label" style="margin: 0">
+            Current password <span class="subtle">(required to change email or password)</span>
+            <input id="profileEditCurPass" class="input" type="password" autocomplete="current-password" />
+          </label>
+          <div class="row" style="justify-content: flex-end; gap: 10px; margin-top: 14px; flex-wrap: wrap">
+            <button type="button" class="btn" id="btnProfileCancel">Cancel</button>
+            <button type="button" class="btn primary" id="btnProfileSave">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="jobDetailsOverlay" class="overlay" hidden>
       <div class="dialog">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
@@ -287,6 +377,46 @@
         <pre id="jobDetailsPre" class="preBox"></pre>
         <div style="display:flex; gap:10px; justify-content:flex-end">
           <button id="btnJobDetailsCopy" class="btn" type="button">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="authOverlay" class="overlay" hidden>
+      <div class="dialog" style="max-width: 520px">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px">
+          <div>
+            <div style="font-weight: 850; font-size: 16px">Sign in</div>
+            <div class="subtle" style="margin-top: 6px; max-width: 52ch">
+              voiceVault stores notes locally per profile. Create an account on this machine or log back in.
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 14px; display: grid; gap: 10px">
+          <label class="label" style="margin: 0">
+            Email
+            <input id="authEmail" class="input" type="email" autocomplete="username" />
+          </label>
+          <label class="label" style="margin: 0">
+            Password
+            <input id="authPassword" class="input" type="password" autocomplete="current-password" />
+          </label>
+          <label class="label" style="margin: 0">
+            Display name (register only)
+            <input id="authDisplayName" class="input" type="text" autocomplete="nickname" />
+          </label>
+
+          <div id="authError" class="note err" style="margin: 0; display: none"></div>
+
+          <div class="row" style="justify-content: flex-end; gap: 10px; flex-wrap: wrap">
+            <button id="btnAuthLogin" class="btn primary" type="button">Log in</button>
+            <button id="btnAuthRegister" class="btn" type="button">Create account</button>
+          </div>
+
+          <div class="subtle" style="font-size: 12px">
+            Sessions use signed cookies. Set <code>VOICEVAULT_SESSION_SECRET</code> on the server for stable logins across
+            restarts.
+          </div>
         </div>
       </div>
     </div>

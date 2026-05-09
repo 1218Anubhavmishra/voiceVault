@@ -130,6 +130,11 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
   const f = filters && typeof filters === 'object' ? filters : {};
   const where = [`n.status = 'ready'`];
   const args = [];
+  const userId = (f.user_id ?? '').toString().trim();
+  if (userId) {
+    where.push(`n.user_id = ?`);
+    args.push(userId);
+  }
   if (hasTime) {
     where.push(`n.created_at >= ? AND n.created_at <= ?`);
     args.push(fromIso, toIso);
@@ -204,8 +209,8 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
 
   // If this is a fresh DB migration, note_segments may be empty for older notes.
   // Backfill segments from notes.segments_json (best-effort, lightweight).
-  if (rows.length === 0) {
-    backfillNoteChunksFromNotes(db, { fromIso, toIso, limitNotes: 500 });
+  if (rows.length === 0 && userId) {
+    backfillNoteChunksFromNotes(db, { userId, fromIso, toIso, limitNotes: 500 });
     rows = db
       .prepare(
         `SELECT nc.note_id, nc.chunk_idx AS seg_idx, nc.start_sec, nc.end_sec, nc.text, nc.embedding,
@@ -393,7 +398,8 @@ function clampInt(value, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
-function backfillNoteSegmentsFromNotes(db, { fromIso = null, toIso = null, limitNotes = 500 } = {}) {
+function backfillNoteSegmentsFromNotes(db, { userId = '', fromIso = null, toIso = null, limitNotes = 500 } = {}) {
+  const uid = (userId ?? '').toString().trim();
   const hasTime = !!(fromIso && toIso);
   const notes = db
     .prepare(
@@ -401,11 +407,12 @@ function backfillNoteSegmentsFromNotes(db, { fromIso = null, toIso = null, limit
        FROM notes
        WHERE status = 'ready'
          AND trim(segments_json) != ''
+         ${uid ? 'AND user_id = ?' : ''}
          ${hasTime ? 'AND created_at >= ? AND created_at <= ?' : ''}
        ORDER BY created_at DESC
        LIMIT ?`
     )
-    .all(...(hasTime ? [fromIso, toIso, limitNotes] : [limitNotes]));
+    .all(...(uid && hasTime ? [uid, fromIso, toIso, limitNotes] : uid ? [uid, limitNotes] : hasTime ? [fromIso, toIso, limitNotes] : [limitNotes]));
 
   const del = db.prepare(`DELETE FROM note_segments WHERE note_id = ?`);
   const ins = db.prepare(
@@ -442,7 +449,8 @@ function backfillNoteSegmentsFromNotes(db, { fromIso = null, toIso = null, limit
   tx();
 }
 
-function backfillNoteChunksFromNotes(db, { fromIso = null, toIso = null, limitNotes = 500 } = {}) {
+function backfillNoteChunksFromNotes(db, { userId = '', fromIso = null, toIso = null, limitNotes = 500 } = {}) {
+  const uid = (userId ?? '').toString().trim();
   const hasTime = !!(fromIso && toIso);
   const notes = db
     .prepare(
@@ -450,11 +458,12 @@ function backfillNoteChunksFromNotes(db, { fromIso = null, toIso = null, limitNo
        FROM notes
        WHERE status = 'ready'
          AND trim(segments_json) != ''
+         ${uid ? 'AND user_id = ?' : ''}
          ${hasTime ? 'AND created_at >= ? AND created_at <= ?' : ''}
        ORDER BY created_at DESC
        LIMIT ?`
     )
-    .all(...(hasTime ? [fromIso, toIso, limitNotes] : [limitNotes]));
+    .all(...(uid && hasTime ? [uid, fromIso, toIso, limitNotes] : uid ? [uid, limitNotes] : hasTime ? [fromIso, toIso, limitNotes] : [limitNotes]));
 
   const del = db.prepare(`DELETE FROM note_chunks WHERE note_id = ?`);
   const ins = db.prepare(

@@ -35,8 +35,20 @@ export function openDb() {
 
 function migrate(db) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      avatar_blob_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT '',
       title TEXT NOT NULL,
       display_title TEXT NOT NULL DEFAULT '',
       body TEXT NOT NULL,
@@ -117,6 +129,7 @@ function migrate(db) {
       id TEXT PRIMARY KEY,
       job_type TEXT NOT NULL, -- transcribe_note, embed_note
       note_id TEXT NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'queued', -- queued, running, done, error
       attempts INTEGER NOT NULL DEFAULT 0,
       max_attempts INTEGER NOT NULL DEFAULT 3,
@@ -139,19 +152,19 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS folders (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_name ON folders(name);
 
     CREATE TABLE IF NOT EXISTS tags (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
     CREATE TABLE IF NOT EXISTS note_tags (
       note_id TEXT NOT NULL,
@@ -164,6 +177,7 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS saved_searches (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
       query TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -172,6 +186,7 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS note_processing_state (
       note_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT '',
       paused INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
@@ -180,6 +195,7 @@ function migrate(db) {
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL,
       note_id TEXT NOT NULL DEFAULT '',
+      user_id TEXT NOT NULL DEFAULT '',
       event_type TEXT NOT NULL,
       message TEXT NOT NULL DEFAULT '',
       meta_json TEXT NOT NULL DEFAULT '',
@@ -187,6 +203,24 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_job_events_job_id_created_at ON job_events(job_id, created_at);
   `);
+
+  try {
+    const userCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(users)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!userCols.has('avatar_blob_id')) {
+      try {
+        db.exec(`ALTER TABLE users ADD COLUMN avatar_blob_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
 
   // Lightweight migrations for existing local DBs.
   // (SQLite doesn't support IF NOT EXISTS on ADD COLUMN reliably across tooling.)
@@ -196,6 +230,24 @@ function migrate(db) {
       .all()
       .map((r) => (r?.name ?? '').toString())
   );
+
+  // --- multi-user (local profiles) ---
+  if (!cols.has('user_id')) {
+    try {
+      db.exec(`ALTER TABLE notes ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      cols.add('user_id');
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_user_created_at ON notes(user_id, created_at)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_user_folder_id ON notes(user_id, folder_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_user_favorite ON notes(user_id, is_favorite)`);
+  } catch {
+    // ignore
+  }
 
   if (!cols.has('updated_at')) {
     db.exec(
@@ -295,6 +347,26 @@ function migrate(db) {
       // ignore
     }
   }
+  if (!jobCols.has('user_id')) {
+    try {
+      db.exec(`ALTER TABLE ingestion_jobs ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      jobCols.add('user_id');
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    db.prepare(
+      `UPDATE ingestion_jobs
+       SET user_id = (
+         SELECT n.user_id FROM notes n WHERE n.id = ingestion_jobs.note_id LIMIT 1
+       )
+       WHERE trim(user_id) = ''`
+    ).run();
+  } catch {
+    // ignore
+  }
 
   try {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_ready ON ingestion_jobs(status, available_at, created_at)`);
@@ -310,7 +382,9 @@ function migrate(db) {
   try {
     db.exec(`CREATE TABLE IF NOT EXISTS note_processing_state (
       note_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT '',
       paused INTEGER NOT NULL DEFAULT 0,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )`);
   } catch {
@@ -324,8 +398,119 @@ function migrate(db) {
         .all()
         .map((r) => (r?.name ?? '').toString())
     );
+    if (!npsCols.has('user_id')) {
+      try {
+        db.exec(`ALTER TABLE note_processing_state ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
+    }
     if (!npsCols.has('cancel_requested')) {
       db.exec(`ALTER TABLE note_processing_state ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0`);
+    }
+  } catch {
+    // ignore
+  }
+
+  // saved_searches migrations
+  try {
+    const ssCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(saved_searches)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!ssCols.has('user_id')) {
+      try {
+        db.exec(`ALTER TABLE saved_searches ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // folders/tags migrations
+  try {
+    const fCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(folders)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!fCols.has('user_id')) {
+      try {
+        db.exec(`ALTER TABLE folders ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_user_name ON folders(user_id, name)`);
+    } catch {
+      // ignore
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const tCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(tags)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!tCols.has('user_id')) {
+      try {
+        db.exec(`ALTER TABLE tags ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_user_name ON tags(user_id, name)`);
+    } catch {
+      // ignore
+    }
+  } catch {
+    // ignore
+  }
+
+  // note_drafts migrations
+  try {
+    const ndCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(note_drafts)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!ndCols.has('user_id')) {
+      try {
+        db.exec(`ALTER TABLE note_drafts ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // job_events migrations
+  try {
+    const jeCols = new Set(
+      db
+        .prepare(`PRAGMA table_info(job_events)`)
+        .all()
+        .map((r) => (r?.name ?? '').toString())
+    );
+    if (!jeCols.has('user_id')) {
+      try {
+        db.exec(`ALTER TABLE job_events ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        // ignore
+      }
     }
   } catch {
     // ignore
@@ -336,6 +521,7 @@ function migrate(db) {
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL,
       note_id TEXT NOT NULL DEFAULT '',
+      user_id TEXT NOT NULL DEFAULT '',
       event_type TEXT NOT NULL,
       message TEXT NOT NULL DEFAULT '',
       meta_json TEXT NOT NULL DEFAULT '',
@@ -360,5 +546,6 @@ function migrate(db) {
   } catch {
     // ignore
   }
+
 }
 

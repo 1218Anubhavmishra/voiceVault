@@ -173,14 +173,185 @@ input[type='file'] {
 
 .topbar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 18px 18px;
   border: 1px solid var(--border);
   border-radius: 18px;
   background: linear-gradient(180deg, var(--card2), var(--card));
   box-shadow: var(--shadow);
+}
+
+.topbarActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.profileWrap {
+  position: relative;
+}
+
+.profileAvatarBtn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.profileAvatarBtn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.profileAvatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.profileAvatarFallback {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text);
+  text-transform: uppercase;
+}
+
+.profileAvatarFallback--large {
+  width: 96px;
+  height: 96px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.1);
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+}
+
+.profileDropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 200px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  z-index: 60;
+}
+
+.profileDropdownItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.profileDropdownItem:hover {
+  background: rgba(124, 58, 237, 0.1);
+}
+
+.profileDropdownDanger {
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.profileDialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.profileBody {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.profileHero {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.profileEditHero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.profileEditHero .profileHeroAvatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+}
+
+.profileEditAvatarInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.profileModalImg {
+  width: 96px;
+  height: 96px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 2px solid var(--border);
+}
+
+.profileViewName {
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.profileViewEmail {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.resultsEmptySaved {
+  min-height: 200px;
+  border-radius: 16px;
+  background: #0a0a0a;
+  color: rgba(255, 255, 255, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 20px;
+  font-size: 14px;
+  font-weight: 650;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .brand {
