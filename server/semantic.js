@@ -4,14 +4,13 @@ import { crossEncoderRerank } from './rerank.js';
 export async function ensureNoteSegments(db, noteId, segments, { embedModel = DEFAULT_EMBED_MODEL } = {}) {
   if (!noteId || !Array.isArray(segments)) return;
   const now = new Date().toISOString();
-  const del = db.prepare(`DELETE FROM note_segments WHERE note_id = ?`);
-  const ins = db.prepare(
-    `INSERT INTO note_segments (note_id, seg_idx, start_sec, end_sec, text, words_json, embedding, embed_model, created_at, updated_at)
-     VALUES (@note_id, @seg_idx, @start_sec, @end_sec, @text, @words_json, @embedding, @embed_model, @created_at, @updated_at)`
-  );
 
-  const tx = db.transaction(() => {
-    del.run(noteId);
+  await db.tx(async (txDb) => {
+    await txDb.prepare(`DELETE FROM note_segments WHERE note_id = ?`).run(noteId);
+    const ins = txDb.prepare(
+      `INSERT INTO note_segments (note_id, seg_idx, start_sec, end_sec, text, words_json, embedding, embed_model, created_at, updated_at)
+       VALUES (@note_id, @seg_idx, @start_sec, @end_sec, @text, @words_json, @embedding, @embed_model, @created_at, @updated_at)`
+    );
     for (let i = 0; i < segments.length; i += 1) {
       const s = segments[i];
       const start = Number(s?.start);
@@ -19,7 +18,7 @@ export async function ensureNoteSegments(db, noteId, segments, { embedModel = DE
       const text = (s?.text ?? '').toString().trim();
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) continue;
       const wordsJson = safeStringifyWords(s?.words);
-      ins.run({
+      await ins.run({
         note_id: noteId,
         seg_idx: i,
         start_sec: start,
@@ -33,7 +32,6 @@ export async function ensureNoteSegments(db, noteId, segments, { embedModel = DE
       });
     }
   });
-  tx();
 }
 
 export function buildChunksFromSegments(segments, { maxChars = 900, maxSegs = 6 } = {}) {
@@ -88,17 +86,16 @@ export function buildChunksFromSegments(segments, { maxChars = 900, maxSegs = 6 
 export async function ensureNoteChunks(db, noteId, segments, { embedModel = DEFAULT_EMBED_MODEL } = {}) {
   const chunks = buildChunksFromSegments(segments);
   const now = new Date().toISOString();
-  const del = db.prepare(`DELETE FROM note_chunks WHERE note_id = ?`);
-  const ins = db.prepare(
-    `INSERT INTO note_chunks (note_id, chunk_idx, start_sec, end_sec, text, seg_start_idx, seg_end_idx, embedding, embed_model, created_at, updated_at)
-     VALUES (@note_id, @chunk_idx, @start_sec, @end_sec, @text, @seg_start_idx, @seg_end_idx, NULL, @embed_model, @created_at, @updated_at)`
-  );
 
-  const tx = db.transaction(() => {
-    del.run(noteId);
+  await db.tx(async (txDb) => {
+    await txDb.prepare(`DELETE FROM note_chunks WHERE note_id = ?`).run(noteId);
+    const ins = txDb.prepare(
+      `INSERT INTO note_chunks (note_id, chunk_idx, start_sec, end_sec, text, seg_start_idx, seg_end_idx, embedding, embed_model, created_at, updated_at)
+       VALUES (@note_id, @chunk_idx, @start_sec, @end_sec, @text, @seg_start_idx, @seg_end_idx, NULL, @embed_model, @created_at, @updated_at)`
+    );
     for (let i = 0; i < chunks.length; i += 1) {
       const c = chunks[i];
-      ins.run({
+      await ins.run({
         note_id: noteId,
         chunk_idx: i,
         start_sec: c.start,
@@ -112,7 +109,6 @@ export async function ensureNoteChunks(db, noteId, segments, { embedModel = DEFA
       });
     }
   });
-  tx();
   return chunks.length;
 }
 
@@ -178,8 +174,9 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
     args.push(tag);
   }
   if (title) {
-    const like = `%${title.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
-    where.push(`(n.display_title LIKE ? ESCAPE '\\' OR n.title LIKE ? ESCAPE '\\')`);
+    // Postgres LIKE with default escape works the same; we don't need ESCAPE '\\'.
+    const like = `%${title.replaceAll('%', '').replaceAll('_', '')}%`;
+    where.push(`(n.display_title ILIKE ? OR n.title ILIKE ?)`);
     args.push(like, like);
   }
   if (dmin !== null) {
@@ -195,7 +192,7 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  let rows = db
+  let rows = await db
     .prepare(
       `SELECT nc.note_id, nc.chunk_idx AS seg_idx, nc.start_sec, nc.end_sec, nc.text, nc.embedding,
               n.title, n.display_title, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language
@@ -210,8 +207,8 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
   // If this is a fresh DB migration, note_segments may be empty for older notes.
   // Backfill segments from notes.segments_json (best-effort, lightweight).
   if (rows.length === 0 && userId) {
-    backfillNoteChunksFromNotes(db, { userId, fromIso, toIso, limitNotes: 500 });
-    rows = db
+    await backfillNoteChunksFromNotes(db, { userId, fromIso, toIso, limitNotes: 500 });
+    rows = await db
       .prepare(
         `SELECT nc.note_id, nc.chunk_idx AS seg_idx, nc.start_sec, nc.end_sec, nc.text, nc.embedding,
                 n.title, n.display_title, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.language
@@ -237,20 +234,20 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
 
   if (toEmbed.length) {
     const vecs = await embedTexts(toEmbed, { model: DEFAULT_EMBED_MODEL });
-    const upd = db.prepare(
-      `UPDATE note_chunks
-       SET embedding = @embedding, embed_model = @embed_model, updated_at = @updated_at
-       WHERE note_id = @note_id AND chunk_idx = @seg_idx`
-    );
     const now = new Date().toISOString();
-    const tx = db.transaction(() => {
+    await db.tx(async (txDb) => {
+      const upd = txDb.prepare(
+        `UPDATE note_chunks
+         SET embedding = @embedding, embed_model = @embed_model, updated_at = @updated_at
+         WHERE note_id = @note_id AND chunk_idx = @seg_idx`
+      );
       for (let j = 0; j < vecs.length; j += 1) {
         const i = toEmbedIdx[j];
         const r = rows[i];
         const v = vecs[j];
         const buf = float32ToBuffer(v);
         rows[i].embedding = buf;
-        upd.run({
+        await upd.run({
           note_id: r.note_id,
           seg_idx: r.seg_idx,
           embedding: buf,
@@ -259,7 +256,6 @@ export async function semanticSearch(db, { query, fromIso = null, toIso = null, 
         });
       }
     });
-    tx();
   }
 
   const scored = [];
@@ -398,10 +394,10 @@ function clampInt(value, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
-function backfillNoteSegmentsFromNotes(db, { userId = '', fromIso = null, toIso = null, limitNotes = 500 } = {}) {
+async function backfillNoteSegmentsFromNotes(db, { userId = '', fromIso = null, toIso = null, limitNotes = 500 } = {}) {
   const uid = (userId ?? '').toString().trim();
   const hasTime = !!(fromIso && toIso);
-  const notes = db
+  const notes = await db
     .prepare(
       `SELECT id, segments_json
        FROM notes
@@ -414,45 +410,51 @@ function backfillNoteSegmentsFromNotes(db, { userId = '', fromIso = null, toIso 
     )
     .all(...(uid && hasTime ? [uid, fromIso, toIso, limitNotes] : uid ? [uid, limitNotes] : hasTime ? [fromIso, toIso, limitNotes] : [limitNotes]));
 
-  const del = db.prepare(`DELETE FROM note_segments WHERE note_id = ?`);
-  const ins = db.prepare(
-    `INSERT OR REPLACE INTO note_segments (note_id, seg_idx, start_sec, end_sec, text, embedding, embed_model, updated_at)
-     VALUES (@note_id, @seg_idx, @start_sec, @end_sec, @text, NULL, @embed_model, @updated_at)`
-  );
   const now = new Date().toISOString();
 
-  const tx = db.transaction(() => {
+  await db.tx(async (txDb) => {
+    const ins = txDb.prepare(
+      `INSERT INTO note_segments (note_id, seg_idx, start_sec, end_sec, text, embedding, embed_model, created_at, updated_at)
+       VALUES (@note_id, @seg_idx, @start_sec, @end_sec, @text, NULL, @embed_model, @created_at, @updated_at)
+       ON CONFLICT (note_id, seg_idx) DO UPDATE SET
+         start_sec = EXCLUDED.start_sec,
+         end_sec = EXCLUDED.end_sec,
+         text = EXCLUDED.text,
+         embed_model = EXCLUDED.embed_model,
+         updated_at = EXCLUDED.updated_at`
+    );
+
     for (const n of notes) {
       const noteId = (n?.id ?? '').toString();
       if (!noteId) continue;
       const segments = safeParseSegments(n?.segments_json);
       if (!segments.length) continue;
-      del.run(noteId);
+      await txDb.prepare(`DELETE FROM note_segments WHERE note_id = ?`).run(noteId);
       for (let i = 0; i < segments.length; i += 1) {
         const s = segments[i];
         const start = Number(s?.start);
         const end = Number(s?.end);
         const text = (s?.text ?? '').toString().trim();
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) continue;
-        ins.run({
+        await ins.run({
           note_id: noteId,
           seg_idx: i,
           start_sec: start,
           end_sec: end,
           text,
           embed_model: DEFAULT_EMBED_MODEL,
+          created_at: now,
           updated_at: now
         });
       }
     }
   });
-  tx();
 }
 
-function backfillNoteChunksFromNotes(db, { userId = '', fromIso = null, toIso = null, limitNotes = 500 } = {}) {
+async function backfillNoteChunksFromNotes(db, { userId = '', fromIso = null, toIso = null, limitNotes = 500 } = {}) {
   const uid = (userId ?? '').toString().trim();
   const hasTime = !!(fromIso && toIso);
-  const notes = db
+  const notes = await db
     .prepare(
       `SELECT id, segments_json
        FROM notes
@@ -465,14 +467,22 @@ function backfillNoteChunksFromNotes(db, { userId = '', fromIso = null, toIso = 
     )
     .all(...(uid && hasTime ? [uid, fromIso, toIso, limitNotes] : uid ? [uid, limitNotes] : hasTime ? [fromIso, toIso, limitNotes] : [limitNotes]));
 
-  const del = db.prepare(`DELETE FROM note_chunks WHERE note_id = ?`);
-  const ins = db.prepare(
-    `INSERT OR REPLACE INTO note_chunks (note_id, chunk_idx, start_sec, end_sec, text, seg_start_idx, seg_end_idx, embedding, embed_model, updated_at)
-     VALUES (@note_id, @chunk_idx, @start_sec, @end_sec, @text, @seg_start_idx, @seg_end_idx, NULL, @embed_model, @updated_at)`
-  );
   const now = new Date().toISOString();
 
-  const tx = db.transaction(() => {
+  await db.tx(async (txDb) => {
+    const ins = txDb.prepare(
+      `INSERT INTO note_chunks (note_id, chunk_idx, start_sec, end_sec, text, seg_start_idx, seg_end_idx, embedding, embed_model, created_at, updated_at)
+       VALUES (@note_id, @chunk_idx, @start_sec, @end_sec, @text, @seg_start_idx, @seg_end_idx, NULL, @embed_model, @created_at, @updated_at)
+       ON CONFLICT (note_id, chunk_idx) DO UPDATE SET
+         start_sec = EXCLUDED.start_sec,
+         end_sec = EXCLUDED.end_sec,
+         text = EXCLUDED.text,
+         seg_start_idx = EXCLUDED.seg_start_idx,
+         seg_end_idx = EXCLUDED.seg_end_idx,
+         embed_model = EXCLUDED.embed_model,
+         updated_at = EXCLUDED.updated_at`
+    );
+
     for (const n of notes) {
       const noteId = (n?.id ?? '').toString();
       if (!noteId) continue;
@@ -480,10 +490,10 @@ function backfillNoteChunksFromNotes(db, { userId = '', fromIso = null, toIso = 
       if (!segments.length) continue;
       const chunks = buildChunksFromSegments(segments);
       if (!chunks.length) continue;
-      del.run(noteId);
+      await txDb.prepare(`DELETE FROM note_chunks WHERE note_id = ?`).run(noteId);
       for (let i = 0; i < chunks.length; i += 1) {
         const c = chunks[i];
-        ins.run({
+        await ins.run({
           note_id: noteId,
           chunk_idx: i,
           start_sec: c.start,
@@ -492,12 +502,12 @@ function backfillNoteChunksFromNotes(db, { userId = '', fromIso = null, toIso = 
           seg_start_idx: c.segStartIdx,
           seg_end_idx: c.segEndIdx,
           embed_model: DEFAULT_EMBED_MODEL,
+          created_at: now,
           updated_at: now
         });
       }
     }
   });
-  tx();
 }
 
 function safeParseSegments(segmentsJson) {
@@ -528,4 +538,3 @@ function safeStringifyWords(words) {
     return '';
   }
 }
-

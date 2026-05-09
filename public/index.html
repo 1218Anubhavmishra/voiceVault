@@ -382,41 +382,176 @@
     </div>
 
     <div id="authOverlay" class="overlay" hidden>
-      <div class="dialog" style="max-width: 520px">
-        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px">
+      <div class="dialog authDialog" style="max-width: 520px">
+        <div class="authHeaderRow">
           <div>
-            <div style="font-weight: 850; font-size: 16px">Sign in</div>
-            <div class="subtle" style="margin-top: 6px; max-width: 52ch">
-              voiceVault stores notes locally per profile. Create an account on this machine or log back in.
+            <div class="authTitle" id="authTitle">Log in</div>
+            <div class="subtle authSubtitle" id="authSubtitle">
+              Welcome back. Sign in to your voiceVault account.
             </div>
           </div>
         </div>
 
-        <div style="margin-top: 14px; display: grid; gap: 10px">
-          <label class="label" style="margin: 0">
-            Email
-            <input id="authEmail" class="input" type="email" autocomplete="username" />
+        <div class="authTabs" role="tablist" aria-label="Sign in or create account">
+          <button
+            type="button"
+            role="tab"
+            id="authTabLogin"
+            class="authTab isActive"
+            aria-selected="true"
+            aria-controls="authPanelLogin"
+          >
+            Log in
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="authTabRegister"
+            class="authTab"
+            aria-selected="false"
+            aria-controls="authPanelRegister"
+          >
+            Sign up
+          </button>
+        </div>
+
+        <section
+          id="authPanelLogin"
+          class="authPanel"
+          role="tabpanel"
+          aria-labelledby="authTabLogin"
+        >
+          <label class="label authField" data-field="email">
+            <span class="authFieldLabel">Email</span>
+            <input
+              id="loginEmail"
+              class="input authInput"
+              type="email"
+              autocomplete="username"
+              placeholder="you@example.com"
+            />
+            <span class="fieldErrorText" id="loginEmailErr" hidden></span>
           </label>
-          <label class="label" style="margin: 0">
-            Password
-            <input id="authPassword" class="input" type="password" autocomplete="current-password" />
-          </label>
-          <label class="label" style="margin: 0">
-            Display name (register only)
-            <input id="authDisplayName" class="input" type="text" autocomplete="nickname" />
+          <label class="label authField" data-field="password">
+            <span class="authFieldLabel">Password</span>
+            <input
+              id="loginPassword"
+              class="input authInput"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Your password"
+            />
+            <span class="fieldErrorText" id="loginPasswordErr" hidden></span>
           </label>
 
-          <div id="authError" class="note err" style="margin: 0; display: none"></div>
+          <div id="loginFormError" class="note err authFormError" hidden></div>
 
-          <div class="row" style="justify-content: flex-end; gap: 10px; flex-wrap: wrap">
-            <button id="btnAuthLogin" class="btn primary" type="button">Log in</button>
-            <button id="btnAuthRegister" class="btn" type="button">Create account</button>
+          <div class="row authActionsRow">
+            <button id="btnAuthLogin" class="btn primary authPrimaryBtn" type="button">Log in</button>
           </div>
 
-          <div class="subtle" style="font-size: 12px">
-            Sessions use signed cookies. Set <code>VOICEVAULT_SESSION_SECRET</code> on the server for stable logins across
-            restarts.
+          <div class="subtle authSwitchHint">
+            Don't have an account?
+            <button type="button" class="authSwitchLink" id="authSwitchToRegister">Sign up</button>
           </div>
+        </section>
+
+        <section
+          id="authPanelRegister"
+          class="authPanel"
+          role="tabpanel"
+          aria-labelledby="authTabRegister"
+          hidden
+        >
+          <div class="authAvatarPickerRow">
+            <div class="authAvatarPreviewWrap">
+              <span class="authAvatarFallback" id="signupAvatarFallback" aria-hidden="true">+</span>
+              <img id="signupAvatarPreview" class="authAvatarPreview" alt="" width="84" height="84" hidden />
+              <button
+                type="button"
+                class="authAvatarRemoveBtn"
+                id="btnSignupAvatarRemove"
+                aria-label="Remove selected photo"
+                title="Remove photo"
+                hidden
+              >×</button>
+            </div>
+            <div class="authAvatarPickerText">
+              <button type="button" class="btn authAvatarChooseBtn" id="btnSignupAvatarChoose">
+                Add photo
+              </button>
+              <div class="subtle authAvatarHint">Optional. JPEG, PNG, GIF, or WebP — up to 4&nbsp;MB.</div>
+              <input
+                id="signupAvatarInput"
+                class="authAvatarHiddenInput"
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                tabindex="-1"
+                aria-hidden="true"
+              />
+            </div>
+          </div>
+
+          <label class="label authField" data-field="display_name">
+            <span class="authFieldLabel">Display name <span class="subtle">(optional)</span></span>
+            <input
+              id="signupDisplayName"
+              class="input authInput"
+              type="text"
+              autocomplete="nickname"
+              placeholder="What should we call you?"
+            />
+            <span class="fieldErrorText" id="signupDisplayNameErr" hidden></span>
+          </label>
+          <label class="label authField" data-field="email">
+            <span class="authFieldLabel">Email</span>
+            <input
+              id="signupEmail"
+              class="input authInput"
+              type="email"
+              autocomplete="email"
+              placeholder="you@example.com"
+            />
+            <span class="fieldErrorText" id="signupEmailErr" hidden></span>
+          </label>
+          <label class="label authField" data-field="password">
+            <span class="authFieldLabel">Password <span class="subtle">(min 6 characters)</span></span>
+            <input
+              id="signupPassword"
+              class="input authInput"
+              type="password"
+              autocomplete="new-password"
+              placeholder="Choose a password"
+            />
+            <span class="fieldErrorText" id="signupPasswordErr" hidden></span>
+          </label>
+          <label class="label authField" data-field="confirm">
+            <span class="authFieldLabel">Confirm password</span>
+            <input
+              id="signupConfirm"
+              class="input authInput"
+              type="password"
+              autocomplete="new-password"
+              placeholder="Re-enter password"
+            />
+            <span class="fieldErrorText" id="signupConfirmErr" hidden></span>
+          </label>
+
+          <div id="signupFormError" class="note err authFormError" hidden></div>
+
+          <div class="row authActionsRow">
+            <button id="btnAuthRegister" class="btn primary authPrimaryBtn" type="button">Create account</button>
+          </div>
+
+          <div class="subtle authSwitchHint">
+            Already have an account?
+            <button type="button" class="authSwitchLink" id="authSwitchToLogin">Log in</button>
+          </div>
+        </section>
+
+        <div class="subtle authFooterHint">
+          Sessions use signed cookies. Set <code>VOICEVAULT_SESSION_SECRET</code> on the server for stable logins across
+          restarts.
         </div>
       </div>
     </div>

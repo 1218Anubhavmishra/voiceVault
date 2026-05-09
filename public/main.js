@@ -122,12 +122,39 @@ const btnNewNoteToggleEl = document.getElementById('btnNewNoteToggle');
 const newNoteBodyEl = document.getElementById('newNoteBody');
 const mainGridEl = document.getElementById('mainGrid');
 const authOverlayEl = document.getElementById('authOverlay');
-const authEmailEl = document.getElementById('authEmail');
-const authPasswordEl = document.getElementById('authPassword');
-const authDisplayNameEl = document.getElementById('authDisplayName');
-const authErrorEl = document.getElementById('authError');
+const authTabLoginEl = document.getElementById('authTabLogin');
+const authTabRegisterEl = document.getElementById('authTabRegister');
+const authPanelLoginEl = document.getElementById('authPanelLogin');
+const authPanelRegisterEl = document.getElementById('authPanelRegister');
+const authTitleEl = document.getElementById('authTitle');
+const authSubtitleEl = document.getElementById('authSubtitle');
+const authSwitchToLoginEl = document.getElementById('authSwitchToLogin');
+const authSwitchToRegisterEl = document.getElementById('authSwitchToRegister');
+
+const loginEmailEl = document.getElementById('loginEmail');
+const loginPasswordEl = document.getElementById('loginPassword');
+const loginEmailErrEl = document.getElementById('loginEmailErr');
+const loginPasswordErrEl = document.getElementById('loginPasswordErr');
+const loginFormErrorEl = document.getElementById('loginFormError');
 const btnAuthLoginEl = document.getElementById('btnAuthLogin');
+
+const signupDisplayNameEl = document.getElementById('signupDisplayName');
+const signupEmailEl = document.getElementById('signupEmail');
+const signupPasswordEl = document.getElementById('signupPassword');
+const signupConfirmEl = document.getElementById('signupConfirm');
+const signupDisplayNameErrEl = document.getElementById('signupDisplayNameErr');
+const signupEmailErrEl = document.getElementById('signupEmailErr');
+const signupPasswordErrEl = document.getElementById('signupPasswordErr');
+const signupConfirmErrEl = document.getElementById('signupConfirmErr');
+const signupFormErrorEl = document.getElementById('signupFormError');
 const btnAuthRegisterEl = document.getElementById('btnAuthRegister');
+
+const signupAvatarInputEl = document.getElementById('signupAvatarInput');
+const signupAvatarPreviewEl = document.getElementById('signupAvatarPreview');
+const signupAvatarFallbackEl = document.getElementById('signupAvatarFallback');
+const signupAvatarPreviewWrapEl = signupAvatarPreviewEl?.parentElement ?? null;
+const btnSignupAvatarChooseEl = document.getElementById('btnSignupAvatarChoose');
+const btnSignupAvatarRemoveEl = document.getElementById('btnSignupAvatarRemove');
 const profileWrapEl = document.getElementById('profileWrap');
 const btnProfileMenuEl = document.getElementById('btnProfileMenu');
 const profileDropdownEl = document.getElementById('profileDropdown');
@@ -353,17 +380,167 @@ function syncProfileEditHeroFromSession() {
   }
 }
 
-function setAuthError(message) {
-  if (!authErrorEl) return;
+/** Auth dialog mode: 'login' (default) or 'register'. */
+let authMode = 'login';
+
+const LOGIN_FIELD_ELS = {
+  email: { input: loginEmailEl, err: loginEmailErrEl },
+  password: { input: loginPasswordEl, err: loginPasswordErrEl }
+};
+
+const SIGNUP_FIELD_ELS = {
+  display_name: { input: signupDisplayNameEl, err: signupDisplayNameErrEl },
+  email: { input: signupEmailEl, err: signupEmailErrEl },
+  password: { input: signupPasswordEl, err: signupPasswordErrEl },
+  confirm: { input: signupConfirmEl, err: signupConfirmErrEl }
+};
+
+function clearAuthFieldErrors(mode) {
+  const map = mode === 'register' ? SIGNUP_FIELD_ELS : LOGIN_FIELD_ELS;
+  for (const key of Object.keys(map)) {
+    const { input, err } = map[key];
+    if (input) input.classList.remove('fieldError');
+    if (err) {
+      err.hidden = true;
+      err.textContent = '';
+    }
+  }
+}
+
+function setAuthFieldError(mode, field, message) {
+  const map = mode === 'register' ? SIGNUP_FIELD_ELS : LOGIN_FIELD_ELS;
+  const slot = map[field];
+  if (!slot) return false;
+  const msg = (message ?? '').toString().trim();
+  if (slot.input) slot.input.classList.add('fieldError');
+  if (slot.err) {
+    slot.err.textContent = msg;
+    slot.err.hidden = !msg;
+  }
+  try {
+    slot.input?.focus({ preventScroll: false });
+  } catch {
+    // ignore
+  }
+  return true;
+}
+
+function setAuthFormError(mode, message) {
+  const el = mode === 'register' ? signupFormErrorEl : loginFormErrorEl;
+  if (!el) return;
   const msg = (message ?? '').toString().trim();
   if (!msg) {
-    authErrorEl.style.display = 'none';
-    authErrorEl.textContent = '';
+    el.hidden = true;
+    el.textContent = '';
     return;
   }
-  authErrorEl.style.display = '';
-  authErrorEl.textContent = msg;
+  el.hidden = false;
+  el.textContent = msg;
 }
+
+/** Clears every error display + highlight on both auth panels. */
+function clearAllAuthErrors() {
+  clearAuthFieldErrors('login');
+  clearAuthFieldErrors('register');
+  setAuthFormError('login', '');
+  setAuthFormError('register', '');
+}
+
+/** Back-compat: a few existing call sites just want to wipe error UI ahead of an action. */
+function setAuthError(message) {
+  if (!message) {
+    clearAllAuthErrors();
+    return;
+  }
+  setAuthFormError(authMode, message);
+}
+
+function setAuthMode(mode, { preserveErrors = false } = {}) {
+  const next = mode === 'register' ? 'register' : 'login';
+  authMode = next;
+  const isLogin = next === 'login';
+  if (authTabLoginEl) {
+    authTabLoginEl.classList.toggle('isActive', isLogin);
+    authTabLoginEl.setAttribute('aria-selected', String(isLogin));
+  }
+  if (authTabRegisterEl) {
+    authTabRegisterEl.classList.toggle('isActive', !isLogin);
+    authTabRegisterEl.setAttribute('aria-selected', String(!isLogin));
+  }
+  if (authPanelLoginEl) authPanelLoginEl.hidden = !isLogin;
+  if (authPanelRegisterEl) authPanelRegisterEl.hidden = isLogin;
+  if (authTitleEl) authTitleEl.textContent = isLogin ? 'Log in' : 'Create your account';
+  if (authSubtitleEl) {
+    authSubtitleEl.textContent = isLogin
+      ? 'Welcome back. Sign in to your voiceVault account.'
+      : 'voiceVault stores notes locally per profile. Set up an account on this machine.';
+  }
+  if (!preserveErrors) clearAllAuthErrors();
+  setTimeout(() => {
+    try {
+      if (isLogin) loginEmailEl?.focus();
+      else signupDisplayNameEl?.focus();
+    } catch {
+      // ignore
+    }
+  }, 0);
+}
+
+let signupAvatarPreviewUrl = '';
+
+function clearSignupAvatarPreviewUrl() {
+  if (signupAvatarPreviewUrl) {
+    try {
+      URL.revokeObjectURL(signupAvatarPreviewUrl);
+    } catch {
+      // ignore
+    }
+    signupAvatarPreviewUrl = '';
+  }
+}
+
+function applySignupAvatarPreviewFromInput() {
+  const f = signupAvatarInputEl?.files?.[0];
+  clearSignupAvatarPreviewUrl();
+  if (!f) {
+    if (signupAvatarPreviewEl) {
+      signupAvatarPreviewEl.removeAttribute('src');
+      signupAvatarPreviewEl.hidden = true;
+    }
+    if (signupAvatarPreviewWrapEl) signupAvatarPreviewWrapEl.classList.remove('hasImage');
+    if (btnSignupAvatarRemoveEl) btnSignupAvatarRemoveEl.hidden = true;
+    if (btnSignupAvatarChooseEl) btnSignupAvatarChooseEl.textContent = 'Add photo';
+    return;
+  }
+  signupAvatarPreviewUrl = URL.createObjectURL(f);
+  if (signupAvatarPreviewEl) {
+    signupAvatarPreviewEl.src = signupAvatarPreviewUrl;
+    signupAvatarPreviewEl.hidden = false;
+  }
+  if (signupAvatarPreviewWrapEl) signupAvatarPreviewWrapEl.classList.add('hasImage');
+  if (btnSignupAvatarRemoveEl) btnSignupAvatarRemoveEl.hidden = false;
+  if (btnSignupAvatarChooseEl) btnSignupAvatarChooseEl.textContent = 'Change photo';
+}
+
+function resetSignupAvatarPicker() {
+  if (signupAvatarInputEl) signupAvatarInputEl.value = '';
+  applySignupAvatarPreviewFromInput();
+}
+
+function resetSignupForm() {
+  if (signupDisplayNameEl) signupDisplayNameEl.value = '';
+  if (signupEmailEl) signupEmailEl.value = '';
+  if (signupPasswordEl) signupPasswordEl.value = '';
+  if (signupConfirmEl) signupConfirmEl.value = '';
+  resetSignupAvatarPicker();
+}
+
+function resetLoginForm() {
+  if (loginEmailEl) loginEmailEl.value = '';
+  if (loginPasswordEl) loginPasswordEl.value = '';
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function setAuthUiLoggedIn(user) {
   sessionUser = user || null;
@@ -1765,21 +1942,142 @@ window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
+  setAuthMode('login', { preserveErrors: false });
+
+  authTabLoginEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('login');
+  });
+  authTabRegisterEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('register');
+  });
+  authSwitchToLoginEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('login');
+  });
+  authSwitchToRegisterEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('register');
+  });
+
+  // Clear a field's error highlight as soon as the user starts editing it again.
+  for (const slot of Object.values(LOGIN_FIELD_ELS)) {
+    slot.input?.addEventListener('input', () => {
+      slot.input?.classList.remove('fieldError');
+      if (slot.err) {
+        slot.err.hidden = true;
+        slot.err.textContent = '';
+      }
+      setAuthFormError('login', '');
+    });
+  }
+  for (const slot of Object.values(SIGNUP_FIELD_ELS)) {
+    slot.input?.addEventListener('input', () => {
+      slot.input?.classList.remove('fieldError');
+      if (slot.err) {
+        slot.err.hidden = true;
+        slot.err.textContent = '';
+      }
+      setAuthFormError('register', '');
+    });
+  }
+
+  btnSignupAvatarChooseEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    signupAvatarInputEl?.click();
+  });
+  signupAvatarInputEl?.addEventListener('change', () => {
+    const f = signupAvatarInputEl?.files?.[0];
+    if (f) {
+      const okType =
+        /^image\/(jpeg|png|gif|webp)$/i.test(f.type) ||
+        /\.(jpe?g|png|gif|webp)$/i.test(f.name);
+      const okSize = f.size > 0 && f.size <= 4 * 1024 * 1024;
+      if (!okType) {
+        if (signupAvatarInputEl) signupAvatarInputEl.value = '';
+        setAuthFormError('register', 'Profile photo must be JPEG, PNG, GIF, or WebP.');
+        return;
+      }
+      if (!okSize) {
+        if (signupAvatarInputEl) signupAvatarInputEl.value = '';
+        setAuthFormError('register', 'Profile photo must be 4 MB or smaller.');
+        return;
+      }
+      setAuthFormError('register', '');
+    }
+    applySignupAvatarPreviewFromInput();
+  });
+  btnSignupAvatarRemoveEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    resetSignupAvatarPicker();
+  });
+
+  // Submitting via Enter on either panel triggers the matching primary button.
+  authPanelLoginEl?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      btnAuthLoginEl?.click();
+    }
+  });
+  authPanelRegisterEl?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target?.id !== 'btnSignupAvatarChoose' && e.target?.id !== 'btnSignupAvatarRemove') {
+      e.preventDefault();
+      btnAuthRegisterEl?.click();
+    }
+  });
+
   btnAuthLoginEl?.addEventListener('click', async (e) => {
     e.preventDefault();
+    clearAuthFieldErrors('login');
+    setAuthFormError('login', '');
+    const email = (loginEmailEl?.value ?? '').toString().trim();
+    const password = (loginPasswordEl?.value ?? '').toString();
+
+    if (!email) {
+      setAuthFieldError('login', 'email', 'Enter your email.');
+      return;
+    }
+    if (!EMAIL_RE.test(email)) {
+      setAuthFieldError('login', 'email', 'Enter a valid email address.');
+      return;
+    }
+    if (!password) {
+      setAuthFieldError('login', 'password', 'Enter your password.');
+      return;
+    }
+
     try {
       btnAuthLoginEl.disabled = true;
-      setAuthError('');
       resetLibraryUiForAccountSwitch();
-      const email = (authEmailEl?.value ?? '').toString().trim();
-      const password = (authPasswordEl?.value ?? '').toString();
-      await postJsonAuth('/api/auth/login', { email, password });
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const j = await safeJson(r);
+      if (!r.ok) {
+        const code = (j?.code ?? '').toString();
+        const field = (j?.field ?? '').toString();
+        const msg = (j?.error ?? '').toString().trim() || `Sign in failed (${r.status})`;
+        if (code === 'email_not_found') {
+          setAuthFieldError('login', 'email', 'No account exists with this email.');
+        } else if (code === 'wrong_password') {
+          setAuthFieldError('login', 'password', 'Incorrect password — please try again.');
+        } else if (field && setAuthFieldError('login', field, msg)) {
+          // handled
+        } else {
+          setAuthFormError('login', msg);
+        }
+        return;
+      }
       await ensureAuthenticated();
       await refreshResults((qEl?.value ?? '').toString()).catch(() => {});
       refreshIngestionUi().catch(() => {});
+      resetLoginForm();
       setStatus(`Signed in as ${(sessionUser?.email ?? '').toString()}`);
     } catch (err) {
-      setAuthError(err?.message ?? String(err));
+      setAuthFormError('login', err?.message ?? String(err));
     } finally {
       btnAuthLoginEl.disabled = false;
     }
@@ -1787,20 +2085,85 @@ function wire() {
 
   btnAuthRegisterEl?.addEventListener('click', async (e) => {
     e.preventDefault();
+    clearAuthFieldErrors('register');
+    setAuthFormError('register', '');
+    const display_name = (signupDisplayNameEl?.value ?? '').toString().trim();
+    const email = (signupEmailEl?.value ?? '').toString().trim();
+    const password = (signupPasswordEl?.value ?? '').toString();
+    const confirm = (signupConfirmEl?.value ?? '').toString();
+    const avatarFile = signupAvatarInputEl?.files?.[0] ?? null;
+
+    if (!email) {
+      setAuthFieldError('register', 'email', 'Enter your email.');
+      return;
+    }
+    if (!EMAIL_RE.test(email)) {
+      setAuthFieldError('register', 'email', 'Enter a valid email address.');
+      return;
+    }
+    if (!password) {
+      setAuthFieldError('register', 'password', 'Choose a password.');
+      return;
+    }
+    if (password.length < 6) {
+      setAuthFieldError('register', 'password', 'Use at least 6 characters.');
+      return;
+    }
+    if (confirm !== password) {
+      setAuthFieldError('register', 'confirm', 'Passwords do not match.');
+      return;
+    }
+
     try {
       btnAuthRegisterEl.disabled = true;
-      setAuthError('');
       resetLibraryUiForAccountSwitch();
-      const email = (authEmailEl?.value ?? '').toString().trim();
-      const password = (authPasswordEl?.value ?? '').toString();
-      const display_name = (authDisplayNameEl?.value ?? '').toString().trim();
-      await postJsonAuth('/api/auth/register', { email, password, display_name });
+      const r = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, display_name })
+      });
+      const j = await safeJson(r);
+      if (!r.ok) {
+        const code = (j?.code ?? '').toString();
+        const field = (j?.field ?? '').toString();
+        const msg = (j?.error ?? '').toString().trim() || `Sign up failed (${r.status})`;
+        if (code === 'email_exists') {
+          setAuthFieldError('register', 'email', 'An account with this email already exists.');
+        } else if (code === 'invalid_email') {
+          setAuthFieldError('register', 'email', 'Enter a valid email address.');
+        } else if (code === 'password_too_short') {
+          setAuthFieldError('register', 'password', 'Use at least 6 characters.');
+        } else if (field && setAuthFieldError('register', field, msg)) {
+          // handled
+        } else {
+          setAuthFormError('register', msg);
+        }
+        return;
+      }
+
+      // Optional avatar upload immediately after register; failure here doesn't block sign-in.
+      if (avatarFile) {
+        try {
+          const fd = new FormData();
+          fd.append('avatar', avatarFile);
+          const up = await fetch('/api/auth/avatar', { method: 'POST', body: fd });
+          if (!up.ok) {
+            const upJ = await safeJson(up);
+            const upMsg = (upJ?.error ?? '').toString().trim() || `Avatar upload failed (${up.status})`;
+            setAuthFormError('register', `Account created, but profile photo upload failed: ${upMsg}`);
+          }
+        } catch (upErr) {
+          setAuthFormError('register', `Account created, but profile photo upload failed: ${upErr?.message ?? upErr}`);
+        }
+      }
+
       await ensureAuthenticated();
       await refreshResults((qEl?.value ?? '').toString()).catch(() => {});
       refreshIngestionUi().catch(() => {});
+      resetSignupForm();
       setStatus(`Welcome — signed in as ${(sessionUser?.email ?? '').toString()}`);
     } catch (err) {
-      setAuthError(err?.message ?? String(err));
+      setAuthFormError('register', err?.message ?? String(err));
     } finally {
       btnAuthRegisterEl.disabled = false;
     }
