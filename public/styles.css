@@ -2034,12 +2034,6 @@ select.jobsSelect--priority option {
   color: rgba(168, 85, 247, 1);
 }
 
-.authFooterHint {
-  margin-top: 14px;
-  font-size: 12px;
-  text-align: center;
-}
-
 /* Signup avatar picker */
 .authAvatarPickerRow {
   display: flex;
