@@ -2352,11 +2352,10 @@ async function refreshResults(q = '') {
     }
   }
 
-  // If a search yields no usable match segments, treat it as "No results" rather than
-  // showing an arbitrary hybrid list (which looks like a broken view when nothing matches).
+  // Hybrid search can still attach match-shaped snippets that don’t literally contain the
+  // query. Drop those so a wrong-term search shows “No results” instead of odd tiles.
   if (isSearch && Array.isArray(items) && items.length) {
-    const hasAnyMatch = items.some((it) => normalizeMatchSegments(it?.matches ?? it?.best_match ?? null).length > 0);
-    if (!hasAnyMatch) items = [];
+    items = items.filter((it) => noteHasSearchQueryEvidence(it, queryText));
   }
 
   lastSearchItems = Array.isArray(items) ? items : [];
@@ -2457,7 +2456,7 @@ async function refreshResults(q = '') {
         ? `<button class="btn vvIconBtn noteToolbarReprocess" data-reprocess="${item.id}" type="button" aria-label="Reprocess note" title="Reprocess">${VV_ICON_SVG.reprocess}</button>`
         : '';
     const rawBody = (item.body ?? '').toString();
-    const matchSegs = isSearch ? normalizeMatchSegments(item?.matches ?? item?.best_match ?? null) : [];
+    const matchSegs = isSearch ? pickTopMatchSegmentsForHighlight(item, queryText, { maxSegments: 3 }) : [];
     const body =
       isSearch && matchSegs.length
         ? highlightTranscriptHtml(rawBody, matchSegs, { mode: 'search' })
@@ -2680,7 +2679,7 @@ async function refreshResults(q = '') {
       // ignore
     }
     if (isSearch && status === 'ready') {
-      const msm = normalizeMatchSegments(item?.matches ?? item?.best_match ?? null);
+      const msm = pickTopMatchSegmentsForHighlight(item, queryText, { maxSegments: 3 });
       if (msm.length) {
         try {
           note.dataset.vvSearchMatches = JSON.stringify(msm);
@@ -4114,7 +4113,10 @@ function normalizeMatchSegments(matches, { limit = 12 } = {}) {
     const end = Number(m?.end);
     const text = (m?.text ?? '').toString().trim();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) return;
-    out.push({ start, end, text });
+    const row = { start, end, text };
+    const sc = Number(m?.score);
+    if (Number.isFinite(sc)) row.score = sc;
+    out.push(row);
   };
   if (Array.isArray(matches)) {
     for (const m of matches) {
@@ -4125,6 +4127,76 @@ function normalizeMatchSegments(matches, { limit = 12 } = {}) {
     pushOne(matches);
   }
   return out;
+}
+
+/** Deduped union of semantic / API match lists (keeps retrieval scores when present). */
+function normalizedMatchSegmentsForItem(item, { collectLimit = 36 } = {}) {
+  const fromMatches = normalizeMatchSegments(item?.matches ?? null, { limit: collectLimit });
+  const fromBest = normalizeMatchSegments(item?.best_match ?? null, { limit: 3 });
+  const keyOf = (s) =>
+    `${Number(s.start).toFixed(4)}:${Number(s.end).toFixed(4)}:${(s.text ?? '').slice(0, 120)}`;
+  const seen = new Set(fromMatches.map(keyOf));
+  const out = fromMatches.slice();
+  for (const s of fromBest) {
+    const k = keyOf(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function vvMatchSegmentsOverlapInTime(a, b, gapSec = 0.12) {
+  const pad = Math.max(0, Number(gapSec) || 0);
+  const a0 = Number(a?.start);
+  const a1 = Number(a?.end);
+  const b0 = Number(b?.start);
+  const b1 = Number(b?.end);
+  if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(b0) || !Number.isFinite(b1)) return false;
+  return !(a1 + pad <= b0 || b1 + pad <= a0);
+}
+
+function vvMatchHighlightRank(seg, rawQuery) {
+  const ql = (rawQuery ?? '').toString().trim().toLowerCase();
+  let r = Number(seg?.score);
+  if (!Number.isFinite(r)) r = 0;
+  r *= 1000;
+  const t = ((seg?.text ?? '') ?? '').toString().toLowerCase();
+  if (ql && t.includes(ql)) r += 500;
+  const dur = Number(seg?.end) - Number(seg?.start);
+  if (Number.isFinite(dur) && dur > 0) r -= Math.min(60, dur * 12);
+  return r;
+}
+
+/**
+ * For search UI highlights: keep only the strongest few chunks and skip overlapping excerpts
+ * so the transcript isn’t sprayed with unrelated blue spans.
+ */
+function pickTopMatchSegmentsForHighlight(item, rawQuery, { maxSegments = 3 } = {}) {
+  const candidates = normalizedMatchSegmentsForItem(item, { collectLimit: 40 });
+  if (!candidates.length) return [];
+  const gapSec = 0.12;
+  const ranked = [...candidates]
+    .map((s) => ({ s, rk: vvMatchHighlightRank(s, rawQuery) }))
+    .sort((a, b) => b.rk - a.rk || a.s.start - b.s.start);
+
+  const picked = [];
+  for (const { s } of ranked) {
+    if (picked.length >= maxSegments) break;
+    if (picked.some((p) => vvMatchSegmentsOverlapInTime(p, s, gapSec))) continue;
+    const { score: _sc, ...rest } = s;
+    picked.push(rest);
+  }
+  return picked;
+}
+
+function noteHasSearchQueryEvidence(item, rawQuery) {
+  const qq = (rawQuery ?? '').toString().trim().toLowerCase();
+  if (!qq) return true;
+  const hay = `${(item?.display_title ?? '')}\n${(item?.title ?? '')}\n${(item?.body ?? '')}`.toLowerCase();
+  if (hay.includes(qq)) return true;
+  const segs = normalizeMatchSegments(item?.matches ?? item?.best_match ?? null, { limit: 40 });
+  return segs.some((s) => (s.text ?? '').toLowerCase().includes(qq));
 }
 
 function syntheticWordsFromSegment(seg) {

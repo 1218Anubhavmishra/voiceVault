@@ -276,6 +276,11 @@ input[type='file'] {
   padding: 4px 2px 8px;
   width: 100%;
   box-sizing: border-box;
+  /* Narrow screens: keep one row — scroll sideways instead of wrapping Processes/Help down. */
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .floatDockLeading,
@@ -283,22 +288,25 @@ input[type='file'] {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .floatDockTrailing {
   margin-left: auto;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 520px) {
   .floatDock {
-    flex-wrap: wrap;
+    gap: 8px;
+    padding-inline: 0;
   }
 
-  .floatDockTrailing {
-    margin-left: 0;
-    width: 100%;
-    justify-content: flex-end;
+  .floatDockBtn {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
   }
 }
 
@@ -735,16 +743,22 @@ select {
   margin-top: 8px;
   margin-bottom: 0;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
+  overflow-x: auto;
+  overflow-y: visible;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .notePlaybackRow .notePlaybackRowTail {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
   margin-left: auto;
 }
 
@@ -753,20 +767,26 @@ select {
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 @media (max-width: 560px) {
-  /* When controls don’t fit, put player + download under Loop */
+  /* Same row as desktop: shrink player width; horizontal scroll carries any overflow */
   .notePlaybackRow .notePlayerCluster {
-    flex-basis: 100%;
-    justify-content: flex-start;
-    flex-direction: column;
-    align-items: flex-start;
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 0;
   }
 
   .notePlaybackRow .notePlaybackRowTail {
-    margin-left: 0;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .note .audio.noteInlinePlayer {
+    width: min(220px, 55vw);
   }
 }
 
