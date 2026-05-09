@@ -1838,7 +1838,9 @@ select.jobsSelect--priority option {
    Auth dialog: tabs, field-level errors, optional signup avatar
    ===================== */
 .authDialog {
-  padding: 18px 18px 16px;
+  padding: 18px 22px 18px;
+  max-width: 620px;
+  width: 100%;
 }
 
 .authHeaderRow {
@@ -1846,6 +1848,7 @@ select.jobsSelect--priority option {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  margin-top: 14px;
 }
 
 .authTitle {
@@ -1856,12 +1859,12 @@ select.jobsSelect--priority option {
 
 .authSubtitle {
   margin-top: 6px;
-  max-width: 52ch;
+  max-width: 56ch;
 }
 
 .authTabs {
   display: inline-flex;
-  margin-top: 16px;
+  margin: 0 0 4px;
   padding: 4px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -1918,11 +1921,42 @@ select.jobsSelect--priority option {
   margin: 0;
 }
 
+/* Inline layout: label sits to the LEFT, input + field-error sit to the RIGHT.
+   The label column is fixed-width so all rows align cleanly; on narrow viewports
+   we fall back to the original stacked layout. */
+.authField--inline {
+  grid-template-columns: 150px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 4px;
+}
+
+.authField--inline .authFieldLabel {
+  margin: 0;
+  padding-top: 0;
+}
+
+.authFieldInputCell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.authField--inline .authInput {
+  width: 100%;
+}
+
+@media (max-width: 520px) {
+  .authField--inline {
+    grid-template-columns: 1fr;
+  }
+}
+
 .authFieldLabel {
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
-  color: var(--muted);
+  color: var(--text);
   letter-spacing: 0.2px;
 }
 
@@ -2084,9 +2118,22 @@ select.jobsSelect--priority option {
   min-width: 0;
 }
 
+.authAvatarChooseRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .authAvatarChooseBtn {
   align-self: flex-start;
   padding: 8px 12px;
+}
+
+.authAvatarOptionalLabel {
+  font-size: 12px;
+  font-weight: 600;
+  font-style: italic;
 }
 
 .authAvatarHint {

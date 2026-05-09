@@ -382,16 +382,7 @@
     </div>
 
     <div id="authOverlay" class="overlay" hidden>
-      <div class="dialog authDialog" style="max-width: 520px">
-        <div class="authHeaderRow">
-          <div>
-            <div class="authTitle" id="authTitle">Log in</div>
-            <div class="subtle authSubtitle" id="authSubtitle">
-              Welcome back. Sign in to your voiceVault account.
-            </div>
-          </div>
-        </div>
-
+      <div class="dialog authDialog">
         <div class="authTabs" role="tablist" aria-label="Sign in or create account">
           <button
             type="button"
@@ -415,33 +406,46 @@
           </button>
         </div>
 
+        <div class="authHeaderRow">
+          <div>
+            <div class="authTitle" id="authTitle">Log in</div>
+            <div class="subtle authSubtitle" id="authSubtitle">
+              Welcome back. Sign in to your voiceVault account.
+            </div>
+          </div>
+        </div>
+
         <section
           id="authPanelLogin"
           class="authPanel"
           role="tabpanel"
           aria-labelledby="authTabLogin"
         >
-          <label class="label authField" data-field="email">
+          <label class="label authField authField--inline" data-field="email">
             <span class="authFieldLabel">Email</span>
-            <input
-              id="loginEmail"
-              class="input authInput"
-              type="email"
-              autocomplete="username"
-              placeholder="you@example.com"
-            />
-            <span class="fieldErrorText" id="loginEmailErr" hidden></span>
+            <span class="authFieldInputCell">
+              <input
+                id="loginEmail"
+                class="input authInput"
+                type="email"
+                autocomplete="username"
+                placeholder="you@example.com"
+              />
+              <span class="fieldErrorText" id="loginEmailErr" hidden></span>
+            </span>
           </label>
-          <label class="label authField" data-field="password">
+          <label class="label authField authField--inline" data-field="password">
             <span class="authFieldLabel">Password</span>
-            <input
-              id="loginPassword"
-              class="input authInput"
-              type="password"
-              autocomplete="current-password"
-              placeholder="Your password"
-            />
-            <span class="fieldErrorText" id="loginPasswordErr" hidden></span>
+            <span class="authFieldInputCell">
+              <input
+                id="loginPassword"
+                class="input authInput"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Your password"
+              />
+              <span class="fieldErrorText" id="loginPasswordErr" hidden></span>
+            </span>
           </label>
 
           <div id="loginFormError" class="note err authFormError" hidden></div>
@@ -477,10 +481,13 @@
               >×</button>
             </div>
             <div class="authAvatarPickerText">
-              <button type="button" class="btn authAvatarChooseBtn" id="btnSignupAvatarChoose">
-                Add photo
-              </button>
-              <div class="subtle authAvatarHint">Optional. JPEG, PNG, GIF, or WebP — up to 4&nbsp;MB.</div>
+              <div class="authAvatarChooseRow">
+                <button type="button" class="btn authAvatarChooseBtn" id="btnSignupAvatarChoose">
+                  Add photo
+                </button>
+                <span class="subtle authAvatarOptionalLabel">(optional)</span>
+              </div>
+              <div class="subtle authAvatarHint">JPEG, PNG, GIF, or WebP — up to 4&nbsp;MB.</div>
               <input
                 id="signupAvatarInput"
                 class="authAvatarHiddenInput"
@@ -492,49 +499,57 @@
             </div>
           </div>
 
-          <label class="label authField" data-field="display_name">
+          <label class="label authField authField--inline" data-field="display_name">
             <span class="authFieldLabel">Display name <span class="subtle">(optional)</span></span>
-            <input
-              id="signupDisplayName"
-              class="input authInput"
-              type="text"
-              autocomplete="nickname"
-              placeholder="What should we call you?"
-            />
-            <span class="fieldErrorText" id="signupDisplayNameErr" hidden></span>
+            <span class="authFieldInputCell">
+              <input
+                id="signupDisplayName"
+                class="input authInput"
+                type="text"
+                autocomplete="nickname"
+                placeholder="What should we call you?"
+              />
+              <span class="fieldErrorText" id="signupDisplayNameErr" hidden></span>
+            </span>
           </label>
-          <label class="label authField" data-field="email">
+          <label class="label authField authField--inline" data-field="email">
             <span class="authFieldLabel">Email</span>
-            <input
-              id="signupEmail"
-              class="input authInput"
-              type="email"
-              autocomplete="email"
-              placeholder="you@example.com"
-            />
-            <span class="fieldErrorText" id="signupEmailErr" hidden></span>
+            <span class="authFieldInputCell">
+              <input
+                id="signupEmail"
+                class="input authInput"
+                type="email"
+                autocomplete="email"
+                placeholder="you@example.com"
+              />
+              <span class="fieldErrorText" id="signupEmailErr" hidden></span>
+            </span>
           </label>
-          <label class="label authField" data-field="password">
-            <span class="authFieldLabel">Password <span class="subtle">(min 6 characters)</span></span>
-            <input
-              id="signupPassword"
-              class="input authInput"
-              type="password"
-              autocomplete="new-password"
-              placeholder="Choose a password"
-            />
-            <span class="fieldErrorText" id="signupPasswordErr" hidden></span>
+          <label class="label authField authField--inline" data-field="password">
+            <span class="authFieldLabel">Password <span class="subtle">(min 6)</span></span>
+            <span class="authFieldInputCell">
+              <input
+                id="signupPassword"
+                class="input authInput"
+                type="password"
+                autocomplete="new-password"
+                placeholder="Choose a password"
+              />
+              <span class="fieldErrorText" id="signupPasswordErr" hidden></span>
+            </span>
           </label>
-          <label class="label authField" data-field="confirm">
+          <label class="label authField authField--inline" data-field="confirm">
             <span class="authFieldLabel">Confirm password</span>
-            <input
-              id="signupConfirm"
-              class="input authInput"
-              type="password"
-              autocomplete="new-password"
-              placeholder="Re-enter password"
-            />
-            <span class="fieldErrorText" id="signupConfirmErr" hidden></span>
+            <span class="authFieldInputCell">
+              <input
+                id="signupConfirm"
+                class="input authInput"
+                type="password"
+                autocomplete="new-password"
+                placeholder="Re-enter password"
+              />
+              <span class="fieldErrorText" id="signupConfirmErr" hidden></span>
+            </span>
           </label>
 
           <div id="signupFormError" class="note err authFormError" hidden></div>

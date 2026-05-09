@@ -246,11 +246,6 @@ const metaFoldersListEl = null;
 const metaNewTagNameEl = null;
 const btnMetaAddTagEl = null;
 const metaTagsListEl = null;
-const importZipEl = null;
-const btnChooseImportZipEl = null;
-const importZipNameEl = null;
-const btnImportZipEl = null;
-
 const AUDIO_BITS_PER_SECOND = 64_000; // 64 kbps Opus (WebM); adjust if you want higher quality
 const MEDIARECORDER_TIMESLICE_MS = 100; // 0.1s chunks (recording only)
 const LIVE_LANG_DETECT_INTERVAL_MS = 2000; // practical Whisper polling cadence
@@ -473,7 +468,7 @@ function setAuthMode(mode, { preserveErrors = false } = {}) {
   if (authSubtitleEl) {
     authSubtitleEl.textContent = isLogin
       ? 'Welcome back. Sign in to your voiceVault account.'
-      : 'voiceVault stores notes locally per profile. Set up an account on this machine.';
+      : 'Create your voiceVault account.';
   }
   if (!preserveErrors) clearAllAuthErrors();
   setTimeout(() => {
@@ -2248,36 +2243,6 @@ function wire() {
   resetNewNoteLanguageForRecording();
 
   // Saved searches + folder/tag filtering removed.
-
-  btnChooseImportZipEl?.addEventListener('click', (e) => {
-    e.preventDefault();
-    importZipEl?.click?.();
-  });
-  importZipEl?.addEventListener('change', () => {
-    const f = importZipEl?.files?.[0];
-    if (importZipNameEl) importZipNameEl.textContent = f ? f.name : 'No file';
-  });
-  btnImportZipEl?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const f = importZipEl?.files?.[0];
-    if (!f) return setStatus('Choose a .zip to import', true);
-    if (!confirm('Import backup now? This will REPLACE your local DB and blobs. A backup copy will be kept in data/.')) return;
-    btnImportZipEl.disabled = true;
-    try {
-      const fd = new FormData();
-      fd.append('backup', f, f.name);
-      const r = await fetch('/api/import', { method: 'POST', body: fd });
-      const j = await safeJson(r);
-      if (!r.ok) throw new Error(j?.error || `Import failed (${r.status})`);
-      setStatus('Import complete. Reloading…');
-      // Clear segment-loaded markers by reloading page.
-      setTimeout(() => location.reload(), 700);
-    } catch (err) {
-      setStatus(`Import error: ${err?.message ?? err}`, true);
-    } finally {
-      btnImportZipEl.disabled = false;
-    }
-  });
 
   btnNewNoteToggleEl?.addEventListener('click', (e) => {
     e.preventDefault();

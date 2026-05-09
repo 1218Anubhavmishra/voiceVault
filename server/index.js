@@ -17,9 +17,6 @@ import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic
 import { embedTexts, bufferToFloat32, cosineSim } from './embeddings.js';
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
-import archiver from 'archiver';
-import unzipper from 'unzipper';
-
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5177;
 
 const SESSION_MAX_AGE_MS = (() => {
@@ -284,14 +281,6 @@ async function assertGlobalMachineControls(req, res) {
   return false;
 }
 
-async function assertFullDatabaseExportImport(req, res) {
-  if (await allowGlobalMachineControls()) return true;
-  res.status(403).json({
-    error: 'Full-database export/import is disabled when multiple profiles exist',
-    hint: 'Set VOICEVAULT_ALLOW_GLOBAL_CONTROLS=1 on the server to enable (machine admin only).'
-  });
-  return false;
-}
 if ((process.env.VOICEVAULT_CLEAN_EPHEMERAL ?? '1').toString().trim() !== '0') {
   try {
     const s = cleanupEphemeralServerCache({ dataDir, audioDir });
@@ -411,28 +400,6 @@ async function pruneExpiredNoteDrafts(dbInst, blobDirPath) {
     await maybeUnlinkBlob(dbInst, blobDirPath, oldBid);
   }
 }
-
-const uploadZip = multer({
-  storage: multer.diskStorage({
-    destination(_req, _file, cb) {
-      try {
-        const p = path.join(dataDir, 'imports');
-        fs.mkdirSync(p, { recursive: true });
-        cb(null, p);
-      } catch (e) {
-        cb(e, dataDir);
-      }
-    },
-    filename(_req, file, cb) {
-      const ts = new Date().toISOString().replaceAll(':', '-');
-      const base = `import-${ts}-${nanoid(6)}.zip`;
-      cb(null, base);
-    }
-  }),
-  limits: {
-    fileSize: 1024 * 1024 * 1024 // 1GB
-  }
-});
 
 app.get('/api/health', async (_req, res) => {
   res.json({ ok: true, ingestion: { paused: await isIngestionPaused(db) } });
@@ -854,187 +821,41 @@ app.post('/api/debug/backfill-note-languages', async (req, res) => {
   }
 });
 
-app.get('/api/export.zip', async (req, res) => {
-  if (!await assertFullDatabaseExportImport(req, res)) return;
-  const exportedAt = new Date().toISOString();
+// NOTE: /api/export.zip and /api/import previously did a SQLite-file + blob-dir
+// swap to back up and restore the entire instance. With a managed Postgres
+// backend (and audio bytes stored in BYTEA columns), that approach is no longer
+// meaningful: there is no on-disk SQLite file to copy, the database is owned by
+// the hosting provider, and a process-level file swap cannot replace a remote
+// Postgres dataset. They are retired with HTTP 410 (Gone). Operators should use
+// `pg_dump` / `pg_restore` (or the provider-managed snapshot/PITR feature) for
+// full-database backup and restore.
 
-  let counts = { notes: 0, segments: 0, chunks: 0, jobs: 0, tags: 0, folders: 0 };
-  try {
-    counts.notes = Number(await db.prepare(`SELECT count(1) AS c FROM notes`).get()?.c ?? 0) || 0;
-    counts.segments = Number(await db.prepare(`SELECT count(1) AS c FROM note_segments`).get()?.c ?? 0) || 0;
-    counts.chunks = Number(await db.prepare(`SELECT count(1) AS c FROM note_chunks`).get()?.c ?? 0) || 0;
-    counts.jobs = Number(await db.prepare(`SELECT count(1) AS c FROM ingestion_jobs`).get()?.c ?? 0) || 0;
-    counts.tags = Number(await db.prepare(`SELECT count(1) AS c FROM tags`).get()?.c ?? 0) || 0;
-    counts.folders = Number(await db.prepare(`SELECT count(1) AS c FROM folders`).get()?.c ?? 0) || 0;
-  } catch {
-    // ignore
-  }
-
-  const manifest = {
-    app: 'voiceVault',
-    export_version: 1,
-    exported_at: exportedAt,
-    counts
-  };
-
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="voicevault-export-${exportedAt.replaceAll(':', '-')}.zip"`);
-
-  const archive = archiver('zip', { zlib: { level: 9 } });
-  archive.on('error', (err) => {
-    try {
-      res.status(500).end(String(err?.message ?? err));
-    } catch {
-      // ignore
-    }
-  });
-  archive.pipe(res);
-
-  // Manifest
-  archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
-
-  // DB + WAL/SHM if present (WAL mode)
-  try {
-    if (fs.existsSync(dbPath)) archive.file(dbPath, { name: 'data/voicevault.sqlite' });
-    const wal = `${dbPath}-wal`;
-    const shm = `${dbPath}-shm`;
-    if (fs.existsSync(wal)) archive.file(wal, { name: 'data/voicevault.sqlite-wal' });
-    if (fs.existsSync(shm)) archive.file(shm, { name: 'data/voicevault.sqlite-shm' });
-  } catch {
-    // ignore
-  }
-
-  // Blobs directory (durable media)
-  try {
-    if (fs.existsSync(blobsDir)) archive.directory(blobsDir, 'data/blobs');
-  } catch {
-    // ignore
-  }
-
-  archive.finalize().catch(() => {
-    // ignore
+app.get('/api/export.zip', (_req, res) => {
+  res.status(410).json({
+    error: 'Endpoint removed',
+    code: 'export_zip_removed',
+    message:
+      'The /api/export.zip endpoint was tied to the legacy SQLite + on-disk-blobs storage layout. ' +
+      'voiceVault now uses PostgreSQL with audio stored in BYTEA columns, so there is no SQLite file ' +
+      'or blobs directory to bundle.',
+    recommendation:
+      'For full-database backups, run `pg_dump` against your DATABASE_URL (or use your Postgres provider\'s ' +
+      'managed snapshot / point-in-time-recovery feature). Run-of-the-mill data export/migration can be done ' +
+      'with the same migration helper used in scripts/migrate-sqlite-to-pg.js.'
   });
 });
 
-app.post('/api/import', uploadZip.single('backup'), async (req, res) => {
-  if (!await assertFullDatabaseExportImport(req, res)) return;
-  const filePath = (req.file?.path ?? '').toString();
-  if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: 'Missing backup file' });
-
-  const importedAt = new Date().toISOString();
-  const importId = `import_${importedAt.replaceAll(':', '-')}_${nanoid(6)}`;
-  const stagingDir = path.join(dataDir, `${importId}_staging`);
-  const backupDir = path.join(dataDir, `${importId}_backup`);
-  fs.mkdirSync(stagingDir, { recursive: true });
-  fs.mkdirSync(backupDir, { recursive: true });
-
-  let manifest = null;
-  try {
-    const zip = await unzipper.Open.file(filePath);
-    const mf = zip.files.find((f) => (f.path ?? '').toString() === 'manifest.json');
-    if (!mf) return res.status(400).json({ error: 'Missing manifest.json in zip' });
-    const buf = await mf.buffer();
-    manifest = JSON.parse(buf.toString('utf8'));
-    if ((manifest?.app ?? '') !== 'voiceVault') return res.status(400).json({ error: 'Not a voiceVault export' });
-    if (Number(manifest?.export_version ?? 0) !== 1) return res.status(400).json({ error: 'Unsupported export version' });
-
-    // Extract files into stagingDir (guard against path traversal)
-    for (const f of zip.files) {
-      if (f.type !== 'File') continue;
-      const rel = (f.path ?? '').toString();
-      if (!rel) continue;
-      // Allow only manifest.json and data/*
-      if (!(rel === 'manifest.json' || rel.startsWith('data/'))) continue;
-
-      const norm = path.normalize(rel).replaceAll('\\', '/');
-      if (norm.startsWith('../') || norm.startsWith('..\\')) continue;
-      const outPath = path.join(stagingDir, norm);
-      const outDir = path.dirname(outPath);
-      fs.mkdirSync(outDir, { recursive: true });
-      const data = await f.buffer();
-      fs.writeFileSync(outPath, data);
-    }
-  } catch (e) {
-    return res.status(400).json({ error: 'Invalid zip', details: e?.message ?? String(e) });
-  }
-
-  // Validate presence of DB and blobs dir (blobs may be empty but directory should exist in export)
-  const stagedDb = path.join(stagingDir, 'data', 'voicevault.sqlite');
-  const stagedWal = path.join(stagingDir, 'data', 'voicevault.sqlite-wal');
-  const stagedShm = path.join(stagingDir, 'data', 'voicevault.sqlite-shm');
-  const stagedBlobs = path.join(stagingDir, 'data', 'blobs');
-  if (!fs.existsSync(stagedDb)) return res.status(400).json({ error: 'Missing data/voicevault.sqlite in zip' });
-
-  // Pause ingestion + stop worker + swap files safely.
-  try {
-    await setAppState(db, 'ingestion_paused', '1');
-  } catch {
-    // ignore
-  }
-
-  try {
-    stopIngestionWorker();
-  } catch {
-    // ignore
-  }
-
-  // Postgres pool is shared and long-lived; no per-request close. (The legacy SQLite
-  // import flow expected to swap files on disk; that flow is no longer supported with
-  // a managed Postgres backend — see `/api/import` body for details.)
-
-  try {
-    // Backup current DB + blobs
-    if (fs.existsSync(dbPath)) fs.renameSync(dbPath, path.join(backupDir, 'voicevault.sqlite'));
-    if (fs.existsSync(`${dbPath}-wal`)) fs.renameSync(`${dbPath}-wal`, path.join(backupDir, 'voicevault.sqlite-wal'));
-    if (fs.existsSync(`${dbPath}-shm`)) fs.renameSync(`${dbPath}-shm`, path.join(backupDir, 'voicevault.sqlite-shm'));
-    if (fs.existsSync(blobsDir)) fs.renameSync(blobsDir, path.join(backupDir, 'blobs'));
-
-    // Apply staged files
-    fs.renameSync(stagedDb, dbPath);
-    if (fs.existsSync(stagedWal)) fs.renameSync(stagedWal, `${dbPath}-wal`);
-    if (fs.existsSync(stagedShm)) fs.renameSync(stagedShm, `${dbPath}-shm`);
-    if (fs.existsSync(stagedBlobs)) {
-      // Ensure target blobs dir doesn't exist (it was moved above)
-      fs.renameSync(stagedBlobs, blobsDir);
-    } else {
-      fs.mkdirSync(blobsDir, { recursive: true });
-    }
-
-    // Reopen DB + restart worker
-    db = await openDb();
-    startIngestionWorker();
-    try {
-      await setAppState(db, 'ingestion_paused', '0');
-    } catch {
-      // ignore
-    }
-  } catch (e) {
-    // Attempt to restore backup if apply failed
-    try {
-      if (fs.existsSync(path.join(backupDir, 'voicevault.sqlite'))) fs.renameSync(path.join(backupDir, 'voicevault.sqlite'), dbPath);
-      if (fs.existsSync(path.join(backupDir, 'voicevault.sqlite-wal'))) fs.renameSync(path.join(backupDir, 'voicevault.sqlite-wal'), `${dbPath}-wal`);
-      if (fs.existsSync(path.join(backupDir, 'voicevault.sqlite-shm'))) fs.renameSync(path.join(backupDir, 'voicevault.sqlite-shm'), `${dbPath}-shm`);
-      if (fs.existsSync(path.join(backupDir, 'blobs'))) fs.renameSync(path.join(backupDir, 'blobs'), blobsDir);
-    } catch {
-      // ignore
-    }
-    db = await openDb();
-    startIngestionWorker();
-    return res.status(500).json({ error: 'Import failed', details: e?.message ?? String(e) });
-  } finally {
-    try {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      // ignore
-    }
-  }
-
-  res.json({ ok: true, imported_at: importedAt, manifest, backup_dir: backupDir });
+app.post('/api/import', (_req, res) => {
+  res.status(410).json({
+    error: 'Endpoint removed',
+    code: 'import_zip_removed',
+    message:
+      'The /api/import endpoint previously swapped SQLite + blob files in place. That flow cannot work ' +
+      'against a managed Postgres database, so it has been retired.',
+    recommendation:
+      'Restore from a `pg_dump` archive with `pg_restore` (or `psql`) directly against your DATABASE_URL, ' +
+      'or re-run scripts/migrate-sqlite-to-pg.js if you are migrating from a local SQLite snapshot.'
+  });
 });
 
 app.get('/api/ingestion', async (_req, res) => {
