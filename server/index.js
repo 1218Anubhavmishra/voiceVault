@@ -79,6 +79,35 @@ function computeFtsTitle(displayTitle, body) {
   return 'Untitled';
 }
 
+function isAutomaticNoteTitle(value) {
+  const s = (value ?? '').toString().trim();
+  return /^Recording_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/i.test(s) || /^Upload_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/i.test(s);
+}
+
+function titleFromTranscriptContext(transcript) {
+  const text = formatTranscript(transcript ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const first =
+    text
+      .split(/(?<=[.!?])\s+/g)
+      .map((s) => s.trim())
+      .find((s) => s.length >= 12) || text;
+  const cleaned = first
+    .replace(/^(today\s+)?(i\s+want\s+to\s+)?(talk|speak|discuss)\s+about\s+/i, '')
+    .replace(/^(this\s+is\s+)?(a\s+)?(quick\s+)?(note|recording)\s+(about|on|for)\s+/i, '')
+    .trim();
+  const stop = new Set(['a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'from', 'i', 'in', 'is', 'it', 'me', 'my', 'of', 'on', 'or', 'our', 'so', 'that', 'the', 'this', 'to', 'we', 'with', 'you']);
+  const words = cleaned.match(/[\p{L}\p{N}][\p{L}\p{N}'&-]*/gu) || [];
+  while (words.length && stop.has(words[0].toLowerCase())) words.shift();
+  while (words.length && stop.has(words[words.length - 1].toLowerCase())) words.pop();
+  const titled = words
+    .slice(0, 8)
+    .map((w) => (/^[A-Z0-9]{2,}$/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+    .join(' ')
+    .trim();
+  return titled.length > 72 ? `${titled.slice(0, 69).trim()}...` : titled;
+}
+
 /**
  * Notes list: expose pending ingestion work so the UI can recompute "time left" from queue state
  * (instead of extending a blind +45s budget when the first audio-based guess hits zero).
@@ -3585,8 +3614,11 @@ async function finalizeNoteFromSttOutput(
 
   const updatedAt = new Date().toISOString();
   const priorDisplay = (row.display_title ?? '').toString().trim();
+  const generatedDisplay = titleFromTranscriptContext(transcript);
   const finalDisplayTitle =
-    priorDisplay || (transcript ? transcript.slice(0, 64).trim() : '') || '';
+    priorDisplay && !isAutomaticNoteTitle(priorDisplay)
+      ? priorDisplay
+      : generatedDisplay || (transcript ? transcript.slice(0, 64).trim() : '') || '';
   const ftsTitle = computeFtsTitle(finalDisplayTitle, transcript);
 
   const hintLang = (row.language ?? '').toString().trim();

@@ -1333,6 +1333,7 @@ let noteLangProgrammatic = false;
 
 /** Current blob came from the mic (vs upload) — drives stage labels. */
 let noteUsedMicForCurrentBlob = false;
+let noteTitleUserEdited = false;
 
 /** Raw language string from last successful `/api/detect-language` (used when the dropdown has no matching option). */
 let noteLastDetectedApiLang = '';
@@ -2012,6 +2013,10 @@ window.addEventListener('beforeunload', beaconStopAllProcessing);
 function wire() {
   setAuthMode('login', { preserveErrors: false });
 
+  titleEl?.addEventListener('input', () => {
+    noteTitleUserEdited = true;
+  });
+
   authTabLoginEl?.addEventListener('click', (e) => {
     e.preventDefault();
     setAuthMode('login');
@@ -2635,6 +2640,7 @@ function wire() {
       // ignore; duration stays 0
     }
 
+    noteTitleUserEdited = false;
     titleEl.value = defaultUploadTitle();
 
     notePostRecordPipelinePromise = runNotePostRecordTranscriptionPipeline('upload').finally(() => {
@@ -3063,6 +3069,7 @@ async function startRecording(state, { onUi, label }) {
       state.sourceFilename = '';
       state.liveTranscribeTail = Promise.resolve();
       // Switching modes (upload → record) should reset the default title.
+      noteTitleUserEdited = false;
       titleEl.value = defaultRecordingTitle();
       resetNewNoteLanguageForRecording();
       if (liveTranscriptEl) {
@@ -3204,6 +3211,12 @@ async function saveNote() {
 
     const fd = new FormData();
     ensureAutoTitleFilled(note);
+    const pb = previewBundleJsonForSave();
+    const editedFmt = vvFormatTranscript(liveTranscriptEl?.value ?? '').trim();
+    const bundleFmt = lastFullPreviewBundle
+      ? vvFormatTranscript(lastFullPreviewBundle.transcript ?? '').trim()
+      : '';
+    if (editedFmt) applyTranscriptTitleIfAutomatic(editedFmt);
     fd.append('display_title', titleEl.value || '');
     fd.append('title', titleEl.value || '');
     fd.append('duration_ms', Math.round(note.durationMs || 0).toString());
@@ -3212,11 +3225,6 @@ async function saveNote() {
     fd.append('source_filename', (note.sourceFilename ?? '').toString());
     if (draftIdForSave) fd.append('draft_id', draftIdForSave);
     fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
-    const pb = previewBundleJsonForSave();
-    const editedFmt = vvFormatTranscript(liveTranscriptEl?.value ?? '').trim();
-    const bundleFmt = lastFullPreviewBundle
-      ? vvFormatTranscript(lastFullPreviewBundle.transcript ?? '').trim()
-      : '';
     const unchangedFromBundle = !!(pb && editedFmt && editedFmt === bundleFmt);
     if (pb && unchangedFromBundle) fd.append('preview_bundle', pb);
     else if ((noteFullPreviewGateOk || noteAllowManualSaveFinal) && editedFmt) {
@@ -3273,6 +3281,7 @@ async function saveNote() {
     setNewNotePanelOpen(false);
     if (id) pollNoteUntilDone(id);
 
+    noteTitleUserEdited = false;
     titleEl.value = defaultNoteTitleFromState(note);
     lastFullPreviewBundle = null;
   } catch (err) {
@@ -6062,6 +6071,7 @@ async function transcribeFullPreviewImpl(signal) {
         duration_ms: Math.round(note.durationMs || 0),
         audio_bytes: Number(note.audioBlob?.size || 0) || 0
       };
+      applyTranscriptTitleIfAutomatic(transcriptForBundle);
       noteFullPreviewGateOk = true;
       noteAllowManualSaveFinal = false;
       if (liveTxStatusEl) liveTxStatusEl.hidden = true;
@@ -6733,6 +6743,7 @@ function resetRecorder(state) {
     noteLastDetectedApiLang = '';
     noteUserOverrodeLanguage = false;
     noteUsedMicForCurrentBlob = false;
+    noteTitleUserEdited = false;
     note.liveTranscribeTail = Promise.resolve();
     notePostRecordPipelinePromise = null;
     setNewNoteTranscriptionStages({ live: 'pending', full: 'pending', showRow: false });
@@ -6831,7 +6842,7 @@ function renderBitrateHint() {
   if (uiStepsBox) {
     uiStepsBox.innerHTML = `
         <div style="margin-top:6px">
-        1) Tap <strong>+</strong> in the quick-action bar to open <strong>New note</strong> (it closes any other open panel). Title defaults to <strong>Recording_YYYY-MM-DD_HH-MM-SS</strong> for mic audio or <strong>Upload_YYYY-MM-DD_HH-MM-SS</strong> after <strong>Upload</strong> — change it if you like.
+        1) Tap <strong>+</strong> in the quick-action bar to open <strong>New note</strong> (it closes any other open panel). The title starts as a temporary timestamp and is replaced from the transcript when the full preview is ready; change it anytime.
         </div>
         <div style="margin-top:4px">
         2) Optional: <strong>Upload</strong> to pick a file, or tap <strong>Record note</strong>, speak, then <strong>Stop</strong>.
@@ -7078,12 +7089,14 @@ function stopLiveLanguageDetection(state) {
 function bootstrapAutoTitle() {
   // Only auto-fill if empty on first load.
   if (!titleEl.value.trim()) {
+    noteTitleUserEdited = false;
     titleEl.value = defaultNoteTitleFromState(note);
   }
 }
 
 function ensureAutoTitleFilled(state = note) {
   if (titleEl.value.trim()) return;
+  noteTitleUserEdited = false;
   titleEl.value = defaultNoteTitleFromState(state);
 }
 
@@ -7098,6 +7111,101 @@ function defaultUploadTitle() {
 function defaultNoteTitleFromState(state) {
   if ((state?.sourceFilename ?? '').toString().trim()) return defaultUploadTitle();
   return defaultRecordingTitle();
+}
+
+function isAutomaticNoteTitle(value) {
+  const s = (value ?? '').toString().trim();
+  return !s || /^Recording_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/i.test(s) || /^Upload_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$/i.test(s);
+}
+
+const NOTE_TITLE_STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'but',
+  'by',
+  'for',
+  'from',
+  'i',
+  'in',
+  'is',
+  'it',
+  'me',
+  'my',
+  'of',
+  'on',
+  'or',
+  'our',
+  'so',
+  'that',
+  'the',
+  'this',
+  'to',
+  'we',
+  'with',
+  'you'
+]);
+
+function titleCaseWordForNoteTitle(word) {
+  const s = (word ?? '').toString();
+  if (!s) return '';
+  if (/^[A-Z0-9]{2,}$/.test(s)) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+function candidateTitleFromSentence(sentence) {
+  let s = (sentence ?? '')
+    .toString()
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s"'“”‘’.,:;!?-]+|[\s"'“”‘’.,:;!?-]+$/g, '')
+    .trim();
+  s = s
+    .replace(/^(today\s+)?(i\s+want\s+to\s+)?(talk|speak|discuss)\s+about\s+/i, '')
+    .replace(/^(this\s+is\s+)?(a\s+)?(quick\s+)?(note|recording)\s+(about|on|for)\s+/i, '')
+    .replace(/^(meeting|discussion)\s+(about|on)\s+/i, '')
+    .trim();
+  const words = s.match(/[\p{L}\p{N}][\p{L}\p{N}'&-]*/gu) || [];
+  while (words.length && NOTE_TITLE_STOPWORDS.has(words[0].toLowerCase())) words.shift();
+  while (words.length && NOTE_TITLE_STOPWORDS.has(words[words.length - 1].toLowerCase())) words.pop();
+  if (!words.length) return '';
+
+  const clipped = words.slice(0, 8);
+  const titled = clipped.map(titleCaseWordForNoteTitle).join(' ').trim();
+  return titled.length > 72 ? `${titled.slice(0, 69).trim()}...` : titled;
+}
+
+function titleFromTranscriptContext(transcript) {
+  const text = vvFormatTranscript(transcript ?? '')
+    .replace(/\[[^\]]{1,40}\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  const sentences = text
+    .split(/(?<=[.!?])\s+|\n+/g)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 12);
+
+  const firstGood = sentences.find((s) => (s.match(/[\p{L}\p{N}]/gu) || []).length >= 10) || text;
+  let title = candidateTitleFromSentence(firstGood);
+  if (title.split(/\s+/).filter(Boolean).length >= 2) return title;
+
+  const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}'&-]*/gu) || [];
+  const meaningful = words.filter((w) => !NOTE_TITLE_STOPWORDS.has(w.toLowerCase())).slice(0, 6);
+  title = meaningful.map(titleCaseWordForNoteTitle).join(' ').trim();
+  return title.length >= 3 ? title : '';
+}
+
+function applyTranscriptTitleIfAutomatic(transcript) {
+  if (!titleEl || noteTitleUserEdited || !isAutomaticNoteTitle(titleEl.value)) return false;
+  const generated = titleFromTranscriptContext(transcript);
+  if (!generated) return false;
+  titleEl.value = generated;
+  noteTitleUserEdited = false;
+  return true;
 }
 
 // (Removed auto-incrementing Recording counter; titles are timestamp-based now.)
