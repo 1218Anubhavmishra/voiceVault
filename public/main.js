@@ -126,6 +126,8 @@ const authTabLoginEl = document.getElementById('authTabLogin');
 const authTabRegisterEl = document.getElementById('authTabRegister');
 const authPanelLoginEl = document.getElementById('authPanelLogin');
 const authPanelRegisterEl = document.getElementById('authPanelRegister');
+const authPanelForgotPasswordEl = document.getElementById('authPanelForgotPassword');
+const authPanelChangePasswordEl = document.getElementById('authPanelChangePassword');
 const authTitleEl = document.getElementById('authTitle');
 const authSubtitleEl = document.getElementById('authSubtitle');
 const authSwitchToLoginEl = document.getElementById('authSwitchToLogin');
@@ -147,6 +149,22 @@ const signupEmailErrEl = document.getElementById('signupEmailErr');
 const signupPasswordErrEl = document.getElementById('signupPasswordErr');
 const signupConfirmErrEl = document.getElementById('signupConfirmErr');
 const signupFormErrorEl = document.getElementById('signupFormError');
+const forgotPasswordEmailEl = document.getElementById('forgotPasswordEmail');
+const forgotPasswordOtpEl = document.getElementById('forgotPasswordOtp');
+const forgotPasswordPasswordEl = document.getElementById('forgotPasswordPassword');
+const forgotPasswordConfirmEl = document.getElementById('forgotPasswordConfirm');
+const forgotPasswordEmailErrEl = document.getElementById('forgotPasswordEmailErr');
+const forgotPasswordOtpErrEl = document.getElementById('forgotPasswordOtpErr');
+const forgotPasswordPasswordErrEl = document.getElementById('forgotPasswordPasswordErr');
+const forgotPasswordConfirmErrEl = document.getElementById('forgotPasswordConfirmErr');
+const forgotPasswordFormErrorEl = document.getElementById('forgotPasswordFormError');
+const changePasswordFormErrorEl = document.getElementById('changePasswordFormError');
+const btnForgotPasswordSendOtpEl = document.getElementById('btnForgotPasswordSendOtp');
+const btnForgotPasswordResetEl = document.getElementById('btnForgotPasswordReset');
+const btnChangePasswordBackEl = document.getElementById('btnChangePasswordBack');
+const authSwitchToForgotEl = document.getElementById('authSwitchToForgot');
+const authSwitchToLoginFromForgotEl = document.getElementById('authSwitchToLoginFromForgot');
+const authSwitchToLoginFromChangePasswordEl = document.getElementById('authSwitchToLoginFromChangePassword');
 const btnAuthRegisterEl = document.getElementById('btnAuthRegister');
 
 const signupAvatarInputEl = document.getElementById('signupAvatarInput');
@@ -375,8 +393,9 @@ function syncProfileEditHeroFromSession() {
   }
 }
 
-/** Auth dialog mode: 'login' (default) or 'register'. */
+/** Auth dialog mode: 'login' (default), 'register', 'forgot', or 'changePassword'. */
 let authMode = 'login';
+let pendingPasswordResetEmail = '';
 
 const LOGIN_FIELD_ELS = {
   email: { input: loginEmailEl, err: loginEmailErrEl },
@@ -390,8 +409,25 @@ const SIGNUP_FIELD_ELS = {
   confirm: { input: signupConfirmEl, err: signupConfirmErrEl }
 };
 
+const FORGOT_FIELD_ELS = {
+  email: { input: forgotPasswordEmailEl, err: forgotPasswordEmailErrEl }
+};
+
+const CHANGE_PASSWORD_FIELD_ELS = {
+  otp: { input: forgotPasswordOtpEl, err: forgotPasswordOtpErrEl },
+  password: { input: forgotPasswordPasswordEl, err: forgotPasswordPasswordErrEl },
+  confirm: { input: forgotPasswordConfirmEl, err: forgotPasswordConfirmErrEl }
+};
+
+function authFieldMap(mode) {
+  if (mode === 'register') return SIGNUP_FIELD_ELS;
+  if (mode === 'forgot') return FORGOT_FIELD_ELS;
+  if (mode === 'changePassword') return CHANGE_PASSWORD_FIELD_ELS;
+  return LOGIN_FIELD_ELS;
+}
+
 function clearAuthFieldErrors(mode) {
-  const map = mode === 'register' ? SIGNUP_FIELD_ELS : LOGIN_FIELD_ELS;
+  const map = authFieldMap(mode);
   for (const key of Object.keys(map)) {
     const { input, err } = map[key];
     if (input) input.classList.remove('fieldError');
@@ -403,7 +439,7 @@ function clearAuthFieldErrors(mode) {
 }
 
 function setAuthFieldError(mode, field, message) {
-  const map = mode === 'register' ? SIGNUP_FIELD_ELS : LOGIN_FIELD_ELS;
+  const map = authFieldMap(mode);
   const slot = map[field];
   if (!slot) return false;
   const msg = (message ?? '').toString().trim();
@@ -421,7 +457,14 @@ function setAuthFieldError(mode, field, message) {
 }
 
 function setAuthFormError(mode, message) {
-  const el = mode === 'register' ? signupFormErrorEl : loginFormErrorEl;
+  const el =
+    mode === 'register'
+      ? signupFormErrorEl
+      : mode === 'forgot'
+      ? forgotPasswordFormErrorEl
+      : mode === 'changePassword'
+      ? changePasswordFormErrorEl
+      : loginFormErrorEl;
   if (!el) return;
   const msg = (message ?? '').toString().trim();
   if (!msg) {
@@ -437,8 +480,12 @@ function setAuthFormError(mode, message) {
 function clearAllAuthErrors() {
   clearAuthFieldErrors('login');
   clearAuthFieldErrors('register');
+  clearAuthFieldErrors('forgot');
+  clearAuthFieldErrors('changePassword');
   setAuthFormError('login', '');
   setAuthFormError('register', '');
+  setAuthFormError('forgot', '');
+  setAuthFormError('changePassword', '');
 }
 
 /** Back-compat: a few existing call sites just want to wipe error UI ahead of an action. */
@@ -451,30 +498,56 @@ function setAuthError(message) {
 }
 
 function setAuthMode(mode, { preserveErrors = false } = {}) {
-  const next = mode === 'register' ? 'register' : 'login';
+  const next =
+    mode === 'register'
+      ? 'register'
+      : mode === 'forgot'
+      ? 'forgot'
+      : mode === 'changePassword'
+      ? 'changePassword'
+      : 'login';
   authMode = next;
   const isLogin = next === 'login';
+  const isRegister = next === 'register';
+  const isForgot = next === 'forgot';
+  const isChangePassword = next === 'changePassword';
   if (authTabLoginEl) {
-    authTabLoginEl.classList.toggle('isActive', isLogin);
-    authTabLoginEl.setAttribute('aria-selected', String(isLogin));
+    authTabLoginEl.classList.toggle('isActive', isLogin || isForgot || isChangePassword);
+    authTabLoginEl.setAttribute('aria-selected', String(isLogin || isForgot || isChangePassword));
   }
   if (authTabRegisterEl) {
-    authTabRegisterEl.classList.toggle('isActive', !isLogin);
-    authTabRegisterEl.setAttribute('aria-selected', String(!isLogin));
+    authTabRegisterEl.classList.toggle('isActive', isRegister);
+    authTabRegisterEl.setAttribute('aria-selected', String(isRegister));
   }
   if (authPanelLoginEl) authPanelLoginEl.hidden = !isLogin;
-  if (authPanelRegisterEl) authPanelRegisterEl.hidden = isLogin;
-  if (authTitleEl) authTitleEl.textContent = isLogin ? 'Log in' : 'Create your account';
+  if (authPanelRegisterEl) authPanelRegisterEl.hidden = !isRegister;
+  if (authPanelForgotPasswordEl) authPanelForgotPasswordEl.hidden = !isForgot;
+  if (authPanelChangePasswordEl) authPanelChangePasswordEl.hidden = !isChangePassword;
+  if (authTitleEl) {
+    authTitleEl.textContent = isLogin
+      ? 'Log in'
+      : isRegister
+      ? 'Create your account'
+      : isChangePassword
+      ? 'Change password'
+      : 'Forgot password';
+  }
   if (authSubtitleEl) {
     authSubtitleEl.textContent = isLogin
       ? 'Welcome back. Sign in to your voiceVault account.'
-      : 'Create your voiceVault account.';
+      : isRegister
+      ? 'Create your voiceVault account.'
+      : isChangePassword
+      ? 'Use the OTP sent to your email.'
+      : 'Get an OTP to reset your password.';
   }
   if (!preserveErrors) clearAllAuthErrors();
   setTimeout(() => {
     try {
       if (isLogin) loginEmailEl?.focus();
-      else signupDisplayNameEl?.focus();
+      else if (isRegister) signupDisplayNameEl?.focus();
+      else if (isForgot) forgotPasswordEmailEl?.focus();
+      else if (isChangePassword) forgotPasswordOtpEl?.focus();
     } catch {
       // ignore
     }
@@ -1955,6 +2028,26 @@ function wire() {
     e.preventDefault();
     setAuthMode('register');
   });
+  authSwitchToForgotEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    pendingPasswordResetEmail = '';
+    if (forgotPasswordEmailEl && loginEmailEl?.value) {
+      forgotPasswordEmailEl.value = loginEmailEl.value.trim();
+    }
+    setAuthMode('forgot');
+  });
+  authSwitchToLoginFromForgotEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('login');
+  });
+  authSwitchToLoginFromChangePasswordEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('login');
+  });
+  btnChangePasswordBackEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode('forgot');
+  });
 
   // Clear a field's error highlight as soon as the user starts editing it again.
   for (const slot of Object.values(LOGIN_FIELD_ELS)) {
@@ -1977,6 +2070,130 @@ function wire() {
       setAuthFormError('register', '');
     });
   }
+  for (const slot of Object.values(FORGOT_FIELD_ELS)) {
+    slot.input?.addEventListener('input', () => {
+      pendingPasswordResetEmail = '';
+      slot.input?.classList.remove('fieldError');
+      if (slot.err) {
+        slot.err.hidden = true;
+        slot.err.textContent = '';
+      }
+      setAuthFormError('forgot', '');
+    });
+  }
+  for (const slot of Object.values(CHANGE_PASSWORD_FIELD_ELS)) {
+    slot.input?.addEventListener('input', () => {
+      slot.input?.classList.remove('fieldError');
+      if (slot.err) {
+        slot.err.hidden = true;
+        slot.err.textContent = '';
+      }
+      setAuthFormError('changePassword', '');
+    });
+  }
+
+  btnForgotPasswordSendOtpEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    clearAuthFieldErrors('forgot');
+    setAuthFormError('forgot', '');
+    const email = (forgotPasswordEmailEl?.value ?? '').toString().trim();
+    if (!email) {
+      setAuthFieldError('forgot', 'email', 'Enter your email.');
+      return;
+    }
+    if (!EMAIL_RE.test(email)) {
+      setAuthFieldError('forgot', 'email', 'Enter a valid email address.');
+      return;
+    }
+    try {
+      btnForgotPasswordSendOtpEl.disabled = true;
+      const r = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const j = await safeJson(r);
+      if (!r.ok) {
+        const msg = (j?.error ?? '').toString().trim() || `Request failed (${r.status})`;
+        setAuthFormError('forgot', msg);
+        return;
+      }
+      pendingPasswordResetEmail = email.toLowerCase();
+      if (forgotPasswordOtpEl) forgotPasswordOtpEl.value = '';
+      if (forgotPasswordPasswordEl) forgotPasswordPasswordEl.value = '';
+      if (forgotPasswordConfirmEl) forgotPasswordConfirmEl.value = '';
+      setAuthMode('changePassword', { preserveErrors: false });
+      setAuthFormError('changePassword', 'Check your email for the 6-digit code.');
+    } catch (err) {
+      setAuthFormError('forgot', err?.message ?? String(err));
+    } finally {
+      btnForgotPasswordSendOtpEl.disabled = false;
+    }
+  });
+
+  btnForgotPasswordResetEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    clearAuthFieldErrors('changePassword');
+    setAuthFormError('changePassword', '');
+    const email = pendingPasswordResetEmail || (forgotPasswordEmailEl?.value ?? '').toString().trim().toLowerCase();
+    const otp = (forgotPasswordOtpEl?.value ?? '').toString().trim();
+    const password = (forgotPasswordPasswordEl?.value ?? '').toString();
+    const confirm = (forgotPasswordConfirmEl?.value ?? '').toString();
+    if (!email) {
+      setAuthFormError('changePassword', 'Send an OTP to your email first.');
+      return;
+    }
+    if (!otp) {
+      setAuthFieldError('changePassword', 'otp', 'Enter the OTP.');
+      return;
+    }
+    if (!/^[0-9]{6}$/.test(otp)) {
+      setAuthFieldError('changePassword', 'otp', 'Enter the six-digit code.');
+      return;
+    }
+    if (!password) {
+      setAuthFieldError('changePassword', 'password', 'Enter a new password.');
+      return;
+    }
+    if (password.length < 6) {
+      setAuthFieldError('changePassword', 'password', 'Password must be at least 6 characters.');
+      return;
+    }
+    if (password !== confirm) {
+      setAuthFieldError('changePassword', 'confirm', 'Passwords do not match.');
+      return;
+    }
+    try {
+      btnForgotPasswordResetEl.disabled = true;
+      const r = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, otp, password, confirm_password: confirm })
+      });
+      const j = await safeJson(r);
+      if (!r.ok) {
+        const code = (j?.code ?? '').toString();
+        const field = (j?.field ?? '').toString();
+        const msg = (j?.error ?? '').toString().trim() || `Request failed (${r.status})`;
+        if (field === 'email') {
+          setAuthFormError('changePassword', msg);
+          return;
+        }
+        if (field && setAuthFieldError('changePassword', field, msg)) {
+          return;
+        }
+        setAuthFormError('changePassword', msg);
+        return;
+      }
+      pendingPasswordResetEmail = '';
+      setAuthFormError('changePassword', 'Password changed. You can now log in.');
+      setTimeout(() => setAuthMode('login', { preserveErrors: true }), 1200);
+    } catch (err) {
+      setAuthFormError('changePassword', err?.message ?? String(err));
+    } finally {
+      btnForgotPasswordResetEl.disabled = false;
+    }
+  });
 
   btnSignupAvatarChooseEl?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -2019,6 +2236,18 @@ function wire() {
     if (e.key === 'Enter' && e.target?.id !== 'btnSignupAvatarChoose' && e.target?.id !== 'btnSignupAvatarRemove') {
       e.preventDefault();
       btnAuthRegisterEl?.click();
+    }
+  });
+  authPanelForgotPasswordEl?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      btnForgotPasswordSendOtpEl?.click();
+    }
+  });
+  authPanelChangePasswordEl?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      btnForgotPasswordResetEl?.click();
     }
   });
 
@@ -6872,4 +7101,3 @@ function defaultNoteTitleFromState(state) {
 }
 
 // (Removed auto-incrementing Recording counter; titles are timestamp-based now.)
-

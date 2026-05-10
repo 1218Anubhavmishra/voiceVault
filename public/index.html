@@ -284,7 +284,7 @@
               <button type="button" class="btn floatDockBtn" id="btnFloatSearch" title="Open Search">
                 Search
               </button>
-              <button type="button" class="btn floatDockBtn" id="btnFloatNewNote" title="Toggle New note">+</button>
+              <button type="button" class="btn floatDockBtn" id="btnFloatNewNote" title="Toggle New note">Add New</button>
             </div>
             <div class="floatDockTrailing">
               <button type="button" class="btn floatDockBtn floatDockBtnProcesses" id="btnFloatProcesses" title="Open Processes">
@@ -454,9 +454,111 @@
             <button id="btnAuthLogin" class="btn primary authPrimaryBtn" type="button">Log in</button>
           </div>
 
-          <div class="subtle authSwitchHint">
-            Don't have an account?
+          <div class="subtle authSwitchHint" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
+            <button type="button" class="authSwitchLink" id="authSwitchToForgot">Forgot password?</button>
+            <span>·</span>
+            <span>Don't have an account?</span>
             <button type="button" class="authSwitchLink" id="authSwitchToRegister">Sign up</button>
+          </div>
+        </section>
+
+        <section
+          id="authPanelForgotPassword"
+          class="authPanel"
+          role="tabpanel"
+          aria-labelledby="authTabLogin"
+          hidden
+        >
+          <p class="subtle" style="margin-top:0; margin-bottom:16px">
+            Enter your account email and we will send a 6-digit OTP to reset your password.
+          </p>
+          <label class="label authField authField--inline" data-field="email">
+            <span class="authFieldLabel">Email</span>
+            <span class="authFieldInputCell">
+              <input
+                id="forgotPasswordEmail"
+                class="input authInput"
+                type="email"
+                autocomplete="username"
+                placeholder="you@example.com"
+              />
+              <span class="fieldErrorText" id="forgotPasswordEmailErr" hidden></span>
+            </span>
+          </label>
+
+          <div id="forgotPasswordFormError" class="note err authFormError" hidden></div>
+
+          <div class="row authActionsRow" style="gap: 10px; flex-wrap: wrap;">
+            <button id="btnForgotPasswordSendOtp" class="btn primary authPrimaryBtn" type="button">Send OTP</button>
+          </div>
+
+          <div class="subtle authSwitchHint">
+            Remembered your password?
+            <button type="button" class="authSwitchLink" id="authSwitchToLoginFromForgot">Log in</button>
+          </div>
+        </section>
+
+        <section
+          id="authPanelChangePassword"
+          class="authPanel"
+          role="tabpanel"
+          aria-labelledby="authTabLogin"
+          hidden
+        >
+          <p class="subtle" style="margin-top:0; margin-bottom:16px">
+            Enter the OTP from your email and choose a new password.
+          </p>
+          <label class="label authField authField--inline" data-field="otp">
+            <span class="authFieldLabel">OTP</span>
+            <span class="authFieldInputCell">
+              <input
+                id="forgotPasswordOtp"
+                class="input authInput"
+                type="text"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+                placeholder="123456"
+              />
+              <span class="fieldErrorText" id="forgotPasswordOtpErr" hidden></span>
+            </span>
+          </label>
+          <label class="label authField authField--inline" data-field="password">
+            <span class="authFieldLabel">New password</span>
+            <span class="authFieldInputCell">
+              <input
+                id="forgotPasswordPassword"
+                class="input authInput"
+                type="password"
+                autocomplete="new-password"
+                placeholder="New password"
+              />
+              <span class="fieldErrorText" id="forgotPasswordPasswordErr" hidden></span>
+            </span>
+          </label>
+          <label class="label authField authField--inline" data-field="confirm">
+            <span class="authFieldLabel">Repeat password</span>
+            <span class="authFieldInputCell">
+              <input
+                id="forgotPasswordConfirm"
+                class="input authInput"
+                type="password"
+                autocomplete="new-password"
+                placeholder="Repeat password"
+              />
+              <span class="fieldErrorText" id="forgotPasswordConfirmErr" hidden></span>
+            </span>
+          </label>
+
+          <div id="changePasswordFormError" class="note err authFormError" hidden></div>
+
+          <div class="row authActionsRow" style="gap: 10px; flex-wrap: wrap;">
+            <button id="btnForgotPasswordReset" class="btn primary authPrimaryBtn" type="button">Change password</button>
+            <button id="btnChangePasswordBack" class="btn" type="button">Back</button>
+          </div>
+
+          <div class="subtle authSwitchHint">
+            Remembered your password?
+            <button type="button" class="authSwitchLink" id="authSwitchToLoginFromChangePassword">Log in</button>
           </div>
         </section>
 
@@ -572,4 +674,3 @@
     <script type="module" src="/main.js"></script>
   </body>
 </html>
-

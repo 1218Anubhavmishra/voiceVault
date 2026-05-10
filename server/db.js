@@ -345,6 +345,17 @@ async function migrate(pool) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id          TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL,
+      otp         TEXT NOT NULL,
+      expires_at  TEXT NOT NULL,
+      used_at     TEXT NOT NULL DEFAULT '',
+      created_at  TEXT NOT NULL DEFAULT ${NOW_ISO_DEFAULT}
+    );
+    CREATE INDEX IF NOT EXISTS idx_password_resets_user_id ON password_resets(user_id);
+    CREATE INDEX IF NOT EXISTS idx_password_resets_expires_at ON password_resets(expires_at);
+
     CREATE TABLE IF NOT EXISTS notes (
       id              TEXT PRIMARY KEY,
       user_id         TEXT NOT NULL DEFAULT '',

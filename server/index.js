@@ -17,7 +17,42 @@ import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic
 import { embedTexts, bufferToFloat32, cosineSim } from './embeddings.js';
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
+import nodemailer from 'nodemailer';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5177;
+
+const EMAIL_FROM = (process.env.EMAIL_FROM ?? 'no-reply@voicevault.local').toString().trim();
+const EMAIL_TRANSPORT_URL = (process.env.EMAIL_TRANSPORT_URL ?? '').toString().trim();
+
+function createEmailTransporter() {
+  if (EMAIL_TRANSPORT_URL) {
+    return nodemailer.createTransport(EMAIL_TRANSPORT_URL);
+  }
+  const host = (process.env.EMAIL_SMTP_HOST ?? '').toString().trim();
+  if (!host) return null;
+  const port = Number(process.env.EMAIL_SMTP_PORT ?? '587') || 587;
+  const secure = ((process.env.EMAIL_SMTP_SECURE ?? '').toString().trim() === '1');
+  const authUser = (process.env.EMAIL_SMTP_USER ?? '').toString().trim();
+  const authPass = (process.env.EMAIL_SMTP_PASS ?? '').toString().trim();
+  const transport = { host, port, secure };
+  if (authUser && authPass) transport.auth = { user: authUser, pass: authPass };
+  return nodemailer.createTransport(transport);
+}
+
+const EMAIL_TRANSPORTER = createEmailTransporter();
+
+async function sendPasswordResetEmail(email, otp) {
+  if (!EMAIL_TRANSPORTER) {
+    throw new Error('Email transport is not configured');
+  }
+  const subject = 'voiceVault password reset code';
+  const text = `Your voiceVault password reset code is ${otp}. It expires in 20 minutes.`;
+  await EMAIL_TRANSPORTER.sendMail({
+    from: EMAIL_FROM,
+    to: email,
+    subject,
+    text
+  });
+}
 
 const SESSION_MAX_AGE_MS = (() => {
   const raw = (process.env.VOICEVAULT_SESSION_MAX_AGE_MS ?? '').toString().trim();
@@ -634,6 +669,121 @@ app.post('/api/auth/login', async (req, res) => {
   await redirectFirstUserIfNeeded();
   const { password_hash: _ph, ...rest } = row;
   res.json({ ok: true, user: userToPublicJson(rest) });
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const email = (req.body?.email ?? '').toString().trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required', code: 'missing_email', field: 'email' });
+  }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address', code: 'invalid_email', field: 'email' });
+  }
+
+  const user = await db.prepare(`SELECT id FROM users WHERE email = ?`).get(email);
+  if (!user) {
+    return res.json({ ok: true });
+  }
+
+  if (!EMAIL_TRANSPORTER) {
+    return res.status(500).json({ error: 'Email transport is not configured' });
+  }
+
+  const otp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 20 * 60 * 1000).toISOString();
+  const id = nanoid(12);
+
+  try {
+    await db.prepare(
+      `INSERT INTO password_resets (id, user_id, otp, expires_at, used_at, created_at)
+       VALUES (@id, @user_id, @otp, @expires_at, @used_at, @created_at)`
+    ).run({
+      id,
+      user_id: user.id,
+      otp,
+      expires_at: expiresAt,
+      used_at: '',
+      created_at: now.toISOString()
+    });
+  } catch (error) {
+    console.error('Failed to store password reset token:', error);
+    return res.status(500).json({ error: 'Unable to process password reset' });
+  }
+
+  try {
+    await sendPasswordResetEmail(email, otp);
+  } catch (error) {
+    console.error('Failed to send password reset email:', error);
+    return res.status(500).json({ error: 'Unable to send password reset email' });
+  }
+
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const email = (req.body?.email ?? '').toString().trim().toLowerCase();
+  const otp = (req.body?.otp ?? '').toString().trim();
+  const password = (req.body?.password ?? '').toString();
+  const confirmPassword = (req.body?.confirm_password ?? req.body?.confirm ?? '').toString();
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required', code: 'missing_email', field: 'email' });
+  }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address', code: 'invalid_email', field: 'email' });
+  }
+  if (!otp) {
+    return res.status(400).json({ error: 'OTP is required', code: 'missing_otp', field: 'otp' });
+  }
+  if (!/^[0-9]{6}$/.test(otp)) {
+    return res.status(400).json({ error: 'Enter the six-digit code', code: 'invalid_otp_format', field: 'otp' });
+  }
+  if (!password) {
+    return res.status(400).json({ error: 'Password is required', code: 'missing_password', field: 'password' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password is too short (min 6 characters)', code: 'password_too_short', field: 'password' });
+  }
+  if (confirmPassword && confirmPassword !== password) {
+    return res.status(400).json({ error: 'Passwords do not match', code: 'password_mismatch', field: 'confirm' });
+  }
+
+  const user = await db.prepare(`SELECT id FROM users WHERE email = ?`).get(email);
+  if (!user) {
+    return res.status(404).json({ error: 'No account found with that email', code: 'email_not_found', field: 'email' });
+  }
+
+  const reset = await db
+    .prepare(`SELECT id, otp, expires_at, used_at FROM password_resets WHERE user_id = ? AND otp = ? ORDER BY created_at DESC LIMIT 1`)
+    .get(user.id, otp);
+  if (!reset) {
+    return res.status(400).json({ error: 'Invalid code', code: 'invalid_otp', field: 'otp' });
+  }
+  if (reset.used_at) {
+    return res.status(400).json({ error: 'This code has already been used', code: 'otp_used', field: 'otp' });
+  }
+  if (new Date(reset.expires_at) < new Date()) {
+    return res.status(400).json({ error: 'The code has expired', code: 'otp_expired', field: 'otp' });
+  }
+
+  const hash = bcrypt.hashSync(password, 10);
+  const updatedAt = new Date().toISOString();
+  try {
+    await db.prepare(`UPDATE users SET password_hash = @password_hash, updated_at = @updated_at WHERE id = @id`).run({
+      password_hash: hash,
+      updated_at: updatedAt,
+      id: user.id
+    });
+    await db.prepare(`UPDATE password_resets SET used_at = @used_at WHERE id = @id`).run({
+      used_at: updatedAt,
+      id: reset.id
+    });
+  } catch (error) {
+    console.error('Failed to reset password:', error);
+    return res.status(500).json({ error: 'Unable to reset password' });
+  }
+
+  res.json({ ok: true });
 });
 
 app.patch('/api/auth/profile', async (req, res) => {
@@ -4449,4 +4599,3 @@ function endOfMonth(d) {
   x.setDate(0); // last day of previous month
   return endOfDay(x);
 }
-
