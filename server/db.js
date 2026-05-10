@@ -525,6 +525,17 @@ async function migrate(pool) {
     END $$;
     CREATE INDEX IF NOT EXISTS idx_notes_tsv ON notes USING GIN (tsv);
   `);
+
+  // Persistent blob storage. The legacy on-disk blob store under VV_DATA_DIR/blobs is
+  // ephemeral on managed hosts (Render, Fly), so all newly-uploaded bytes must also
+  // live in Postgres BYTEA columns. Existing databases get these columns added
+  // idempotently (DEFAULT empty bytea) and are filled lazily on first access by the
+  // ensureBlobInPostgres() backfill helper in server/index.js.
+  await pool.query(`
+    ALTER TABLE users        ADD COLUMN IF NOT EXISTS avatar_blob BYTEA NOT NULL DEFAULT '\\x'::bytea;
+    ALTER TABLE users        ADD COLUMN IF NOT EXISTS avatar_mime TEXT  NOT NULL DEFAULT '';
+    ALTER TABLE note_drafts  ADD COLUMN IF NOT EXISTS audio_blob  BYTEA NOT NULL DEFAULT '\\x'::bytea;
+  `);
 }
 
 /* ---------------------------------------------------------------------------

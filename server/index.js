@@ -353,6 +353,124 @@ function writeBlobIfMissing(blobId, buffer) {
   }
 }
 
+/**
+ * Read a blob owned by the given user. Tries disk first (fast path / range-streaming-friendly),
+ * then falls back to whichever Postgres BYTEA column owns this blob_id (notes.audio_blob,
+ * note_drafts.audio_blob, or users.avatar_blob). Returns { bytes, mime, source } where
+ * `source` is 'disk' | 'pg-notes' | 'pg-drafts' | 'pg-users' | null.
+ *
+ * Designed to make the on-disk blobsDir purely a cache. On managed hosts (Render et al.)
+ * that cache is wiped on every redeploy; Postgres holds the durable copy.
+ */
+async function loadBlobBytesForUser(blobId, userId) {
+  const bid = (blobId ?? '').toString().trim();
+  if (!bid || !/^[a-f0-9]{64}$/i.test(bid)) return { bytes: null, mime: null, source: null };
+
+  const diskPath = path.join(blobsDir, bid);
+  if (fs.existsSync(diskPath)) {
+    try {
+      const bytes = fs.readFileSync(diskPath);
+      if (bytes?.length) return { bytes, mime: null, source: 'disk' };
+    } catch {
+      // fall through to Postgres
+    }
+  }
+
+  // Postgres BYTEA fallbacks (each scoped to the requesting user for authz).
+  try {
+    const noteRow = await db
+      .prepare(
+        `SELECT audio_blob, audio_mime
+         FROM notes
+         WHERE audio_blob_id = ? AND user_id = ? AND length(audio_blob) > 0
+         LIMIT 1`
+      )
+      .get(bid, userId);
+    if (noteRow?.audio_blob && Buffer.isBuffer(noteRow.audio_blob) && noteRow.audio_blob.length > 0) {
+      return { bytes: noteRow.audio_blob, mime: (noteRow.audio_mime ?? '').toString() || null, source: 'pg-notes' };
+    }
+  } catch {
+    // ignore; try next table
+  }
+
+  try {
+    const draftRow = await db
+      .prepare(
+        `SELECT audio_blob, audio_mime
+         FROM note_drafts
+         WHERE audio_blob_id = ? AND user_id = ? AND length(audio_blob) > 0
+         LIMIT 1`
+      )
+      .get(bid, userId);
+    if (draftRow?.audio_blob && Buffer.isBuffer(draftRow.audio_blob) && draftRow.audio_blob.length > 0) {
+      return { bytes: draftRow.audio_blob, mime: (draftRow.audio_mime ?? '').toString() || null, source: 'pg-drafts' };
+    }
+  } catch {
+    // ignore; try next table
+  }
+
+  try {
+    const userRow = await db
+      .prepare(
+        `SELECT avatar_blob, avatar_mime
+         FROM users
+         WHERE avatar_blob_id = ? AND id = ? AND length(avatar_blob) > 0
+         LIMIT 1`
+      )
+      .get(bid, userId);
+    if (userRow?.avatar_blob && Buffer.isBuffer(userRow.avatar_blob) && userRow.avatar_blob.length > 0) {
+      return { bytes: userRow.avatar_blob, mime: (userRow.avatar_mime ?? '').toString() || null, source: 'pg-users' };
+    }
+  } catch {
+    // ignore
+  }
+
+  return { bytes: null, mime: null, source: null };
+}
+
+/**
+ * Lazy backfill: when a blob was served from the disk cache but no BYTEA copy exists in
+ * Postgres yet (e.g. data uploaded before this fix shipped), copy the bytes into whichever
+ * table owns this blob_id. Best-effort — failures are swallowed so reads keep working.
+ */
+async function ensureBlobInPostgres(blobId, userId, bytes, mime) {
+  const bid = (blobId ?? '').toString().trim();
+  if (!bid || !bytes?.length) return;
+  const ct = (mime ?? '').toString();
+  try {
+    const r1 = await db
+      .prepare(
+        `UPDATE notes
+         SET audio_blob = ?,
+             audio_mime = CASE WHEN audio_mime = '' AND ? <> '' THEN ? ELSE audio_mime END
+         WHERE audio_blob_id = ? AND user_id = ? AND length(audio_blob) = 0`
+      )
+      .run(bytes, ct, ct, bid, userId);
+    if ((r1?.changes ?? 0) > 0) return;
+
+    const r2 = await db
+      .prepare(
+        `UPDATE note_drafts
+         SET audio_blob = ?,
+             audio_mime = CASE WHEN audio_mime = '' AND ? <> '' THEN ? ELSE audio_mime END
+         WHERE audio_blob_id = ? AND user_id = ? AND length(audio_blob) = 0`
+      )
+      .run(bytes, ct, ct, bid, userId);
+    if ((r2?.changes ?? 0) > 0) return;
+
+    await db
+      .prepare(
+        `UPDATE users
+         SET avatar_blob = ?,
+             avatar_mime = CASE WHEN avatar_mime = '' AND ? <> '' THEN ? ELSE avatar_mime END
+         WHERE avatar_blob_id = ? AND id = ? AND length(avatar_blob) = 0`
+      )
+      .run(bytes, ct, ct, bid, userId);
+  } catch {
+    // ignore — read path already returned bytes successfully
+  }
+}
+
 async function countBlobRefs(dbInst, blobId) {
   const b = (blobId ?? '').toString().trim();
   if (!b) return { notes: 999, drafts: 999, users: 999 };
@@ -577,20 +695,53 @@ app.patch('/api/auth/profile', async (req, res) => {
 app.get('/api/auth/avatar', async (req, res) => {
   const uid = currentUserId(req);
   if (!uid) return res.status(401).end();
-  const row = await db.prepare(`SELECT avatar_blob_id FROM users WHERE id = ?`).get(uid);
+  const row = await db
+    .prepare(`SELECT avatar_blob_id, avatar_blob, avatar_mime FROM users WHERE id = ?`)
+    .get(uid);
   const bid = (row?.avatar_blob_id ?? '').toString().trim();
   if (!bid || !/^[a-f0-9]{64}$/i.test(bid)) return res.status(404).end();
+
+  // 1) Try disk cache first.
   const p = path.join(blobsDir, bid);
-  if (!fs.existsSync(p)) return res.status(404).end();
-  try {
-    const buf = fs.readFileSync(p);
-    const ct = imageContentTypeFromBuffer(buf);
-    res.setHeader('Content-Type', ct.startsWith('image/') ? ct : 'application/octet-stream');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-    return res.end(buf);
-  } catch {
-    return res.status(404).end();
+  let bytes = null;
+  let storedMime = (row?.avatar_mime ?? '').toString().trim();
+
+  if (fs.existsSync(p)) {
+    try {
+      const buf = fs.readFileSync(p);
+      if (buf?.length) bytes = buf;
+    } catch {
+      // fall through to BYTEA
+    }
   }
+
+  // 2) Fall back to Postgres BYTEA (durable copy).
+  if (!bytes && row?.avatar_blob && Buffer.isBuffer(row.avatar_blob) && row.avatar_blob.length > 0) {
+    bytes = row.avatar_blob;
+    // Re-prime the disk cache so subsequent reads are fast.
+    writeBlobIfMissing(bid, bytes);
+  }
+
+  if (!bytes) return res.status(404).end();
+
+  // 3) If we read from disk but Postgres has no BYTEA copy yet, backfill it once.
+  const pgEmpty = !row?.avatar_blob || !Buffer.isBuffer(row.avatar_blob) || row.avatar_blob.length === 0;
+  if (pgEmpty) {
+    try {
+      const ct = storedMime || imageContentTypeFromBuffer(bytes);
+      await db
+        .prepare(`UPDATE users SET avatar_blob = ?, avatar_mime = ? WHERE id = ?`)
+        .run(bytes, ct.startsWith('image/') ? ct : '', uid);
+      if (!storedMime) storedMime = ct;
+    } catch {
+      // ignore — read still succeeds
+    }
+  }
+
+  const ct = storedMime || imageContentTypeFromBuffer(bytes);
+  res.setHeader('Content-Type', ct.startsWith('image/') ? ct : 'application/octet-stream');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  return res.end(bytes);
 });
 
 app.post('/api/auth/avatar', uploadAvatar.single('avatar'), async (req, res) => {
@@ -601,11 +752,22 @@ app.post('/api/auth/avatar', uploadAvatar.single('avatar'), async (req, res) => 
   const ct = imageContentTypeFromBuffer(buf);
   if (!ct.startsWith('image/')) return res.status(400).json({ error: 'File must be an image (JPEG, PNG, GIF, or WebP)' });
   const blobId = crypto.createHash('sha256').update(buf).digest('hex');
+  // Best-effort write to the on-disk cache (may fail on read-only filesystems —
+  // Postgres is the durable copy, see UPDATE below).
   writeBlobIfMissing(blobId, buf);
   const prev = await db.prepare(`SELECT avatar_blob_id FROM users WHERE id = ?`).get(uid);
   const oldBid = (prev?.avatar_blob_id ?? '').toString().trim();
   const now = new Date().toISOString();
-  await db.prepare(`UPDATE users SET avatar_blob_id = @bid, updated_at = @u WHERE id = @id`).run({ bid: blobId, u: now, id: uid });
+  await db
+    .prepare(
+      `UPDATE users
+       SET avatar_blob_id = @bid,
+           avatar_blob    = @blob,
+           avatar_mime    = @mime,
+           updated_at     = @u
+       WHERE id = @id`
+    )
+    .run({ bid: blobId, blob: buf, mime: ct, u: now, id: uid });
   if (oldBid && oldBid !== blobId) await maybeUnlinkBlob(db, blobsDir, oldBid);
   return res.json({ ok: true, has_avatar: true });
 });
@@ -616,7 +778,16 @@ app.delete('/api/auth/avatar', async (req, res) => {
   const row = await db.prepare(`SELECT avatar_blob_id FROM users WHERE id = ?`).get(uid);
   const oldBid = (row?.avatar_blob_id ?? '').toString().trim();
   const now = new Date().toISOString();
-  await db.prepare(`UPDATE users SET avatar_blob_id = '', updated_at = ? WHERE id = ?`).run(now, uid);
+  await db
+    .prepare(
+      `UPDATE users
+       SET avatar_blob_id = '',
+           avatar_blob    = ?,
+           avatar_mime    = '',
+           updated_at     = ?
+       WHERE id = ?`
+    )
+    .run(Buffer.alloc(0), now, uid);
   if (oldBid) await maybeUnlinkBlob(db, blobsDir, oldBid);
   return res.json({ ok: true, has_avatar: false });
 });
@@ -1607,18 +1778,20 @@ app.post('/api/note-drafts', upload.single('audio'), async (req, res) => {
     if (!audio?.buffer?.length) return res.status(400).json({ error: 'Missing audio file' });
     const id = nanoid(12);
     const blobId = sha256Hex(audio.buffer);
+    // Disk write is best-effort cache; Postgres BYTEA below is the durable copy.
     writeBlobIfMissing(blobId, audio.buffer);
     const now = new Date().toISOString();
     const dm = clampInt(req.body?.duration_ms, 0, 24 * 60 * 60 * 1000, 0);
     await db.prepare(
-      `INSERT INTO note_drafts (id, user_id, audio_blob_id, audio_mime, audio_bytes, duration_ms, created_at, updated_at)
-       VALUES (@id, @user_id, @audio_blob_id, @audio_mime, @audio_bytes, @duration_ms, @created_at, @updated_at)`
+      `INSERT INTO note_drafts (id, user_id, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, created_at, updated_at)
+       VALUES (@id, @user_id, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @created_at, @updated_at)`
     ).run({
       id,
       user_id: req.user_id,
       audio_blob_id: blobId,
       audio_mime: audio.mimetype || 'application/octet-stream',
       audio_bytes: audio.size,
+      audio_blob: audio.buffer,
       duration_ms: dm,
       created_at: now,
       updated_at: now
@@ -1646,13 +1819,14 @@ app.put('/api/note-drafts/:id', upload.single('audio'), async (req, res) => {
     const dm = clampInt(req.body?.duration_ms, 0, 24 * 60 * 60 * 1000, 0);
     await db.prepare(
       `UPDATE note_drafts SET audio_blob_id = @audio_blob_id, audio_mime = @audio_mime, audio_bytes = @audio_bytes,
-       duration_ms = @duration_ms, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`
+       audio_blob = @audio_blob, duration_ms = @duration_ms, updated_at = @updated_at WHERE id = @id AND user_id = @user_id`
     ).run({
       id,
       user_id: req.user_id,
       audio_blob_id: blobId,
       audio_mime: audio.mimetype || 'application/octet-stream',
       audio_bytes: audio.size,
+      audio_blob: audio.buffer,
       duration_ms: dm,
       updated_at: now
     });
@@ -1708,17 +1882,31 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
       audioSize = audio.size || audioBuffer.length;
     } else if (draftId) {
       const row = await db
-        .prepare(`SELECT audio_blob_id, audio_mime, audio_bytes FROM note_drafts WHERE id = ? AND user_id = ?`)
+        .prepare(
+          `SELECT audio_blob_id, audio_mime, audio_bytes, audio_blob FROM note_drafts WHERE id = ? AND user_id = ?`
+        )
         .get(draftId, req.user_id);
       const bid = (row?.audio_blob_id ?? '').toString().trim();
-      const bytes = Number(row?.audio_bytes ?? 0) || 0;
-      if (bid && bytes > 0) {
+      const declaredBytes = Number(row?.audio_bytes ?? 0) || 0;
+      // Disk first (fast), then Postgres BYTEA fallback so drafts survive container redeploys.
+      if (bid && declaredBytes > 0) {
         const blobPath = path.join(blobsDir, bid);
         if (fs.existsSync(blobPath)) {
-          audioBuffer = fs.readFileSync(blobPath);
-          audioMime = (row?.audio_mime ?? '').toString().trim() || audioMime;
-          audioSize = bytes;
+          try {
+            audioBuffer = fs.readFileSync(blobPath);
+          } catch {
+            audioBuffer = null;
+          }
         }
+      }
+      if (!audioBuffer?.length && row?.audio_blob && Buffer.isBuffer(row.audio_blob) && row.audio_blob.length > 0) {
+        audioBuffer = row.audio_blob;
+        // Re-prime the disk cache so range-streamed playback works after this save.
+        if (bid) writeBlobIfMissing(bid, audioBuffer);
+      }
+      if (audioBuffer?.length) {
+        audioMime = (row?.audio_mime ?? '').toString().trim() || audioMime;
+        audioSize = declaredBytes > 0 ? declaredBytes : audioBuffer.length;
       }
     }
 
@@ -2561,26 +2749,42 @@ app.get('/api/notes/:id/audio', async (req, res) => {
 app.get('/api/blobs/:id', async (req, res) => {
   const blobId = (req.params?.id ?? '').toString().trim();
   if (!blobId || !/^[a-f0-9]{64}$/i.test(blobId)) return res.status(400).end();
-  const p = path.join(blobsDir, blobId);
-  if (!fs.existsSync(p)) return res.status(404).end();
 
-  const allowed = await db
-    .prepare(`SELECT 1 AS ok FROM notes WHERE audio_blob_id = ? AND user_id = ? LIMIT 1`)
-    .get(blobId, req.user_id);
-  if (!allowed) return res.status(404).end();
+  // Disk-first, then Postgres BYTEA. loadBlobBytesForUser also enforces ownership
+  // (a blob is "owned" by a user when one of notes/note_drafts/users has a row with
+  // matching blob_id + user_id), so unauthorized callers can't probe arbitrary IDs.
+  const { bytes, mime, source } = await loadBlobBytesForUser(blobId, req.user_id);
+  if (!bytes) return res.status(404).end();
 
-  // Content-Type: best-effort from notes table (fallback octet-stream).
-  // If multiple notes reference a blob, pick any matching mime.
-  const mimeRow = await db
-    .prepare(`SELECT audio_mime FROM notes WHERE audio_blob_id = ? AND user_id = ? AND audio_mime != '' LIMIT 1`)
-    .get(blobId, req.user_id);
-  const contentType = (mimeRow?.audio_mime ?? 'application/octet-stream').toString() || 'application/octet-stream';
+  // Auto-heal: keep both stores in sync so the next redeploy is safe.
+  if (source === 'disk') {
+    // Served from the ephemeral disk cache → make sure Postgres has a durable copy.
+    ensureBlobInPostgres(blobId, req.user_id, bytes, mime ?? '').catch(() => {});
+  } else if (source && source !== 'disk') {
+    // Served from Postgres (disk had no copy) → cache it back to disk for fast streaming next time.
+    writeBlobIfMissing(blobId, bytes);
+  }
+
+  // Content-Type: prefer the mime stored alongside the BYTEA, else look up any matching note row.
+  let contentType = mime;
+  if (!contentType) {
+    try {
+      const mimeRow = await db
+        .prepare(
+          `SELECT audio_mime FROM notes WHERE audio_blob_id = ? AND user_id = ? AND audio_mime != '' LIMIT 1`
+        )
+        .get(blobId, req.user_id);
+      contentType = (mimeRow?.audio_mime ?? '').toString();
+    } catch {
+      // ignore
+    }
+  }
+  if (!contentType) contentType = 'application/octet-stream';
 
   res.setHeader('Content-Type', contentType);
   res.setHeader('Accept-Ranges', 'bytes');
 
-  const stat = fs.statSync(p);
-  const size = stat.size;
+  const size = bytes.length;
   const range = (req.headers.range ?? '').toString();
   if (range.startsWith('bytes=')) {
     const { start, end } = parseRange(range, size);
@@ -2588,10 +2792,10 @@ app.get('/api/blobs/:id', async (req, res) => {
     res.status(206);
     res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
     res.setHeader('Content-Length', String(end - start + 1));
-    return fs.createReadStream(p, { start, end }).pipe(res);
+    return res.end(bytes.subarray(start, end + 1));
   }
   res.setHeader('Content-Length', String(size));
-  return fs.createReadStream(p).pipe(res);
+  return res.end(bytes);
 });
 
 app.post('/api/notes/:id/retry', async (req, res) => {
