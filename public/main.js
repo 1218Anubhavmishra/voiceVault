@@ -3048,6 +3048,9 @@ async function startRecording(state, { onUi, label }) {
     return;
   }
   try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone capture is not available in this browser/context.');
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (label === 'note') void abandonServerNoteDraft();
     const mimeType = pickMimeType();
@@ -3129,10 +3132,25 @@ async function startRecording(state, { onUi, label }) {
     }
     setStatus(`Recording ${label}…`);
   } catch (err) {
-    setStatus(`Mic error: ${err?.message ?? err}`, true);
+    setStatus(`Mic error: ${microphoneErrorMessage(err)}`, true);
     state.isRecording = false;
     onUi?.(uiState(state));
   }
+}
+
+function microphoneErrorMessage(err) {
+  const name = (err?.name ?? '').toString();
+  const msg = (err?.message ?? err ?? '').toString().trim();
+  if (name === 'NotAllowedError' || name === 'SecurityError' || /permission\s*denied/i.test(msg)) {
+    return 'Microphone permission denied. Allow microphone access for localhost:5177 in the browser site settings, then press Record again.';
+  }
+  if (name === 'NotFoundError' || /requested device not found|no.*microphone/i.test(msg)) {
+    return 'No microphone was found. Connect or enable a microphone, then press Record again.';
+  }
+  if (name === 'NotReadableError' || /could not start|in use/i.test(msg)) {
+    return 'The microphone is busy or blocked by another app. Close other recording apps and try again.';
+  }
+  return msg || 'Unable to start microphone recording.';
 }
 
 function stopRecording(state, { onUi } = {}) {
@@ -6071,7 +6089,7 @@ async function transcribeFullPreviewImpl(signal) {
         duration_ms: Math.round(note.durationMs || 0),
         audio_bytes: Number(note.audioBlob?.size || 0) || 0
       };
-      applyTranscriptTitleIfAutomatic(transcriptForBundle);
+      applySuggestedTitleIfAutomatic((data?.suggested_title ?? '').toString(), transcriptForBundle);
       noteFullPreviewGateOk = true;
       noteAllowManualSaveFinal = false;
       if (liveTxStatusEl) liveTxStatusEl.hidden = true;
@@ -7206,6 +7224,21 @@ function applyTranscriptTitleIfAutomatic(transcript) {
   titleEl.value = generated;
   noteTitleUserEdited = false;
   return true;
+}
+
+function applySuggestedTitleIfAutomatic(suggestedTitle, fallbackTranscript = '') {
+  if (!titleEl || noteTitleUserEdited || !isAutomaticNoteTitle(titleEl.value)) return false;
+  const direct = (suggestedTitle ?? '')
+    .toString()
+    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (direct && !/^(```|json|\{|\[)/i.test(direct)) {
+    titleEl.value = direct.length > 72 ? `${direct.slice(0, 69).trim()}...` : direct;
+    noteTitleUserEdited = false;
+    return true;
+  }
+  return applyTranscriptTitleIfAutomatic(fallbackTranscript);
 }
 
 // (Removed auto-incrementing Recording counter; titles are timestamp-based now.)

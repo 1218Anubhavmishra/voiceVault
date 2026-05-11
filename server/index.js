@@ -108,6 +108,49 @@ function titleFromTranscriptContext(transcript) {
   return titled.length > 72 ? `${titled.slice(0, 69).trim()}...` : titled;
 }
 
+async function generateOpenAiNoteTitle(transcript) {
+  if (!openai || process.env.VOICEVAULT_AI_TITLES === '0') return '';
+  const text = formatTranscript(transcript ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const excerpt = text.slice(0, 2000);
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_TITLE_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-5.4-nano',
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Create a concise note title from a voice transcript. Return only the title, no quotes, no punctuation-only labels. Use the transcript language when possible.'
+        },
+        {
+          role: 'user',
+          content: [
+            'Write a natural title of 2 to 8 words for this note.',
+            'Avoid generic words like Recording, Upload, Transcript, Audio, or Note unless they are truly the subject.',
+            '',
+            excerpt
+          ].join('\n')
+        }
+      ]
+    });
+    return sanitizeAiTitle(completion?.choices?.[0]?.message?.content ?? '');
+  } catch (e) {
+    console.warn('[voicevault] OpenAI title generation failed:', e?.message ?? e);
+    return '';
+  }
+}
+
+function sanitizeAiTitle(value) {
+  const s = (value ?? '')
+    .toString()
+    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s || /^(```|json|\{|\[)/i.test(s)) return '';
+  return s.length > 72 ? `${s.slice(0, 69).trim()}...` : s;
+}
+
 /**
  * Notes list: expose pending ingestion work so the UI can recompute "time left" from queue state
  * (instead of extending a blind +45s budget when the first audio-based guess hits zero).
@@ -2215,10 +2258,14 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
       const out = await transcribeWithLanguageHintFallback(tmpPath, {
         language: safeLanguage
       });
+      const transcript = formatTranscript(out?.transcript ?? '');
+      const aiTitle = await generateOpenAiNoteTitle(transcript);
       res.json({
-        transcript: formatTranscript(out?.transcript ?? ''),
-      language: out?.language ?? '',
-      segments: Array.isArray(out?.segments) ? out.segments : []
+        transcript,
+        suggested_title: aiTitle || titleFromTranscriptContext(transcript),
+        title_source: aiTitle ? 'openai' : 'heuristic',
+        language: out?.language ?? '',
+        segments: Array.isArray(out?.segments) ? out.segments : []
       });
     } catch (e) {
       if (!res.headersSent) {
@@ -3614,7 +3661,8 @@ async function finalizeNoteFromSttOutput(
 
   const updatedAt = new Date().toISOString();
   const priorDisplay = (row.display_title ?? '').toString().trim();
-  const generatedDisplay = titleFromTranscriptContext(transcript);
+  const aiDisplay = await generateOpenAiNoteTitle(transcript);
+  const generatedDisplay = aiDisplay || titleFromTranscriptContext(transcript);
   const finalDisplayTitle =
     priorDisplay && !isAutomaticNoteTitle(priorDisplay)
       ? priorDisplay
