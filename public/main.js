@@ -3369,7 +3369,10 @@ async function refreshResults(q = '') {
       // ignore
     }
   } else {
-    // Hybrid blend: semantic + keyword (FTS).
+    // Hybrid blend: always show all notes, but rank them by similarity instead of hiding non-matches.
+    const urlAll = new URL('/api/notes', window.location.origin);
+    urlAll.searchParams.set('limit', '1000');
+
     const urlSem = new URL('/api/semantic', window.location.origin);
     urlSem.searchParams.set('q', queryText);
     urlSem.searchParams.set('k', '15');
@@ -3377,96 +3380,71 @@ async function refreshResults(q = '') {
     urlFts.searchParams.set('q', queryText);
     urlFts.searchParams.set('limit', '50');
 
-    const [semResp, ftsResp] = await Promise.all([fetch(urlSem.toString()), fetch(urlFts.toString())]);
-    if (semResp.status === 401 || ftsResp.status === 401) {
+    const [allResp, semResp, ftsResp] = await Promise.all([
+      fetch(urlAll.toString()),
+      fetch(urlSem.toString()),
+      fetch(urlFts.toString())
+    ]);
+    if (allResp.status === 401 || semResp.status === 401 || ftsResp.status === 401) {
       openLoginUi();
       setStatus('Signed out — please log in', true);
       return;
     }
-    if (!semResp.ok && !ftsResp.ok) {
+    if (!allResp.ok) {
       resultsEl.innerHTML = `<div class="note err resultsBanner">Failed to load notes</div>`;
       syncProcessingNotesPoll([]);
       setStatus('Failed to load search results', true);
       return;
     }
+
+    const allJson = await safeJson(allResp);
+    const allItems = Array.isArray(allJson?.items) ? allJson.items : [];
     const semJson = await safeJson(semResp);
     const ftsJson = await safeJson(ftsResp);
     const semItems = Array.isArray(semJson?.items) ? semJson.items : [];
     const ftsItems = Array.isArray(ftsJson?.items) ? ftsJson.items : [];
 
     const byId = new Map();
-    /** Semantic hits are chunk-shaped; merging `{...fts, ...sem}` can overwrite note fields with null/empty from JSON. */
-    function repairHybridMergedNote(fts, merged) {
-      const out = { ...merged };
-      const ftsLang = (fts?.language ?? '').toString().trim();
-      if (!(out.language ?? '').toString().trim() && ftsLang) out.language = fts.language;
-      const ftsBody = (fts?.body ?? '').toString();
-      if (!(out.body ?? '').toString().trim() && ftsBody.trim()) out.body = fts.body;
-      const ftsDt = (fts?.display_title ?? '').toString().trim();
-      if (!(out.display_title ?? '').toString().trim() && ftsDt) out.display_title = fts.display_title;
-      if (!(out?.stt_provider ?? '').toString().trim() && (fts?.stt_provider ?? '').toString().trim()) {
-        out.stt_provider = fts.stt_provider;
-      }
-      if ((out?.status ?? '').toString() === 'processing') {
-        const u = Number(out.processing_pending_units);
-        const ftsU = Number(fts?.processing_pending_units);
-        if (!(Number.isFinite(u) && u > 0) && Number.isFinite(ftsU) && ftsU > 0) {
-          out.processing_pending_units = fts.processing_pending_units;
-        }
-        if (!(out?.processing_running_locked_at ?? '').toString().trim() && (fts?.processing_running_locked_at ?? '').toString().trim()) {
-          out.processing_running_locked_at = fts.processing_running_locked_at;
-        }
-        if (!(out?.processing_coarse_stage ?? '').toString().trim() && (fts?.processing_coarse_stage ?? '').toString().trim()) {
-          out.processing_coarse_stage = fts.processing_coarse_stage;
-        }
-        if (!(out?.transcribe_mode ?? '').toString().trim() && (fts?.transcribe_mode ?? '').toString().trim()) {
-          out.transcribe_mode = fts.transcribe_mode;
-        }
-      }
-      return out;
+    for (const it of allItems) {
+      const id = (it?.id ?? '').toString();
+      if (!id) continue;
+      byId.set(id, { ...it, _vvSort: noteSearchRelevanceScore(it, queryText) });
     }
+
     for (const it of semItems) {
       const id = (it?.id ?? '').toString();
       if (!id) continue;
       const topScore = Number(it?.matches?.[0]?.score ?? 0) || 0;
-      byId.set(id, { ...it, _vvSort: 10_000 + topScore });
+      const existing = byId.get(id) ?? { ...it, _vvSort: 0 };
+      byId.set(id, { ...existing, ...it, _vvSort: Math.max(Number(existing._vvSort ?? 0), 10000 + topScore) });
     }
+
     for (let i = 0; i < ftsItems.length; i += 1) {
       const it = ftsItems[i];
       const id = (it?.id ?? '').toString();
       if (!id) continue;
-      if (!byId.has(id)) {
-        byId.set(id, { ...it, _vvSort: 1000 - i });
-      } else {
-        const cur = byId.get(id);
-        const merged = { ...it, ...cur, matches: cur?.matches ?? it?.matches ?? [], _vvSort: cur?._vvSort ?? 0 };
-        byId.set(id, repairHybridMergedNote(it, merged));
-      }
+      const existing = byId.get(id) ?? { ...it, _vvSort: 0 };
+      const baseScore = 1000 - i;
+      byId.set(id, { ...existing, ...it, _vvSort: Math.max(Number(existing._vvSort ?? 0), baseScore) });
     }
+
     items = Array.from(byId.values());
-    items.sort((a, b) => (Number(b?._vvSort ?? 0) || 0) - (Number(a?._vvSort ?? 0) || 0));
+    items.sort((a, b) => {
+      const sa = Number(a?._vvSort ?? 0) || 0;
+      const sb = Number(b?._vvSort ?? 0) || 0;
+      if (sb !== sa) return sb - sa;
+      const da = Date.parse(a?.created_at ?? '') || 0;
+      const db = Date.parse(b?.created_at ?? '') || 0;
+      return db - da;
+    });
     items = items.map((x) => {
       const { _vvSort, ...rest } = x || {};
       return rest;
     });
-
-    // Only show notes that appear in both retrieval paths when both succeeded—drops
-    // semantic-only or keyword-only hits so tiles match the combined relevance intent.
-    if (semResp.ok && ftsResp.ok && semItems.length > 0 && ftsItems.length > 0) {
-      const semIds = new Set(semItems.map((x) => (x?.id ?? '').toString()).filter(Boolean));
-      const ftsIds = new Set(ftsItems.map((x) => (x?.id ?? '').toString()).filter(Boolean));
-      items = items.filter((it) => {
-        const id = (it?.id ?? '').toString();
-        return id && semIds.has(id) && ftsIds.has(id);
-      });
-    }
   }
 
-  // Hybrid search can still attach match-shaped snippets that don’t literally contain the
-  // query. Drop those so a wrong-term search shows “No results” instead of odd tiles.
-  if (isSearch && Array.isArray(items) && items.length) {
-    items = items.filter((it) => noteHasSearchQueryEvidence(it, queryText));
-  }
+  lastSearchItems = Array.isArray(items) ? items : [];
+  lastSearchQuery = isSearch ? queryText : '';
 
   lastSearchItems = Array.isArray(items) ? items : [];
   lastSearchQuery = isSearch ? queryText : '';
@@ -3829,8 +3807,13 @@ async function refreshResults(q = '') {
 
     const btnToggle = note.querySelector('button[data-toggle]');
     if (btnToggle) {
-      // If this is a search and the server provided a best-match segment, auto-expand.
-      if (isSearch && item?.best_match && status === 'ready') {
+      const shouldAutoExpandSearchMatch =
+        isSearch &&
+        idx === 0 &&
+        item?.best_match &&
+        status === 'ready' &&
+        noteHasSearchQueryEvidence(item, queryText);
+      if (shouldAutoExpandSearchMatch) {
         expandedNoteIds.add(item.id);
         expandedNoteIdsFromSearchMatch.add(item.id);
       }
@@ -5320,6 +5303,35 @@ function noteHasSearchQueryEvidence(item, rawQuery) {
   if (hay.includes(qq)) return true;
   const segs = normalizeMatchSegments(item?.matches ?? item?.best_match ?? null, { limit: 40 });
   return segs.some((s) => (s.text ?? '').toLowerCase().includes(qq));
+}
+
+function noteSearchRelevanceScore(item, rawQuery) {
+  const q = (rawQuery ?? '').toString().trim().toLowerCase();
+  if (!q) return 0;
+  const hay = `${(item?.display_title ?? '')} ${(item?.title ?? '')} ${(item?.body ?? '')}`.toLowerCase();
+  if (!hay) return 0;
+
+  let score = 0;
+  if (hay.includes(q)) score += 150;
+
+  const queryWords = q.split(/\s+/).filter(Boolean);
+  if (queryWords.length) {
+    const hayWords = new Set(hay.split(/\s+/).filter(Boolean));
+    let hits = 0;
+    for (const w of queryWords) {
+      if (hayWords.has(w)) hits += 1;
+    }
+    score += Math.round((hits / queryWords.length) * 100);
+
+    let bigramHits = 0;
+    for (let i = 0; i + 1 < queryWords.length; i += 1) {
+      const bigram = `${queryWords[i]} ${queryWords[i + 1]}`;
+      if (hay.includes(bigram)) bigramHits += 1;
+    }
+    score += bigramHits * 20;
+  }
+
+  return Math.max(0, score);
 }
 
 function syntheticWordsFromSegment(seg) {
