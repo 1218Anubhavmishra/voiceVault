@@ -342,8 +342,8 @@ input[type='file'] {
 .note.resultsEmptySaved {
   min-height: 200px;
   border-radius: 16px;
-  background: #0a0a0a;
-  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -351,7 +351,7 @@ input[type='file'] {
   padding: 28px 20px;
   font-size: 14px;
   font-weight: 650;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: none;
 }
 
 .brand {
