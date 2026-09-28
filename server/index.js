@@ -222,9 +222,35 @@ async function attachProcessingEtaFields(db, rows) {
 }
 
 const app = express();
+
+// Set VOICEVAULT_CROSS_SITE_COOKIES=1 on the HTTPS host (Render) so the Android app, whose pages load
+// from https://localhost, can keep a session with the API. Must stay off for plain-http local dev:
+// Secure cookies cannot be set over http.
+const CROSS_SITE_COOKIES = (process.env.VOICEVAULT_CROSS_SITE_COOKIES ?? '').toString().trim() === '1';
+if (CROSS_SITE_COOKIES) app.set('trust proxy', 1);
+
+// Only these origins may make credentialed cross-origin requests. Required once cookies are SameSite=None.
+const CORS_ALLOWED_ORIGINS = new Set(
+  [
+    'https://www.voicevault.xyz',
+    'https://voicevault.xyz',
+    'https://api.voicevault.xyz',
+    'https://localhost',
+    'http://localhost',
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
+    ...(process.env.VOICEVAULT_CORS_ORIGINS ?? '').toString().split(',')
+  ]
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+);
+
 app.use(
   cors({
-    origin: true,
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      cb(null, CORS_ALLOWED_ORIGINS.has(origin.replace(/\/+$/, '')));
+    },
     credentials: true
   })
 );
@@ -265,8 +291,8 @@ app.use(
     name: 'vv_session',
     secret: await getOrCreateSessionSecret(db),
     httpOnly: true,
-    sameSite: 'lax',
-    secure: false, // local dev / local app; set to true behind HTTPS
+    sameSite: CROSS_SITE_COOKIES ? 'none' : 'lax',
+    secure: CROSS_SITE_COOKIES,
     maxAge: SESSION_MAX_AGE_MS
   })
 );
