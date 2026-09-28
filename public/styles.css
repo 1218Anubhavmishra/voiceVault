@@ -339,7 +339,7 @@ input[type='file'] {
   margin-top: 4px;
 }
 
-.resultsEmptySaved {
+.note.resultsEmptySaved {
   min-height: 200px;
   border-radius: 16px;
   background: #0a0a0a;
