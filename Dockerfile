@@ -28,6 +28,11 @@ RUN python -m venv /opt/venv \
 
 COPY . .
 
+# Bake the semantic-search embedding model into the image so the first search after a restart
+# doesn't download it.
+ENV VOICEVAULT_MODEL_CACHE_DIR=/app/.model-cache
+RUN node --input-type=module -e "const m = await import('./server/embeddings.js'); await m.warmupEmbedder();"
+
 ENV NODE_ENV=production
 ENV VV_DATA_DIR=/var/data
 ENV PATH="/opt/venv/bin:${PATH}"

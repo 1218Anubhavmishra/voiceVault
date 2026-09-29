@@ -14,7 +14,7 @@ import { cleanupEphemeralServerCache } from './cleanup-ephemeral.js';
 import { transcribeAudioFile, warmupWhisperPipeline, writeLangProbeWavClip } from './transcribe.js';
 import { normalizeSttProvider, sttProviderForAuthoritativeFinal, defaultSttProviderFromEnv } from './stt-providers.js';
 import { ensureNoteChunks, ensureNoteSegments, semanticSearch } from './semantic.js';
-import { embedTexts, bufferToFloat32, cosineSim } from './embeddings.js';
+import { embedTexts, bufferToFloat32, cosineSim, warmupEmbedder } from './embeddings.js';
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
 import nodemailer from 'nodemailer';
@@ -3183,6 +3183,16 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`voiceVault running on http://localhost:${PORT}`);
   void warmupWhisperPipeline().catch(() => {});
+  const embedWarmStart = Date.now();
+  void warmupEmbedder()
+    .then(() => {
+      // eslint-disable-next-line no-console
+      console.log(`[semantic] embedding model ready in ${Date.now() - embedWarmStart} ms`);
+    })
+    .catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('[semantic] embedding model warmup failed; first search will load it:', e?.message ?? e);
+    });
 });
 
 function clampInt(value, min, max, fallback) {

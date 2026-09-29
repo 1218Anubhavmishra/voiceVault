@@ -87,14 +87,31 @@ export async function ensureNoteChunks(db, noteId, segments, { embedModel = DEFA
   const chunks = buildChunksFromSegments(segments);
   const now = new Date().toISOString();
 
+  // Embed now (before the note is marked ready) so the first search doesn't have to.
+  // On failure, store NULL and let semanticSearch embed lazily as before.
+  let vecs = [];
+  if (chunks.length) {
+    try {
+      vecs = await embedTexts(
+        chunks.map((c) => c.text),
+        { model: embedModel }
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[semantic] chunk embedding failed for note ${noteId}; will embed on first search:`, e?.message ?? e);
+      vecs = [];
+    }
+  }
+
   await db.tx(async (txDb) => {
     await txDb.prepare(`DELETE FROM note_chunks WHERE note_id = ?`).run(noteId);
     const ins = txDb.prepare(
       `INSERT INTO note_chunks (note_id, chunk_idx, start_sec, end_sec, text, seg_start_idx, seg_end_idx, embedding, embed_model, created_at, updated_at)
-       VALUES (@note_id, @chunk_idx, @start_sec, @end_sec, @text, @seg_start_idx, @seg_end_idx, NULL, @embed_model, @created_at, @updated_at)`
+       VALUES (@note_id, @chunk_idx, @start_sec, @end_sec, @text, @seg_start_idx, @seg_end_idx, @embedding, @embed_model, @created_at, @updated_at)`
     );
     for (let i = 0; i < chunks.length; i += 1) {
       const c = chunks[i];
+      const v = vecs[i];
       await ins.run({
         note_id: noteId,
         chunk_idx: i,
@@ -103,6 +120,7 @@ export async function ensureNoteChunks(db, noteId, segments, { embedModel = DEFA
         text: c.text,
         seg_start_idx: c.segStartIdx,
         seg_end_idx: c.segEndIdx,
+        embedding: v && v.length ? float32ToBuffer(v) : null,
         embed_model: embedModel,
         created_at: now,
         updated_at: now

@@ -21,11 +21,27 @@ export async function embedTexts(texts, { model = DEFAULT_EMBED_MODEL } = {}) {
 }
 
 async function getEmbedder(model) {
-  if (_embedder && _embedder.modelId === model) return _embedder.fn;
-  const { pipeline } = await import('@xenova/transformers');
-  const fn = await pipeline('feature-extraction', model);
-  _embedder = { modelId: model, fn };
-  return fn;
+  if (_embedder && _embedder.modelId === model) return _embedder.fnPromise;
+  const fnPromise = (async () => {
+    const { pipeline, env } = await import('@xenova/transformers');
+    // Docker bakes the model into this dir at build time so restarts don't re-download it.
+    const cacheDir = (process.env.VOICEVAULT_MODEL_CACHE_DIR ?? '').toString().trim();
+    if (cacheDir) env.cacheDir = cacheDir;
+    return pipeline('feature-extraction', model);
+  })();
+  _embedder = { modelId: model, fnPromise };
+  try {
+    return await fnPromise;
+  } catch (e) {
+    if (_embedder?.fnPromise === fnPromise) _embedder = null;
+    throw e;
+  }
+}
+
+/** Load the embedding model (and download it if not cached) so the first search doesn't pay for it. */
+export async function warmupEmbedder(model = DEFAULT_EMBED_MODEL) {
+  const embedder = await getEmbedder(model);
+  await embedder('warmup', { pooling: 'mean', normalize: true });
 }
 
 export function float32ToBuffer(vec) {
