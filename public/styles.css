@@ -726,6 +726,15 @@ input[type='file'] {
   outline: none;
 }
 
+/* iOS zooms the page when a focused field's text is under 16px, and never zooms back. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 #noteLanguage {
   background: rgba(255, 255, 255, 0.95);
   color: rgba(0, 0, 0, 0.92);

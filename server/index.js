@@ -237,6 +237,7 @@ const CORS_ALLOWED_ORIGINS = new Set(
     'https://api.voicevault.xyz',
     'https://localhost',
     'capacitor://localhost',
+    'capacitor://app.voicevault.xyz',
     'http://localhost',
     `http://localhost:${PORT}`,
     `http://127.0.0.1:${PORT}`,
