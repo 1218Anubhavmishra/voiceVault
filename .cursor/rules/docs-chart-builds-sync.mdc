@@ -1,0 +1,39 @@
+---
+description: Keep reports, Word copies, the technology chart, Git and the builds in sync whenever docs or code change
+alwaysApply: true
+---
+
+# Docs, chart and builds stay in sync
+
+This applies to both projects: voiceVault (`c:\Users\anubh\.cursor\projects\empty-window\voiceVault`, website) and NoteVault (`D:\Projects\NoteVault`, apps). They share one frontend and one backend, so a change in one usually needs doc updates in both.
+
+## Whenever a report `.md` changes, in this order
+
+1. **Update the "Technology and build map" first** if the change touches technology, services, hosting or build targets. The chart (a Mermaid block) is in all 8 reports:
+   - voiceVault: `report1.md`, `project-report.md`, `Edits_made.md`, `Edits_today.md`
+   - NoteVault: `NoteVault_report1.md`, `NoteVault_project-report.md`, `NoteVault_Edits_made.md`, `NoteVault_Edits_today.md`
+   Keep all eight copies identical, with every detail: shared code, external services (ElevenLabs, OpenAI, SMTP, ffmpeg), wrappers, every build output and where it's built.
+2. **Show the updated chart in the chat before saving**, as a fenced `mermaid` block.
+3. **Update the `.md` text.**
+4. **Regenerate the `.docx` copies** in each changed project: `node scripts/build-docs.cjs`. This renders the chart to `report-assets/tech-build-map.png` and rebuilds every `.docx` from its `.md`. Never edit a `.docx` by hand. Leave `VoiceVault.md` / `VoiceVault.docx` alone (the user's original blueprint).
+5. **Commit and push both repos** (`1218Anubhavmishra/voiceVault`, `1218Anubhavmishra/NoteVault`). `.docx` files are git-ignored and stay local.
+
+## Whenever app code changes, also refresh the builds
+
+App code means `public/`, `electron/`, `android/`, `ios/`, `capacitor.config.json` or `package.json` in NoteVault. Web-only changes in voiceVault must be copied to NoteVault `public/` first.
+
+| Build | How |
+| :-- | :-- |
+| Android release AAB + APK | `.\build-release.ps1` |
+| Android debug APK | `.\build-android.ps1` |
+| Windows Setup + Portable `.exe` | `npm run desktop:win` |
+| Linux `.tar.gz` | `npm run desktop:linux` |
+| iOS, macOS `.dmg`, Linux `.AppImage` | Codemagic workflows (tell the user to run them after the push) |
+
+Copy the Android outputs into `builds\android\` and keep `builds\README.txt` accurate.
+
+## Never
+
+- Commit `.env`, `apikeys.txt`, `android-signing/`, `*.jks`, `*.apk`, `*.aab` or `builds/`.
+- Commit screenshots that show the user's email address (both repos are public). Redact it first.
+- Change the package id `xyz.voicevault.app` or the API `https://api.voicevault.xyz`.
