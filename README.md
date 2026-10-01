@@ -1,13 +1,17 @@
 # voiceVault
 
-Local audio recording + storage app with cross-note search (audio-only).
+Audio notes app with cross-note search: record or upload audio, get a transcript, then search across all notes by text or voice.
+
+- Website: [voicevault.xyz](https://www.voicevault.xyz) (frontend on Vercel, API at `api.voicevault.xyz` on Render via Docker, PostgreSQL database).
+- Apps: Android, iOS, Windows, macOS and Linux builds of the same frontend live in the NoteVault project ([1218Anubhavmishra/NoteVault](https://github.com/1218Anubhavmishra/NoteVault)).
 
 ## What it does
 
-- Record audio in your browser (MediaRecorder)
-- Upload and store audio files locally
-- Auto-transcribe audio offline (faster-whisper) and store transcript in SQLite (notes show as **processing** until ready)
-- Search across all notes by recording a short audio query (also transcribed offline)
+- Record audio in your browser (MediaRecorder) or upload audio files; accounts with login, password reset by email
+- Transcribe on the server with **ElevenLabs Scribe** (`VOICEVAULT_STT_PROVIDER=elevenlabs`, key `ELEVENLABS_API_KEY`); local faster-whisper is an optional alternative. Notes show as **processing** until ready
+- Optional AI note titles and quick answers with OpenAI (`OPENAI_API_KEY`)
+- Notes, audio and search index are stored in PostgreSQL (`DATABASE_URL`)
+- Search across all notes by text or by recording a short audio query
 - Jump + play **timestamped segments** from saved transcripts (clip-style playback)
 - Search supports **natural language** + **time filters** (e.g. `yesterday`, `last 3 days`, `2026-04-22`)
 - Search is **hybrid by default**: keyword matching + local semantic retrieval over transcript segments.
@@ -16,9 +20,9 @@ Local audio recording + storage app with cross-note search (audio-only).
 
 ## Run locally
 
-Prereqs: **Node.js 22 LTS (recommended)**, Python 3.10+, ffmpeg (on PATH)
+Prereqs: **Node.js 22 LTS (recommended)**, ffmpeg (on PATH), a PostgreSQL database. Copy `.env.example` to `.env` and set at least `DATABASE_URL` and `ELEVENLABS_API_KEY`.
 
-1) Install transcription dependencies:
+Only if you use local Whisper instead of ElevenLabs (needs Python 3.10+), install the transcription dependencies:
 
 ```powershell
 .\scripts\install-ffmpeg.ps1
@@ -42,12 +46,10 @@ From the project folder in PowerShell:
 
 ## Data storage
 
-- Audio: stored in SQLite as a BLOB (new notes), with backward compatibility for older notes that used `data/audio/`
-- SQLite DB: `data/voicevault.sqlite`
+- Notes, transcripts, audio (BYTEA) and search chunks are stored in PostgreSQL (`DATABASE_URL`; on Render use the Internal URL).
+- Older local SQLite snapshots can be moved over with `scripts/migrate-sqlite-to-pg.js`. The two SQLite scripts below are kept for that legacy data only.
 
-Both are ignored by git.
-
-## One-time migration (old audio files → SQLite BLOB)
+## One-time migration (legacy: old audio files → SQLite BLOB)
 
 If you have older notes where audio still exists in `data/audio/` and you want to import all of them into the DB in one shot, run:
 
@@ -80,7 +82,8 @@ Optional:
 ## Troubleshooting
 
 - If notes get stuck on **processing**, check the server console output.
-- If transcription fails:
+- If transcription fails with ElevenLabs: check `ELEVENLABS_API_KEY` and the server log (`ELEVENLABS_STT_FAILED` shows the API's reason).
+- If transcription fails with local Whisper:
   - Ensure `ffmpeg` is on PATH (`ffmpeg -version`)
   - Ensure Python 3.10+ is on PATH (`python --version`)
   - Re-run `.\scripts\setup-transcription.ps1` (creates `.venv` and installs `faster-whisper`)

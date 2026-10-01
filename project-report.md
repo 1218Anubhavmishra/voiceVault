@@ -1,63 +1,74 @@
 ---
-title: voiceVault — Project Report (Web Prototype)
-date: 2026-04-20
+title: voiceVault — Project Report
+date: 2026-10-01
 repo: voiceVault
 ---
 
 ## 1) Executive summary
 
-`voiceVault` is a **local-first, voice-first** web prototype that lets you:
+`voiceVault` is a **voice-first** notes product that lets you:
 
-- **Capture** audio notes in the browser (record or upload).
-- **Index** them locally by transcribing audio **offline** using Whisper via `faster-whisper`.
-- **Retrieve** notes by searching across transcripts, including **voice query** search (record a short query → transcribe offline → search).
+- **Capture** audio notes (record in the browser or upload a file).
+- **Index** them by transcribing on the server with **ElevenLabs Scribe** (word timestamps, language detection), then splitting transcripts into searchable segments with embeddings.
+- **Retrieve** notes by searching across transcripts, including **voice query** search (record a short query → transcribe → search).
 
-This prototype focuses on delivering the core “voice in → searchable knowledge out” loop described in `VoiceVault.md`, with **hybrid search** (SQLite FTS5 keyword matching blended with local semantic retrieval over transcript segments).
+It is live at [voicevault.xyz](https://www.voicevault.xyz): frontend on **Vercel**, API at `api.voicevault.xyz` on **Render** (Docker), data in **PostgreSQL**. The same frontend is packaged as the **NoteVault** apps for Android, iOS, Windows, macOS and Linux. Search is **hybrid**: PostgreSQL full-text matching blended with semantic retrieval over transcript segments.
 
 ## 1.1) Screenshots
 
-![voiceVault home screen (web prototype)](01-home.png)
+Taken from the live site (voicevault.xyz, 1280×800) on 2026-10-01.
 
-![Left column controls (all panes collapsed)](02-left-collapsed.png)
+![Login screen](00-login.png)
 
-![voiceVault home screen (all panes collapsed)](03-home-all-collapsed.png)
+![Home screen with saved notes](01-home.png)
 
-## 2) Scope of this prototype (what it is / isn’t)
+![Search for "eyes": the matching note opens with the matching line highlighted](02-left-collapsed.png)
 
-- **Is**: A working local web app that records audio, stores it on disk, transcribes offline, and supports transcript search + audio playback/download.
-- **Is not**: A mobile app, cloud service, or multi-user product; does not include authentication or cloud infrastructure (but now includes local embeddings + optional LLM answering).
+![Add New panel: title, record button and audio file picker](03-home-all-collapsed.png)
+
+## 2) Scope (what it is / isn't)
+
+- **Is**: A multi-user web app with accounts, server-side transcription, transcript search, audio playback/download, and native app builds of the same UI.
+- **Is not (yet)**: Collaboration/sharing, speaker labels, integrations (calendar, reminders), or offline use of the apps.
 
 ## 3) Product goals aligned to `VoiceVault.md`
 
 From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 - **Capture (implemented)**:
-  - In-browser recording (microphone).
+  - In-browser and in-app recording (microphone).
   - File upload (audio note ingestion).
-  - UI timers and “processing” status.
-- **Index (implemented, local)**:
-  - Offline STT using Whisper (`faster-whisper`).
-  - Local SQLite persistence of metadata + transcript.
-  - Background/asynchronous transcription after note creation.
-  - Optional language selection + auto-detect (depending on flow).
-- **Retrieve (implemented, full-text)**:
+  - UI timers and "processing" status.
+- **Index (implemented, server-side)**:
+  - Speech-to-text with ElevenLabs Scribe (local faster-whisper optional).
+  - PostgreSQL persistence of notes, audio, transcripts and segments.
+  - Background ingestion queue; segments are embedded before a note is marked ready.
+  - Optional language selection + auto-detect.
+- **Retrieve (implemented, hybrid)**:
   - Search by typing.
-  - Search by speaking a query (audio query → offline STT → search).
+  - Search by speaking a query (audio query → speech-to-text → search).
 
 ## 4) Current feature set (implemented)
+
+### Accounts
+
+- Register, log in/out, profile name and picture.
+- Forgot password: a reset code is emailed (SMTP).
+- Each user only sees their own notes; sessions are cookie-based and work from the website and the apps.
 
 ### Notes
 
 - **Create notes**
-  - Record an audio note in-browser and save it.
+  - Record an audio note and save it.
   - Upload an existing audio file and save it as a note.
 - **Background transcription**
   - On save, notes enter **`processing`** state and later become **`ready`** (or **`error`** on failure).
-- **Timestamped segments (implemented)**
+  - Optional AI-generated titles (OpenAI).
+- **Timestamped segments**
   - Saved notes store **timestamped segments** (start/end seconds + text) alongside the transcript.
   - UI can play **only a selected segment** (not just full-audio playback).
-- **Segment playback UX (updated)**
-  - Segment rows highlight while playing (light grey tint).
+- **Segment playback UX**
+  - Segment rows highlight while playing.
   - Full-audio playback also highlights the currently active segment row while following along.
 - **Playback & export**
   - Play note audio in the UI.
@@ -65,43 +76,27 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
   - Download transcript text (icon in the expanded note header).
 - **Edit & delete**
   - Edit transcript and title (and language metadata) after processing.
-  - Delete a note (removes DB row and associated audio file).
+  - Delete a note.
   - Retry transcription for failed notes.
   - Star notes and pin them to the top of the saved-notes list.
+- **Auto-sync**: the apps refresh the notes list when notes change elsewhere.
 
 ### Search
 
-- **Full-text search (SQLite FTS5)** across title + body.
-- **Voice query search** (record a short “search” audio query → transcribe offline → search).
+- **Full-text search (PostgreSQL `tsvector` + GIN index)** across title + body.
+- **Voice query search** (record a short "search" audio query → transcribe → search).
 - **Hybrid search (default)**
-  - Keyword matching blended with local embeddings-based retrieval over timestamped segments (local-first; embeddings computed lazily).
-- **Natural-language query rewrite (offline)**
-  - Queries like “find me the note where I talked about recording” are rewritten into keyword-style queries.
-- **Date/time filters in search (offline)**
+  - Keyword matching blended with embeddings-based retrieval over timestamped segments. The embedding model is preloaded when the server starts, so the first search is fast.
+- **Natural-language query rewrite**
+  - Queries like "find me the note where I talked about recording" are rewritten into keyword-style queries.
+- **Date/time filters in search**
   - Supports filters like `today`, `yesterday`, `last 3 days`, `2026-04-22`, and `between 2026-04-20 and 2026-04-22`.
-- **Best-match segment highlighting**
-  - Search results can highlight the best matching segment in a note (for quick jump/play).
-- **Multi-clip results (implemented)**
-  - Search can return multiple top-matching timestamped segments per note (clip-style retrieval).
-- **Quick answer (extractive, implemented)**
-  - UI shows a “Quick answer” box composed from top matching timestamped segments (offline, extractive — not LLM-generated).
-- **Robustness improvements**:
-  - FTS query normalization to avoid punctuation/operator errors.
-  - Fallback to safe substring search when FTS throws.
-
-### Language + models
-
-- **Language selection**: UI can request a specific language code, or allow auto-detect (depending on endpoint).
-- **Fast mode vs quality mode**:
-  - “Fast mode” uses `tiny` by default.
-  - “Quality mode” uses `medium` by default.
-  - Both are configurable via env vars (see below).
-- **UI toggles**
-  - Fast mode and Semantic search are exposed as simple **dot toggles** (green = on).
+- **Best-match segment highlighting** and **multi-clip results** (several matching segments per note).
+- **Quick answer**: extractive answer from top matching segments, or an OpenAI answer grounded in those segments when configured.
 
 ### UI layout (current)
 
-- The app uses a **single stacked layout**: saved notes at the top, and panels (Search / Processes / New note / Help) open beneath via quick actions.
+- **Single stacked layout**: saved notes at the top, and panels (Search / Processes / Add New / Help) open beneath via quick actions.
 - Panels are **mutually exclusive** (opening one closes the others).
 - Saved notes use a **collapsed card** view by default; expanding shows a scrollable transcript with a **sticky title** and icon actions in the header.
 
@@ -109,48 +104,57 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 ### Components
 
-- **Frontend**: Static UI in `public/` (vanilla HTML/CSS/JS).
-- **Backend**: Node.js + Express in `server/`.
-- **DB**: SQLite via `better-sqlite3`.
-- **Transcription**: Python (`server/transcribe.py`) using `faster-whisper`; requires `ffmpeg` on PATH.
+- **Frontend**: Static UI in `public/` (vanilla HTML/CSS/JS), deployed on Vercel and bundled into the NoteVault apps.
+- **Backend**: Node.js + Express in `server/`, deployed on Render from the `Dockerfile`.
+- **DB**: PostgreSQL via `pg` (`server/db.js`).
+- **Transcription**: ElevenLabs Scribe over HTTPS (`server/elevenlabs-stt-vv.js`); optional local faster-whisper (`server/transcribe.py`). `ffmpeg` prepares audio.
+- **Semantic search**: `Xenova/all-MiniLM-L6-v2` embeddings with transformers.js (`server/embeddings.js`, `server/semantic.js`).
 
-### Storage (local-first)
+### Storage
 
-- **Audio**: stored in SQLite as a **BLOB** for new notes, with backward compatibility for older notes that used `data/audio/`
-- **Database**: `data/voicevault.sqlite`
-
-These are intentionally local runtime artifacts (not meant to be committed).
+- **Notes, transcripts, segments, accounts**: PostgreSQL tables.
+- **Audio**: PostgreSQL `BYTEA` column.
+- **Search index**: generated `tsvector` column (keyword search) and per-segment embeddings (semantic search).
 
 ### Note creation flow (simplified)
 
-1. Browser records or uploads audio.
-2. Backend `POST /api/notes` stores audio in SQLite (BLOB) and inserts a DB row as `processing`.
-3. Backend runs offline transcription asynchronously (Python).
-4. Backend updates DB row with transcript, detected/selected language, and final status.
+1. The browser or app records or uploads audio.
+2. Backend `POST /api/notes` stores the audio and inserts the note as `processing`.
+3. The ingestion queue sends the audio to ElevenLabs (or local Whisper) for transcription.
+4. The backend saves the transcript, language and segments, embeds the segments, and marks the note `ready`.
 
 ### Search flow (simplified)
 
-- **Text search**: `GET /api/notes?q=...` runs FTS5 (or safe LIKE fallback).
-- **Voice search**: UI records query audio → `POST /api/transcribe` → uses returned transcript as the search string.
+- **Text search**: `GET /api/notes?q=...` runs PostgreSQL full-text search blended with semantic matches.
+- **Voice search**: the UI records query audio → `POST /api/transcribe` → uses the returned transcript as the search string.
 
 ## 6) Tech stack
 
-- **Node.js**: `>=20` (see `package.json`)
-- **Backend**: Express, Multer (uploads)
-- **SQLite**: `better-sqlite3`
-- **Python**: 3.10+
-- **Offline STT**: `faster-whisper`
-- **Media**: `ffmpeg` on PATH
+- **Node.js**: `>=20` (22 LTS recommended)
+- **Backend**: Express, Multer (uploads), cookie sessions, bcrypt (passwords), Nodemailer (email)
+- **Database**: PostgreSQL (`pg`)
+- **Speech-to-text**: ElevenLabs Scribe (default), faster-whisper (optional, needs Python 3.10+)
+- **Search**: PostgreSQL full-text search + transformers.js embeddings
+- **AI (optional)**: OpenAI for titles and quick answers
+- **Media**: `ffmpeg`
+- **Hosting**: Vercel (frontend), Render (Docker API + PostgreSQL)
 
 ### Technology and build map
 
-The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`).
+The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps and language detection; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
 
 ```mermaid
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript"]
     BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js)"]
+  end
+
+  subgraph External["External services used by the backend"]
+    EL["ElevenLabs Scribe<br/>speech-to-text (transcription)"]
+    OAI["OpenAI<br/>AI note titles, quick answers"]
+    SMTP["Email (SMTP)<br/>password-reset codes"]
+    FF["ffmpeg<br/>audio preprocessing"]
   end
 
   subgraph Wrappers["Wrapper technology"]
@@ -166,9 +170,13 @@ flowchart LR
     I["iOS: simulator .zip, signed .ipa later<br/>built on a Codemagic cloud Mac"]
     D["Windows: Setup .exe + Portable .exe<br/>built on Windows (npm run desktop:win)"]
     M["macOS: .dmg<br/>built on a Codemagic cloud Mac"]
-    L["Linux: .tar.gz (AppImage optional)<br/>built on Windows (npm run desktop:linux)"]
+    L["Linux: .tar.gz built on Windows<br/>.AppImage built on a Codemagic cloud Mac"]
   end
 
+  BE --> EL
+  BE --> OAI
+  BE --> SMTP
+  BE --> FF
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I
@@ -185,26 +193,31 @@ flowchart LR
 
 ## 7) Configuration (env vars)
 
-The server supports these environment variables:
+The full list with comments is in `.env.example`. The main ones:
 
+- `DATABASE_URL`: PostgreSQL connection string (required; Internal URL on Render)
+- `VOICEVAULT_STT_PROVIDER`: `elevenlabs` (recommended) or `whisper`
+- `ELEVENLABS_API_KEY`: required for ElevenLabs transcription; `ELEVENLABS_STT_MODEL` optional (`scribe_v1` default)
+- `OPENAI_API_KEY`: optional; enables AI titles and quick answers
+- `VOICEVAULT_SESSION_SECRET`: keeps sessions valid across restarts
+- `VOICEVAULT_CROSS_SITE_COOKIES=1`: production only; lets the apps stay logged in
+- `VOICEVAULT_CORS_ORIGINS`: extra allowed origins (the app origins are built in)
+- `EMAIL_*`: SMTP settings for password-reset codes
+- `VOICEVAULT_MODEL_CACHE_DIR`: where the search model is cached (set in the Dockerfile)
 - `PORT`: server port (default `5177`)
-- `WHISPER_MODEL`: main/quality model (default: `medium`)
-- `WHISPER_FAST_MODEL`: fast model (default: `tiny`)
-- `WHISPER_LANG_MODEL`: model for language detection/live preview (default: `tiny`)
-- `WHISPER_LANGUAGE`: default language override (empty = auto where supported)
-- `VOICEVAULT_VAD`: `1` to enable VAD filtering; default is off (`0`)
 
 ## 8) Local run & testing (Windows-focused)
 
 ### Prerequisites
 
-- Node.js 20+
-- Python 3.10+
+- Node.js 22 LTS
 - `ffmpeg` installed and on PATH
+- A PostgreSQL database and an ElevenLabs API key
+- Python 3.10+ only for local Whisper
 
 ### One-time setup
 
-Run from project root:
+Copy `.env.example` to `.env` and fill in `DATABASE_URL` and `ELEVENLABS_API_KEY`. For local Whisper only:
 
 ```powershell
 .\scripts\install-ffmpeg.ps1
@@ -222,55 +235,53 @@ Open `http://localhost:5177`.
 
 ### Test plan (quick)
 
+- **Sign up / log in / log out**, and a password reset by email.
 - **Record → Save**: record 10–20 seconds, save; confirm note appears as `processing` then `ready`.
 - **Playback**: play audio; confirm it matches recording.
 - **Transcript**: confirm transcript is visible; edit it and verify it persists.
-- **Search by text**: search for a phrase from transcript; confirm note appears.
+- **Search by text**: search for a phrase from transcript; confirm note appears and the first search is fast.
 - **Search by voice**: record a short search query; confirm results match.
-- **Delete**: delete a note; confirm it disappears and audio is removed.
-- **Failure path**: break Python/ffmpeg temporarily; confirm note becomes `error`; then fix deps and click retry.
+- **Delete**: delete a note; confirm it disappears.
+- **Failure path**: use an invalid `ELEVENLABS_API_KEY`; confirm the note becomes `error`; fix the key and click retry.
 
-## 9) Known constraints (current prototype)
+## 9) Known constraints
 
-- Embeddings-based semantic retrieval is implemented locally, but is **segment-level** (not word-level alignment).
-- LLM answers are **optional** and require an OpenAI key; the offline fallback is extractive.
-- **Single-user local app** (no auth, no cloud sync).
-- **CPU-only transcription** by default; long notes can take time and can be hardware dependent.
+- Semantic retrieval is **segment-level** (not word-level alignment) and uses brute-force similarity, fine for personal libraries but not for very large ones.
+- Transcription depends on the ElevenLabs API (quota, availability); LLM answers are **optional** and need an OpenAI key.
 - **No diarization / speaker labels**.
+- Recording is WebM only; iPhones probably need iOS 18.4+ (not yet tested on a device).
 
-## 10) Cross-check vs original documents (what’s still missing)
+## 10) Cross-check vs original documents (what's still missing)
 
-This section cross-checks the current prototype against the “semantic search / voice Q&A” blueprint in `VoiceVault.md` and the baseline goals described in `report1.md`.
+This section cross-checks the current product against the "semantic search / voice Q&A" blueprint in `VoiceVault.md` and the baseline goals described in `report1.md`.
 
 ### Missing relative to `VoiceVault.md` (blueprint)
 
-- **Semantic retrieval (partially addressed)**:
-  - Local embeddings-based retrieval exists for segments.
-  - Missing: vector DB, ANN indexing for large scale, and a richer reranking pipeline.
+- **Semantic retrieval (mostly addressed)**:
+  - Embeddings-based retrieval over segments exists.
+  - Missing: vector DB / ANN indexing for large scale, and a richer reranking pipeline.
 - **Grounded Q&A (partially addressed)**:
   - Optional LLM answering exists and is grounded in retrieved clips with citations.
   - Missing: stronger safety/guardrails, evals, and long-context scaling.
-- **Timestamp-level results (partially addressed)**:
-  - Prototype now stores **timestamped segments** and supports **segment-level** “jump and play”.
-  - Still missing: word-level alignment, semantic chunks, and returning multiple precise clips per query with robust ranking.
-- **Chunking pipeline**:
-  - No semantic chunking (100–200 token chunks) or pause/topic segmentation stored as searchable units.
-- **Mobile-first product**:
-  - Prototype is a local web app, not React Native/Flutter iOS/Android.
-- **Cloud components**:
-  - No ingestion service queue, blob storage (S3), Postgres, auth (Supabase/Firebase), etc.
+- **Timestamp-level results (mostly addressed)**:
+  - Timestamped segments with word timings from ElevenLabs; segment-level "jump and play"; multiple clips per note.
+  - Still missing: word-level jump targets in search results.
+- **Chunking pipeline (partially addressed)**:
+  - Transcripts are split into segment chunks with embeddings; no topic-based segmentation yet.
+- **Mobile-first product (addressed)**:
+  - Android and iOS apps (Capacitor) plus Windows/macOS/Linux desktop apps (Electron) in the NoteVault project.
+- **Cloud components (addressed)**:
+  - PostgreSQL, accounts with password reset, background ingestion queue, hosted API. Audio is stored in the database rather than object storage (S3).
 - **Product surfaces**:
   - No proactive reminders, integrations (calendar/reminders/contacts), collaboration, or ambient mode.
 
 ### Items from `report1.md` (baseline) that are covered
 
 - In-browser recording + upload
-- Local storage (`data/`)
-- Offline transcription + SQLite persistence
+- Server transcription + PostgreSQL persistence
 - Audio query search
 - Segment-level playback from transcript timestamps
 
 ### `VoiceVault.docx`
 
-`VoiceVault.docx` is present in the repo and its extracted content matches the same blueprint/requirements described in `VoiceVault.md` (capture → transcribe/index → semantic retrieval → grounded answers + timestamped clips). The “missing” items above therefore apply equally to `VoiceVault.docx`.
-
+`VoiceVault.docx` contains the same blueprint/requirements described in `VoiceVault.md` (capture → transcribe/index → semantic retrieval → grounded answers + timestamped clips). The "missing" items above therefore apply equally to `VoiceVault.docx`.
