@@ -34,6 +34,7 @@ flowchart LR
     I["iOS: simulator .zip, signed .ipa later<br/>built on a Codemagic cloud Mac"]
     D["Windows: Setup .exe + Portable .exe<br/>built on Windows (npm run desktop:win)"]
     M["macOS: .dmg<br/>built on a Codemagic cloud Mac"]
+    L["Linux: .tar.gz (AppImage optional)<br/>built on Windows (npm run desktop:linux)"]
   end
 
   FE --> WEB --> W
@@ -41,9 +42,11 @@ flowchart LR
   FE --> CAPI --> I
   FE --> ELE --> D
   ELE --> M
+  ELE --> L
   BE -. "API calls from every build" .-> W
   BE -.-> A
   BE -.-> I
   BE -.-> D
   BE -.-> M
+  BE -.-> L
 ```
