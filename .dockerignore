@@ -4,7 +4,8 @@ data
 .git
 .claude
 *.docx
-report-assets
+docs
+images
 agent-transcripts
 terminals
 

@@ -1,5 +1,6 @@
 // Regenerate the Word (.docx) copies of this project's reports from their .md files.
-// The Mermaid "Technology and build map" is rendered to report-assets/tech-build-map.png first,
+// Reports and their .docx copies live in docs/; images live in images/.
+// The Mermaid "Technology and build map" is rendered to images/tech-build-map.png first,
 // because Word can't display Mermaid code.
 //
 // Usage (from the project root):  node scripts/build-docs.cjs
@@ -11,9 +12,10 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const PREFIX = fs.existsSync(path.join(ROOT, 'NoteVault_report1.md')) ? 'NoteVault_' : '';
-const REPORTS = ['report1.md', 'project-report.md', 'Edits_made.md', 'Edits_today.md'].map((f) => PREFIX + f);
-const CHART_PNG = path.join(ROOT, 'report-assets', 'tech-build-map.png');
+const DOCS = path.join(ROOT, 'docs');
+const PREFIX = fs.existsSync(path.join(DOCS, 'NoteVault_report1.md')) ? 'NoteVault_' : '';
+const REPORTS = ['report1.md', 'project-report.md', 'Edits_made.md', 'Edits_today.md'].map((f) => path.join(DOCS, PREFIX + f));
+const CHART_PNG = path.join(ROOT, 'images', 'tech-build-map.png');
 
 function findPandoc() {
   const local = path.join(process.env.LOCALAPPDATA || '', 'Pandoc', 'pandoc.exe');
@@ -32,7 +34,7 @@ function findBrowser() {
 }
 
 function renderChart() {
-  const source = REPORTS.map((f) => path.join(ROOT, f)).find((f) => fs.existsSync(f));
+  const source = REPORTS.find((f) => fs.existsSync(f));
   const match = fs.readFileSync(source, 'utf8').match(/```mermaid\r?\n([\s\S]*?)```/);
   if (!match) return false;
 
@@ -58,22 +60,23 @@ function renderChart() {
   return true;
 }
 
-function toDocx(mdName, docxName) {
-  const mdPath = path.join(ROOT, mdName);
+/** Image links in the .md are relative to the .md's own folder, so pandoc resolves them from there. */
+function toDocx(mdPath, docxName) {
   if (!fs.existsSync(mdPath)) return;
-  const img = path.relative(ROOT, CHART_PNG).replace(/\\/g, '/');
+  const mdDir = path.dirname(mdPath);
+  const img = path.relative(mdDir, CHART_PNG).replace(/\\/g, '/');
   const text = fs.readFileSync(mdPath, 'utf8').replace(/```mermaid\r?\n[\s\S]*?```/g, `![Technology and build map](${img})`);
-  const tmp = path.join(ROOT, `.__docx_tmp_${mdName}`);
+  const tmp = path.join(mdDir, `.__docx_tmp_${path.basename(mdPath)}`);
   fs.writeFileSync(tmp, text);
   try {
-    execFileSync(findPandoc(), [tmp, '-f', 'gfm+yaml_metadata_block', '-o', path.join(ROOT, docxName), '--resource-path', ROOT], { stdio: 'inherit' });
-    console.log('docx: ', docxName);
+    execFileSync(findPandoc(), [tmp, '-f', 'gfm+yaml_metadata_block', '-o', path.join(DOCS, docxName), '--resource-path', mdDir], { stdio: 'inherit' });
+    console.log('docx: ', path.join('docs', docxName));
   } finally {
     fs.unlinkSync(tmp);
   }
 }
 
 renderChart();
-for (const md of REPORTS) toDocx(md, md.replace(/\.md$/, '.docx'));
-toDocx('README.md', PREFIX + 'README.docx');
-if (!PREFIX) toDocx('project-report.md', 'project-report.updated.docx');
+for (const md of REPORTS) toDocx(md, path.basename(md).replace(/\.md$/, '.docx'));
+toDocx(path.join(ROOT, 'README.md'), PREFIX + 'README.docx');
+if (!PREFIX) toDocx(path.join(DOCS, 'project-report.md'), 'project-report.updated.docx');

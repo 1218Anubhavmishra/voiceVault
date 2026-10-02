@@ -18,22 +18,22 @@ It is live at [voicevault.xyz](https://www.voicevault.xyz): frontend on **Vercel
 
 Taken from the live site (voicevault.xyz, 1280×800) on 2026-10-01.
 
-![Login screen](00-login.png)
+![Login screen](../images/00-login.png)
 
-![Home screen with saved notes](01-home.png)
+![Home screen with saved notes](../images/01-home.png)
 
-![Search for "eyes": the matching note opens with the matching line highlighted](02-left-collapsed.png)
+![Search for "eyes": the matching note opens with the matching line highlighted](../images/02-left-collapsed.png)
 
-![Add New panel: title, record button and audio file picker](03-home-all-collapsed.png)
+![Add New panel: title, record button and audio file picker](../images/03-home-all-collapsed.png)
 
 ## 2) Scope (what it is / isn't)
 
 - **Is**: A multi-user web app with accounts, server-side transcription, transcript search, audio playback/download, and native app builds of the same UI.
 - **Is not (yet)**: Collaboration/sharing, automatic recognition of who a speaker is (speakers are labelled "Speaker 1", "Speaker 2" and named by hand), integrations (calendar, reminders), or offline use of the apps.
 
-## 3) Product goals aligned to `VoiceVault.md`
+## 3) Product goals aligned to `VoiceVault_blueprint.md`
 
-From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
+From `VoiceVault_blueprint.md`, the three pillars are Capture / Index / Retrieve.
 
 - **Capture (implemented)**:
   - In-browser and in-app recording (microphone).
@@ -260,9 +260,9 @@ Open `http://localhost:5177`.
 
 ## 10) Cross-check vs original documents (what's still missing)
 
-This section cross-checks the current product against the "semantic search / voice Q&A" blueprint in `VoiceVault.md` and the baseline goals described in `report1.md`.
+This section cross-checks the current product against the "semantic search / voice Q&A" blueprint in `VoiceVault_blueprint.md` and the baseline goals described in `report1.md`.
 
-### Missing relative to `VoiceVault.md` (blueprint)
+### Missing relative to `VoiceVault_blueprint.md` (blueprint)
 
 - **Semantic retrieval (mostly addressed)**:
   - Embeddings-based retrieval over segments exists.
@@ -290,6 +290,6 @@ This section cross-checks the current product against the "semantic search / voi
 - Audio query search
 - Segment-level playback from transcript timestamps
 
-### `VoiceVault.docx`
+### `VoiceVault_blueprint.docx`
 
-`VoiceVault.docx` contains the same blueprint/requirements described in `VoiceVault.md` (capture → transcribe/index → semantic retrieval → grounded answers + timestamped clips). The "missing" items above therefore apply equally to `VoiceVault.docx`.
+`VoiceVault_blueprint.docx` contains the same blueprint/requirements described in `VoiceVault_blueprint.md` (capture → transcribe/index → semantic retrieval → grounded answers + timestamped clips). The "missing" items above therefore apply equally to `VoiceVault_blueprint.docx`.
