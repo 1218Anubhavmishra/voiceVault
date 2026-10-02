@@ -547,6 +547,11 @@ async function migrate(pool) {
     ALTER TABLE users        ADD COLUMN IF NOT EXISTS avatar_mime TEXT  NOT NULL DEFAULT '';
     ALTER TABLE note_drafts  ADD COLUMN IF NOT EXISTS audio_blob  BYTEA NOT NULL DEFAULT '\\x'::bytea;
   `);
+
+  // Diarization: who spoke each transcript segment ("Speaker 1" until the user renames it).
+  await pool.query(`
+    ALTER TABLE note_segments ADD COLUMN IF NOT EXISTS speaker TEXT NOT NULL DEFAULT '';
+  `);
 }
 
 /* ---------------------------------------------------------------------------

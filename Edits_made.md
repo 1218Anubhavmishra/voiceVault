@@ -2,6 +2,15 @@
 title: voiceVault — Edits made
 ---
 
+## 2026-10-02 (speaker labels, sound tags, account deletion, MP4 fallback)
+
+- **Speaker labels**: note transcription (Full preview with `purpose=note`, and the background job) sends `diarize=true` and `tag_audio_events=true` to ElevenLabs Scribe. Words carry a `speaker_id`, mapped to "Speaker 1", "Speaker 2" in order of appearance; a new segment starts when the speaker changes, and the transcript is written as "Speaker N: …" lines. Search and live previews are unchanged.
+- **Storage**: each segment keeps a `speaker` (in `notes.segments_json` and the new `note_segments.speaker` column, added by a migration on start).
+- **Renaming**: a "Speakers" box (after Full preview, and in Edit mode on saved notes) renames a speaker in the text and segments. Saved notes send `speakers: {old: new}` with `PATCH /api/notes/:id`; all renames are applied together, so swapping two names works. Saved transcripts show the speaker name in bold where it changes.
+- **Sound tags**: tags like "(laughter)" and "(music)" appear in note transcripts.
+- **Account deletion**: `POST /api/auth/delete-account` with the password deletes the user and every row that belongs to them (notes, segments, chunks, tags, folders, drafts, saved searches, jobs, password resets) in one transaction, then removes audio files and the profile picture and clears the session. `requireUser` now checks the account still exists (cached for 5 minutes), so other devices are signed out. Profile has a "Delete account" section with a password field.
+- **MP4 fallback**: `MediaRecorder` tries WebM/Opus first, then MP4/AAC; MP4 recordings are uploaded and downloaded as `.m4a`, and the server maps mp4/m4a/aac to `m4a`.
+
 ## 2026-09-28 to 2026-10-01 (backend support for the NoteVault apps, faster search, iOS)
 
 - **App sessions**: `VOICEVAULT_CROSS_SITE_COOKIES=1` makes the session cookie SameSite=None + Secure so the Android/iOS/desktop apps stay logged in; credentialed CORS is limited to an allowlist (own domains, `https://localhost` for Android/desktop, `capacitor://localhost` and `capacitor://app.voicevault.xyz` for iOS, local dev, plus `VOICEVAULT_CORS_ORIGINS`).
@@ -44,7 +53,7 @@ title: voiceVault — Edits made
 
 ## Technology and build map (2026-10-01)
 
-The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps and language detection; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
+The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps, language detection, who spoke each line, and sound tags such as laughter or music; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
 
 ```mermaid
 flowchart LR
@@ -54,7 +63,7 @@ flowchart LR
   end
 
   subgraph External["External services used by the backend"]
-    EL["ElevenLabs Scribe<br/>speech-to-text (transcription)"]
+    EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]

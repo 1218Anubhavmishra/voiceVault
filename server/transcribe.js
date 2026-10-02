@@ -86,7 +86,10 @@ function writeSilentPcmWav16kMono(outPath, durationSec) {
  * Transcription is ElevenLabs STT only (`transcribeAudioWithElevenLabs`).
  * The `model` / `provider` arguments are ignored and kept only for backwards-compatible call sites.
  */
-export async function transcribeAudioFile(audioPath, { model = '', language = '', provider = '' } = {}) {
+export async function transcribeAudioFile(
+  audioPath,
+  { model = '', language = '', provider = '', diarize = false, tagAudioEvents = false } = {}
+) {
   void model;
   void provider;
 
@@ -157,7 +160,11 @@ export async function transcribeAudioFile(audioPath, { model = '', language = ''
   }
 
   try {
-    return await transcribeAudioWithElevenLabs(audioForStt, { language: (language ?? '').toString() });
+    return await transcribeAudioWithElevenLabs(audioForStt, {
+      language: (language ?? '').toString(),
+      diarize: !!diarize,
+      tagAudioEvents: !!tagAudioEvents
+    });
   } finally {
     try {
       if (fs.existsSync(preprocessedPath)) fs.unlinkSync(preprocessedPath);

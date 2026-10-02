@@ -29,7 +29,7 @@ Taken from the live site (voicevault.xyz, 1280×800) on 2026-10-01.
 ## 2) Scope (what it is / isn't)
 
 - **Is**: A multi-user web app with accounts, server-side transcription, transcript search, audio playback/download, and native app builds of the same UI.
-- **Is not (yet)**: Collaboration/sharing, speaker labels, integrations (calendar, reminders), or offline use of the apps.
+- **Is not (yet)**: Collaboration/sharing, automatic recognition of who a speaker is (speakers are labelled "Speaker 1", "Speaker 2" and named by hand), integrations (calendar, reminders), or offline use of the apps.
 
 ## 3) Product goals aligned to `VoiceVault.md`
 
@@ -55,12 +55,17 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 - Register, log in/out, profile name and picture.
 - Forgot password: a reset code is emailed (SMTP).
 - Each user only sees their own notes; sessions are cookie-based and work from the website and the apps.
+- Delete account (Profile): after the password is confirmed, the account and all its notes, drafts, folders, tags, saved searches, audio and profile picture are removed. Sessions on other devices stop working.
 
 ### Notes
 
 - **Create notes**
   - Record an audio note and save it.
   - Upload an existing audio file and save it as a note.
+  - Recording uses WebM/Opus, or MP4/AAC on browsers without WebM (older iPhones, Safari).
+- **Speaker labels and sound tags**
+  - Note transcripts start each line with the speaker ("Speaker 1:", "Speaker 2:") and include tags such as "(laughter)" or "(music)".
+  - Speakers can be renamed in the "Speakers" box after Full preview, and in Edit mode on saved notes; the name changes everywhere in the note.
 - **Background transcription**
   - On save, notes enter **`processing`** state and later become **`ready`** (or **`error`** on failure).
   - Optional AI-generated titles (OpenAI).
@@ -141,7 +146,7 @@ From `VoiceVault.md`, the three pillars are Capture / Index / Retrieve.
 
 ### Technology and build map
 
-The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps and language detection; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
+The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps, language detection, who spoke each line, and sound tags such as laughter or music; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
 
 ```mermaid
 flowchart LR
@@ -151,7 +156,7 @@ flowchart LR
   end
 
   subgraph External["External services used by the backend"]
-    EL["ElevenLabs Scribe<br/>speech-to-text (transcription)"]
+    EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
@@ -242,14 +247,16 @@ Open `http://localhost:5177`.
 - **Search by text**: search for a phrase from transcript; confirm note appears and the first search is fast.
 - **Search by voice**: record a short search query; confirm results match.
 - **Delete**: delete a note; confirm it disappears.
+- **Speakers**: upload a recording with two voices; confirm "Speaker 1" / "Speaker 2" labels, rename one and confirm it persists.
+- **Delete account**: with a test account, delete it from Profile; confirm a wrong password is refused and the account can't log in afterwards.
 - **Failure path**: use an invalid `ELEVENLABS_API_KEY`; confirm the note becomes `error`; fix the key and click retry.
 
 ## 9) Known constraints
 
 - Semantic retrieval is **segment-level** (not word-level alignment) and uses brute-force similarity, fine for personal libraries but not for very large ones.
 - Transcription depends on the ElevenLabs API (quota, availability); LLM answers are **optional** and need an OpenAI key.
-- **No diarization / speaker labels**.
-- Recording is WebM only; iPhones probably need iOS 18.4+ (not yet tested on a device).
+- Speaker labels are generic ("Speaker 1"); the app doesn't recognise who is speaking. Sound tags are general (laughter, music) and don't name instruments.
+- Recording uses WebM, with an MP4 fallback; neither is tested on a physical iPhone yet.
 
 ## 10) Cross-check vs original documents (what's still missing)
 
@@ -268,6 +275,7 @@ This section cross-checks the current product against the "semantic search / voi
   - Still missing: word-level jump targets in search results.
 - **Chunking pipeline (partially addressed)**:
   - Transcripts are split into segment chunks with embeddings; no topic-based segmentation yet.
+  - Speaker diarization (who spoke each line) is done for note transcripts, with renameable speaker names.
 - **Mobile-first product (addressed)**:
   - Android and iOS apps (Capacitor) plus Windows/macOS/Linux desktop apps (Electron) in the NoteVault project.
 - **Cloud components (addressed)**:

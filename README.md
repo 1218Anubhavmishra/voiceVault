@@ -7,8 +7,9 @@ Audio notes app with cross-note search: record or upload audio, get a transcript
 
 ## What it does
 
-- Record audio in your browser (MediaRecorder) or upload audio files; accounts with login, password reset by email
+- Record audio in your browser (MediaRecorder; WebM, or MP4 where WebM isn't supported) or upload audio files; accounts with login, password reset by email, and account deletion from Profile
 - Transcribe on the server with **ElevenLabs Scribe** (`VOICEVAULT_STT_PROVIDER=elevenlabs`, key `ELEVENLABS_API_KEY`); local faster-whisper is an optional alternative. Notes show as **processing** until ready
+- Note transcripts label who spoke each line ("Speaker 1:", "Speaker 2:") and tag sounds such as laughter or music; speakers can be renamed before saving and in Edit mode
 - Optional AI note titles and quick answers with OpenAI (`OPENAI_API_KEY`)
 - Notes, audio and search index are stored in PostgreSQL (`DATABASE_URL`)
 - Search across all notes by text or by recording a short audio query

@@ -8,8 +8,8 @@ export async function ensureNoteSegments(db, noteId, segments, { embedModel = DE
   await db.tx(async (txDb) => {
     await txDb.prepare(`DELETE FROM note_segments WHERE note_id = ?`).run(noteId);
     const ins = txDb.prepare(
-      `INSERT INTO note_segments (note_id, seg_idx, start_sec, end_sec, text, words_json, embedding, embed_model, created_at, updated_at)
-       VALUES (@note_id, @seg_idx, @start_sec, @end_sec, @text, @words_json, @embedding, @embed_model, @created_at, @updated_at)`
+      `INSERT INTO note_segments (note_id, seg_idx, start_sec, end_sec, text, words_json, speaker, embedding, embed_model, created_at, updated_at)
+       VALUES (@note_id, @seg_idx, @start_sec, @end_sec, @text, @words_json, @speaker, @embedding, @embed_model, @created_at, @updated_at)`
     );
     for (let i = 0; i < segments.length; i += 1) {
       const s = segments[i];
@@ -25,6 +25,7 @@ export async function ensureNoteSegments(db, noteId, segments, { embedModel = DE
         end_sec: end,
         text,
         words_json: wordsJson,
+        speaker: (s?.speaker ?? '').toString().slice(0, 40),
         embedding: null,
         embed_model: embedModel,
         created_at: now,

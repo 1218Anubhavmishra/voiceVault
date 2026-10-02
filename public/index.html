@@ -238,6 +238,7 @@
             </span>
             <textarea id="liveTranscript" class="textarea" rows="6"></textarea>
           </label>
+          <div id="noteSpeakers" class="vvSpeakerEditor" hidden></div>
 
           <p class="newNoteTitleHint" style="margin: 0 0 8px">
             Transcription runs on the server with <strong>ElevenLabs STT</strong>.
@@ -322,6 +323,24 @@
           </div>
           <div class="row" style="justify-content: flex-end; gap: 10px; margin-top: 14px">
             <button type="button" class="btn primary" id="btnProfileEdit">Edit</button>
+          </div>
+          <div class="profileDangerZone">
+            <div class="row" style="justify-content: flex-end; margin: 0">
+              <button type="button" class="btn profileDropdownDanger" id="btnProfileDeleteStart">Delete account</button>
+            </div>
+            <div id="profileDeleteConfirm" class="profileBody" style="margin: 0" hidden>
+              <div class="subtle" style="margin: 0">
+                This permanently deletes your account, all your notes and recordings, and your profile photo. It can't be undone.
+              </div>
+              <label class="label" style="margin: 0">
+                Password
+                <input id="profileDeletePass" class="input" type="password" autocomplete="current-password" />
+              </label>
+              <div class="row" style="justify-content: flex-end; gap: 10px; margin: 0; flex-wrap: wrap">
+                <button type="button" class="btn" id="btnProfileDeleteCancel">Cancel</button>
+                <button type="button" class="btn danger" id="btnProfileDeleteConfirm">Delete permanently</button>
+              </div>
+            </div>
           </div>
         </div>
         <div id="profileEditMode" class="profileBody" hidden>

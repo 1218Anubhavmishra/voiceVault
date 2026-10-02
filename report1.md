@@ -4,9 +4,10 @@
 `voiceVault` is an audio note app: users **record or upload audio notes**, the server **transcribes** them, and users **search across all notes** by text or voice. It is live at [voicevault.xyz](https://www.voicevault.xyz) (frontend on Vercel, API `api.voicevault.xyz` on Render, PostgreSQL). The same frontend ships as Android, iOS, Windows, macOS and Linux apps under the name NoteVault.
 
 ## Core Features
-- **Accounts**: register, log in, profile picture, password reset by emailed code; each user sees only their own notes.
-- **In-browser recording**: Uses the browser `MediaRecorder` API to capture audio, or upload an audio file.
+- **Accounts**: register, log in, profile picture, password reset by emailed code, and account deletion (password required; removes all notes and audio); each user sees only their own notes.
+- **In-browser recording**: Uses the browser `MediaRecorder` API to capture audio (WebM/Opus, or MP4/AAC where WebM isn't supported), or upload an audio file.
 - **Server transcription**: **ElevenLabs Scribe** turns audio into text with word timestamps and language detection (local faster-whisper is an optional alternative).
+- **Speaker labels and sound tags**: note transcripts mark who spoke each line ("Speaker 1:", "Speaker 2:") and add tags such as "(laughter)" or "(music)". Speakers can be renamed before saving and later in Edit mode.
 - **Optional AI titles and quick answers** with OpenAI.
 - **Timestamped segments**: Saved notes include segment timestamps for clip-style playback.
 - **Audio-based search**: Records a short audio query, transcribes it, then searches across stored note transcripts.
@@ -28,7 +29,7 @@
 
 ### Technology and build map
 
-The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps and language detection; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
+The voiceVault website and the NoteVault apps share one frontend (`public/`) and one backend (`api.voicevault.xyz`). Each build wraps the same frontend with a different technology. The app wrappers (Capacitor, Electron) live in the NoteVault project (`D:\Projects\NoteVault`, GitHub `1218Anubhavmishra/NoteVault`). The backend calls **ElevenLabs Scribe** to turn recorded audio into text (word timestamps, language detection, who spoke each line, and sound tags such as laughter or music; `server/elevenlabs-stt-vv.js`, key `ELEVENLABS_API_KEY`). A local faster-whisper model is an optional alternative (`VOICEVAULT_STT_PROVIDER=whisper`). OpenAI generates note titles and quick answers when `OPENAI_API_KEY` is set, SMTP email sends password-reset codes, and ffmpeg prepares audio before transcription. Search embeddings run locally on the server (transformers.js), so search needs no external API.
 
 ```mermaid
 flowchart LR
@@ -38,7 +39,7 @@ flowchart LR
   end
 
   subgraph External["External services used by the backend"]
-    EL["ElevenLabs Scribe<br/>speech-to-text (transcription)"]
+    EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
@@ -127,6 +128,6 @@ Then open:
 
 ## Risks / Constraints
 - Transcription depends on the ElevenLabs API (key, quota, availability); local Whisper needs Python and more CPU.
-- Browser recording requires microphone permissions; recording is WebM only, which iPhones probably support only from iOS 18.4 (not yet tested on a device).
+- Browser recording requires microphone permissions; recording uses WebM, with an MP4 fallback for browsers without WebM (older iPhones); neither is tested on a physical iPhone yet.
 - Segment playback for MP3 relies on browser seeking support; the server supports HTTP byte ranges for accurate seeking.
 

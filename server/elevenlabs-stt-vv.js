@@ -101,6 +101,15 @@ function joinWordTokens(parts) {
 function wordsToSegments(words) {
   if (!Array.isArray(words) || words.length === 0) return [];
 
+  // ElevenLabs diarization ids ("speaker_0", …) become "Speaker 1", "Speaker 2", … in order of first appearance.
+  const speakerLabels = new Map();
+  const labelFor = (rawId) => {
+    const id = (rawId ?? '').toString().trim();
+    if (!id) return '';
+    if (!speakerLabels.has(id)) speakerLabels.set(id, `Speaker ${speakerLabels.size + 1}`);
+    return speakerLabels.get(id);
+  };
+
   const list = [];
   for (const w of words) {
     if (!w || typeof w.text !== 'string') continue;
@@ -108,60 +117,81 @@ function wordsToSegments(words) {
     const e = Number(w.end);
     if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) continue;
     // Keep the original token text (often includes leading spaces / punctuation).
-    list.push({ word: w.text, start: s, end: e });
+    list.push({ word: w.text, start: s, end: e, speakerId: (w.speaker_id ?? '').toString() });
   }
   if (!list.length) return [];
 
   list.sort((a, b) => a.start - b.start || a.end - b.end);
+  for (const w of list) w.speaker = labelFor(w.speakerId);
 
   // Pause longer than ~0.7s tends to correlate with clause / breath boundaries in flowing speech.
   // (Too large → entire songs become one row in the UI.)
   const GAP_SEC = 0.7;
   const out = [];
 
-  let cur = {
-    start: list[0].start,
-    end: list[0].end,
-    parts: [list[0].word],
-    words: [{ start: list[0].start, end: list[0].end, word: list[0].word }]
+  const startSeg = (w) => ({
+    start: w.start,
+    end: w.end,
+    speaker: w.speaker,
+    parts: [w.word],
+    words: [{ start: w.start, end: w.end, word: w.word }]
+  });
+  const pushSeg = (seg) => {
+    const text = joinWordTokens(seg.parts);
+    const wordsOut = (seg.words || []).filter(
+      (x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start && (x.word ?? '').toString()
+    );
+    if (!text) return;
+    const row = { start: seg.start, end: seg.end, text, words: wordsOut };
+    if (seg.speaker) row.speaker = seg.speaker;
+    out.push(row);
   };
 
+  let cur = startSeg(list[0]);
   for (let i = 1; i < list.length; i++) {
     const w = list[i];
     const gap = w.start - cur.end;
-    if (gap > GAP_SEC) {
-      const text = joinWordTokens(cur.parts);
-      const wordsOut = (cur.words || []).filter(
-        (x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start && (x.word ?? '').toString()
-      );
-      if (text) out.push({ start: cur.start, end: cur.end, text, words: wordsOut });
-      cur = {
-        start: w.start,
-        end: w.end,
-        parts: [w.word],
-        words: [{ start: w.start, end: w.end, word: w.word }]
-      };
+    // Spacing tokens carry a speaker too; only real tokens may start a new speaker turn.
+    const speakerChanged = !!w.speaker && !!cur.speaker && w.speaker !== cur.speaker && w.word.trim() !== '';
+    if (gap > GAP_SEC || speakerChanged) {
+      pushSeg(cur);
+      cur = startSeg(w);
     } else {
       cur.end = Math.max(cur.end, w.end);
+      if (!cur.speaker && w.speaker) cur.speaker = w.speaker;
       cur.parts.push(w.word);
       cur.words.push({ start: w.start, end: w.end, word: w.word });
     }
   }
-
-  const lastText = joinWordTokens(cur.parts);
-  const lastWordsOut = (cur.words || []).filter(
-    (x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start && (x.word ?? '').toString()
-  );
-  if (lastText) out.push({ start: cur.start, end: cur.end, text: lastText, words: lastWordsOut });
+  pushSeg(cur);
   return out;
+}
+
+/** "Speaker 1: …" line at every speaker change, so the speaker names live in the saved transcript text too. */
+function speakerLabelledTranscript(segments) {
+  const lines = [];
+  let lastSpeaker = null;
+  for (const s of segments) {
+    const text = (s?.text ?? '').toString().trim();
+    if (!text) continue;
+    const sp = (s?.speaker ?? '').toString();
+    if (lines.length && sp === lastSpeaker) {
+      lines[lines.length - 1] += ` ${text}`;
+    } else {
+      lines.push(sp ? `${sp}: ${text}` : text);
+      lastSpeaker = sp;
+    }
+  }
+  return lines.join('\n');
 }
 
 /**
  * @param {string} audioPath - path to audio file (e.g. 16 kHz WAV after ffmpeg)
- * @param {{ language?: string }} opts - optional ISO-639-1 hint (matches UI)
- * @returns {Promise<{ transcript: string, language: string, segments: Array<{start:number,end:number,text:string,words:Array<{start:number,end:number,word:string}>}> }>}
+ * @param {{ language?: string, diarize?: boolean, tagAudioEvents?: boolean }} opts - optional ISO-639-1 hint (matches UI);
+ *   `diarize` labels who spoke each segment, `tagAudioEvents` adds "(laughter)", "(music)", … to the text.
+ * @returns {Promise<{ transcript: string, language: string, segments: Array<{start:number,end:number,text:string,speaker?:string,words:Array<{start:number,end:number,word:string}>}> }>}
  */
-export async function transcribeAudioWithElevenLabs(audioPath, { language = '' } = {}) {
+export async function transcribeAudioWithElevenLabs(audioPath, { language = '', diarize = false, tagAudioEvents = false } = {}) {
   const key = (process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY || '').toString().trim();
   if (!key) {
     const err = new Error('ELEVENLABS_API_KEY is not set (required for ElevenLabs STT)');
@@ -178,7 +208,8 @@ export async function transcribeAudioWithElevenLabs(audioPath, { language = '' }
   form.set('model_id', modelId);
   form.set('file', new Blob([buf]), path.basename(audioPath) || 'audio.wav');
   form.set('timestamps_granularity', 'word');
-  form.set('tag_audio_events', 'false');
+  form.set('tag_audio_events', tagAudioEvents ? 'true' : 'false');
+  form.set('diarize', diarize ? 'true' : 'false');
   const lang = (language ?? '').toString().trim();
   if (lang) form.set('language_code', lang);
 
@@ -227,9 +258,10 @@ export async function transcribeAudioWithElevenLabs(audioPath, { language = '' }
     throw err;
   }
 
-  const transcript = chunk.text.trim();
+  let transcript = chunk.text.trim();
   const langOut = elevenLabsLanguageToStored(chunk.language_code || '');
   let segments = wordsToSegments(Array.isArray(chunk.words) ? chunk.words : []);
+  if (segments.some((s) => s.speaker)) transcript = speakerLabelledTranscript(segments);
   if (!segments.length && transcript) {
     const dur = Number(chunk.audio_duration_secs);
     const end = Number.isFinite(dur) && dur > 0 ? dur : Math.max(0.5, transcript.length * 0.06);

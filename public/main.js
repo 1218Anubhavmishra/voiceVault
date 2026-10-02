@@ -18,6 +18,7 @@ const uploadNoteBtnEl = document.getElementById('uploadNoteBtn');
 const uploadNoteNameEl = document.getElementById('uploadNoteName');
 const liveTranscriptEl = document.getElementById('liveTranscript');
 const liveTranscriptWrapEl = document.getElementById('liveTranscriptWrap');
+const noteSpeakersEl = document.getElementById('noteSpeakers');
 const liveTxUpEl = document.getElementById('liveTxUp');
 const liveTxDownEl = document.getElementById('liveTxDown');
 const liveTxStatusEl = document.getElementById('liveTxStatus');
@@ -190,6 +191,11 @@ const profileViewNameEl = document.getElementById('profileViewName');
 const profileViewEmailEl = document.getElementById('profileViewEmail');
 const profileErrorEl = document.getElementById('profileError');
 const btnProfileEditEl = document.getElementById('btnProfileEdit');
+const btnProfileDeleteStartEl = document.getElementById('btnProfileDeleteStart');
+const profileDeleteConfirmEl = document.getElementById('profileDeleteConfirm');
+const profileDeletePassEl = document.getElementById('profileDeletePass');
+const btnProfileDeleteCancelEl = document.getElementById('btnProfileDeleteCancel');
+const btnProfileDeleteConfirmEl = document.getElementById('btnProfileDeleteConfirm');
 const btnProfileCancelEl = document.getElementById('btnProfileCancel');
 const btnProfileSaveEl = document.getElementById('btnProfileSave');
 const profileEditNameEl = document.getElementById('profileEditName');
@@ -313,10 +319,94 @@ function vvFormatTranscript(text) {
     .replaceAll('\u201c', '"')
     .replaceAll('\u201d', '"')
     .replaceAll('"', '\n"\n')
-    .replace(/([.!?;:,])(?=\s*[\p{L}\p{N}])/gu, '$1\n')
+    .replace(/([.!?;:,])(?=\s*[\p{L}\p{N}])/gu, (m, p, offset, str) =>
+      p === ':' && vvIsSpeakerLabelBefore(str, offset) ? p : `${p}\n`
+    )
     .replaceAll('\r\n', '\n')
     .replaceAll(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** Mirror server `isSpeakerLabelBefore`: keeps "Speaker 1: text" on one line. */
+function vvIsSpeakerLabelBefore(str, colonIdx) {
+  const lineStart = str.lastIndexOf('\n', colonIdx - 1) + 1;
+  return /^[\p{L}\p{N}][\p{L}\p{N} '-]{0,39}$/u.test(str.slice(lineStart, colonIdx));
+}
+
+/** Mirror server `sanitizeSpeakerName`. */
+function vvSanitizeSpeakerName(raw) {
+  return (raw ?? '')
+    .toString()
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N} '-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40)
+    .trim();
+}
+
+/** Distinct speaker names in order of first appearance. */
+function vvSpeakersInSegments(segments) {
+  const seen = [];
+  for (const s of Array.isArray(segments) ? segments : []) {
+    const sp = (s?.speaker ?? '').toString().trim();
+    if (sp && !seen.includes(sp)) seen.push(sp);
+  }
+  return seen;
+}
+
+/** Rename the "Old:" label at the start of every transcript line. */
+function vvRenameSpeakerInText(text, from, to) {
+  const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (text ?? '').toString().replace(new RegExp(`^(\\s*)${esc}:`, 'gmu'), `$1${to}:`);
+}
+
+/**
+ * One name field per speaker. `onRename(from, to)` runs after a valid change; the field reverts on an empty name.
+ * @param {HTMLElement | null} hostEl
+ * @param {string[]} speakers
+ */
+function renderSpeakerEditor(hostEl, speakers, onRename) {
+  if (!hostEl) return;
+  hostEl.innerHTML = '';
+  const list = Array.isArray(speakers) ? speakers : [];
+  hostEl.hidden = list.length === 0;
+  if (!list.length) return;
+  const title = document.createElement('div');
+  title.className = 'vvSpeakerEditorTitle';
+  title.textContent = list.length === 1 ? 'Speaker (rename to update the transcript)' : 'Speakers (rename to update the transcript)';
+  hostEl.appendChild(title);
+  const row = document.createElement('div');
+  row.className = 'vvSpeakerEditorRow';
+  for (const name of list) {
+    const input = document.createElement('input');
+    input.className = 'input vvSpeakerInput';
+    input.type = 'text';
+    input.maxLength = 40;
+    input.value = name;
+    input.dataset.current = name;
+    input.setAttribute('aria-label', `Rename ${name}`);
+    input.addEventListener('change', () => {
+      const from = input.dataset.current || '';
+      const to = vvSanitizeSpeakerName(input.value);
+      if (!to || to === from) {
+        input.value = from;
+        return;
+      }
+      input.value = to;
+      input.dataset.current = to;
+      input.setAttribute('aria-label', `Rename ${to}`);
+      onRename?.(from, to);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      }
+    });
+    row.appendChild(input);
+  }
+  hostEl.appendChild(row);
 }
 
 /** Same rules as `sanitizeSegmentsForPersistence` on the server (preview bundle must pass save validation). */
@@ -329,7 +419,8 @@ function vvSanitizePreviewSegments(segments) {
     const end = Number(s?.end);
     const text = (s?.text ?? '').toString().trim();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) continue;
-    out.push({ start, end, text });
+    const speaker = vvSanitizeSpeakerName(s?.speaker);
+    out.push(speaker ? { start, end, text, speaker } : { start, end, text });
     if (out.length >= 8000) break;
   }
   return out;
@@ -702,7 +793,57 @@ function setProfileError(msg) {
 function showProfileViewMode() {
   if (profileViewModeEl) profileViewModeEl.hidden = false;
   if (profileEditModeEl) profileEditModeEl.hidden = true;
+  setProfileDeleteConfirmOpen(false);
   setProfileError('');
+}
+
+function setProfileDeleteConfirmOpen(open) {
+  if (profileDeleteConfirmEl) profileDeleteConfirmEl.hidden = !open;
+  if (btnProfileDeleteStartEl) btnProfileDeleteStartEl.hidden = !!open;
+  if (profileDeletePassEl) profileDeletePassEl.value = '';
+  if (open) profileDeletePassEl?.focus();
+}
+
+async function deleteAccount() {
+  setProfileError('');
+  const password = (profileDeletePassEl?.value ?? '').toString();
+  if (!password) {
+    setProfileError('Enter your password to confirm.');
+    return;
+  }
+  if (btnProfileDeleteConfirmEl) btnProfileDeleteConfirmEl.disabled = true;
+  try {
+    const r = await fetch('/api/auth/delete-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const j = await safeJson(r);
+    if (!r.ok) throw new Error((j?.error ?? '').toString().trim() || `Delete failed (${r.status})`);
+    for (const k of ['vv_recent_searches', 'vv_last_note_language']) {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      sessionStorage.removeItem('vv_active_note_draft_id');
+    } catch {
+      // ignore
+    }
+    closeProfileDropdown();
+    closeProfileModal();
+    resetLibraryUiForAccountSwitch();
+    sessionUser = null;
+    setAuthUiLoggedIn(null);
+    setAuthError('');
+    setStatus('Your account and all its notes were deleted.');
+  } catch (err) {
+    setProfileError(err?.message ?? String(err));
+  } finally {
+    if (btnProfileDeleteConfirmEl) btnProfileDeleteConfirmEl.disabled = false;
+  }
 }
 
 function showProfileEditMode() {
@@ -2431,6 +2572,29 @@ function wire() {
     showProfileEditMode();
   });
 
+  btnProfileDeleteStartEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setProfileError('');
+    setProfileDeleteConfirmOpen(true);
+  });
+
+  btnProfileDeleteCancelEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setProfileError('');
+    setProfileDeleteConfirmOpen(false);
+  });
+
+  btnProfileDeleteConfirmEl?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await deleteAccount();
+  });
+
+  profileDeletePassEl?.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    await deleteAccount();
+  });
+
   btnProfileCancelEl?.addEventListener('click', (e) => {
     e.preventDefault();
     revokeProfileEditAvatarPreview();
@@ -3066,6 +3230,7 @@ async function startRecording(state, { onUi, label }) {
     startTimer(state, label === 'note' ? noteTimerEl : queryTimerEl);
     if (label === 'note') {
       lastFullPreviewBundle = null;
+      renderSpeakerEditor(noteSpeakersEl, [], null);
       noteFullPreviewGateOk = false;
       noteAllowManualSaveFinal = false;
       noteUsedMicForCurrentBlob = true;
@@ -3666,6 +3831,7 @@ async function refreshResults(q = '') {
             <input class="input editTitle" />
           </label>
           <hr class="noteTitleBodyDivider editTitleBodySep" />
+          <div class="vvSpeakerEditor editSpeakers" hidden></div>
           <label class="label">
             Transcript
             <textarea class="textarea editBody" rows="16"></textarea>
@@ -3804,6 +3970,9 @@ async function refreshResults(q = '') {
     const editBox = note.querySelector('.editBox');
     const transcriptBox = note.querySelector('.noteTranscript');
     const editBody = note.querySelector('.editBody');
+    const editSpeakers = note.querySelector('.editSpeakers');
+    /** Original speaker name → name currently shown in the editor. */
+    let editSpeakerNames = new Map();
 
     const btnToggle = note.querySelector('button[data-toggle]');
     if (btnToggle) {
@@ -4234,12 +4403,20 @@ async function refreshResults(q = '') {
       note.classList.toggle('isEditing', willShow);
       syncEditMenuBtn();
       if (willShow) {
+        editSpeakerNames = new Map();
+        renderSpeakerEditor(editSpeakers, [], null);
         try {
           const resp = await fetch(`/api/notes/${encodeURIComponent(item.id)}`);
           const full = await safeJson(resp);
           if (!resp.ok) throw new Error(full?.error || `Load failed (${resp.status})`);
           editTitle.value = (full?.display_title ?? full?.title ?? item.display_title ?? item.title ?? '').toString();
           editBody.value = (full?.body ?? item.body ?? '').toString();
+          const speakers = vvSpeakersInSegments(full?.segments);
+          editSpeakerNames = new Map(speakers.map((s) => [s, s]));
+          renderSpeakerEditor(editSpeakers, speakers, (from, to) => {
+            for (const [orig, cur] of editSpeakerNames) if (cur === from) editSpeakerNames.set(orig, to);
+            editBody.value = vvRenameSpeakerInText(editBody.value, from, to);
+          });
         } catch {
           editTitle.value = (item.display_title ?? item.title ?? '').toString();
           editBody.value = (item.body ?? '').toString();
@@ -4266,7 +4443,8 @@ async function refreshResults(q = '') {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             display_title: editTitle.value || '',
-            body: editBody.value || ''
+            body: editBody.value || '',
+            speakers: Object.fromEntries([...editSpeakerNames].filter(([orig, cur]) => orig !== cur))
           })
         });
         if (!resp.ok) {
@@ -4337,7 +4515,8 @@ async function refreshResults(q = '') {
         e.stopPropagation();
         const a = document.createElement('a');
         a.href = `/api/notes/${encodeURIComponent(item.id)}/audio`;
-        a.download = `${sanitizeFilename((item.display_title || item.title || 'recording').toString()) || 'recording'}.webm`;
+        const savedExt = ((item.audio_filename ?? '').toString().match(/\.([a-z0-9]{2,4})$/i)?.[1] ?? '').toLowerCase();
+        a.download = `${sanitizeFilename((item.display_title || item.title || 'recording').toString()) || 'recording'}.${savedExt || 'webm'}`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -4631,6 +4810,7 @@ function vvRefineSegmentsForDisplay(segments, { interWordPauseSec = 0.52 } = {})
       start: Number(s.start),
       end: Number(s.end),
       text: String(s.text ?? '').trim(),
+      speaker: (seg?.speaker ?? '').toString(),
       words: Array.isArray(s.words) ? s.words : []
     }));
   });
@@ -4677,7 +4857,12 @@ function vvExpandedTranscriptProse(data, refinedSegments) {
 function renderWordProseHtmlFromSegments(segments) {
   const segs = Array.isArray(segments) ? segments : [];
   const blocks = [];
+  let lastSpeaker = '';
   for (const s of segs) {
+    const speaker = (s?.speaker ?? '').toString().trim();
+    const speakerHtml =
+      speaker && speaker !== lastSpeaker ? `<span class="vvSpeakerLabel">${escapeHtml(speaker)}:</span> ` : '';
+    if (speaker) lastSpeaker = speaker;
     const ws = Array.isArray(s?.words) ? s.words : [];
     const list = ws.length ? ws : syntheticWordsFromSegment(s);
     const words = [];
@@ -4693,7 +4878,7 @@ function renderWordProseHtmlFromSegments(segments) {
       );
       if (words.length >= 60_000) break;
     }
-    if (words.length) blocks.push(words.join(' '));
+    if (words.length) blocks.push(speakerHtml + words.join(' '));
     if (blocks.length >= 5000) break;
   }
   return blocks.join('<br><br>');
@@ -5993,6 +6178,7 @@ async function transcribeFullPreviewImpl(signal) {
   lastFullPreviewBundle = null;
   noteFullPreviewGateOk = false;
   noteAllowManualSaveFinal = false;
+  renderSpeakerEditor(noteSpeakersEl, [], null);
 
   if (liveTranscriptWrapEl) liveTranscriptWrapEl.hidden = false;
   // UX: keep last live-chunk transcript visible until the full-file result returns (do not blank here).
@@ -6010,6 +6196,7 @@ async function transcribeFullPreviewImpl(signal) {
     (noteLanguageEl?.value ?? '').toString().trim() || primaryLanguageCode(noteLastDetectedApiLang);
   fd.append('language', langHint);
   fd.append('stt_provider', getNewNoteSttProvider());
+  fd.append('purpose', 'note');
   fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
 
   const failFullPreview = (msg, { serverDetail = '' } = {}) => {
@@ -6101,6 +6288,15 @@ async function transcribeFullPreviewImpl(signal) {
         duration_ms: Math.round(note.durationMs || 0),
         audio_bytes: Number(note.audioBlob?.size || 0) || 0
       };
+      // Rename in the bundle too, so the save still sends the timed segments instead of plain edited text.
+      renderSpeakerEditor(noteSpeakersEl, vvSpeakersInSegments(segments), (from, to) => {
+        const b = lastFullPreviewBundle;
+        if (b) {
+          b.segments = b.segments.map((s) => (s.speaker === from ? { ...s, speaker: to } : s));
+          b.transcript = vvRenameSpeakerInText(b.transcript, from, to);
+        }
+        liveTranscriptEl.value = vvRenameSpeakerInText(liveTranscriptEl.value, from, to);
+      });
       applySuggestedTitleIfAutomatic((data?.suggested_title ?? '').toString(), transcriptForBundle);
       noteFullPreviewGateOk = true;
       noteAllowManualSaveFinal = false;
@@ -6620,17 +6816,27 @@ function setStatus(text, isError = false) {
 }
 
 function pickMimeType() {
-  // Force WebM for consistent server handling and predictable file sizes.
-  const candidates = ['audio/webm;codecs=opus', 'audio/webm'];
+  // WebM/Opus first (Chrome, Firefox, Android, iOS 18.4+); MP4/AAC for older Safari and iPhones.
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4'];
   for (const c of candidates) {
     if (MediaRecorder.isTypeSupported(c)) return c;
   }
-  throw new Error('Your browser does not support audio/webm recording.');
+  throw new Error('Your browser does not support audio recording (WebM or MP4).');
+}
+
+/** File extension for a recorded/uploaded audio MIME type. */
+function audioExtForMime(mime) {
+  const m = (mime ?? '').toString().toLowerCase();
+  if (m.includes('webm')) return 'webm';
+  if (m.includes('mp4') || m.includes('m4a') || m.includes('aac')) return 'm4a';
+  if (m.includes('ogg')) return 'ogg';
+  if (m.includes('wav')) return 'wav';
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  return 'webm';
 }
 
 function guessFilename(mime) {
-  if (mime?.includes('webm')) return 'note.webm';
-  return 'note.webm';
+  return `note.${audioExtForMime(mime)}`;
 }
 
 function escapeHtml(s) {
@@ -6766,6 +6972,7 @@ function resetRecorder(state) {
   }
   if (state === note) {
     stopNoteLangDetectCountdown();
+    renderSpeakerEditor(noteSpeakersEl, [], null);
     lastFullPreviewBundle = null;
     noteFullPreviewGateOk = false;
     noteAllowManualSaveFinal = false;

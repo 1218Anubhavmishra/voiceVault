@@ -287,6 +287,47 @@ input[type='file'] {
   gap: 12px;
 }
 
+.profileDangerZone {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+}
+
+.btn.danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.vvSpeakerEditor {
+  margin: 0 0 12px;
+}
+
+.vvSpeakerEditorTitle {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.vvSpeakerEditorRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vvSpeakerEditorRow .vvSpeakerInput {
+  width: auto;
+  flex: 0 1 180px;
+  min-width: 120px;
+}
+
+.vvSpeakerLabel {
+  font-weight: 700;
+  color: var(--primary);
+}
+
 .profileHero {
   display: flex;
   gap: 16px;

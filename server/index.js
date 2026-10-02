@@ -304,9 +304,34 @@ function currentUserId(req) {
   return uid ? String(uid) : '';
 }
 
-function requireUser(req, res, next) {
+/** uid → time (ms) until which we trust that the account exists. Session cookies can't be revoked, so a
+ *  deleted account's cookie on another device must be rejected here. */
+const knownUserIds = new Map();
+const KNOWN_USER_TTL_MS = 5 * 60 * 1000;
+
+async function userAccountExists(uid) {
+  const until = knownUserIds.get(uid);
+  if (until && until > Date.now()) return true;
+  const row = await db.prepare(`SELECT id FROM users WHERE id = ?`).get(uid);
+  if (!row) {
+    knownUserIds.delete(uid);
+    return false;
+  }
+  knownUserIds.set(uid, Date.now() + KNOWN_USER_TTL_MS);
+  return true;
+}
+
+async function requireUser(req, res, next) {
   const uid = currentUserId(req);
   if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  try {
+    if (!(await userAccountExists(uid))) {
+      req.session = null;
+      return res.status(401).json({ error: 'Session invalid' });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e?.message ?? String(e) });
+  }
   req.user_id = uid;
   next();
 }
@@ -940,6 +965,78 @@ app.patch('/api/auth/profile', async (req, res) => {
 
   const user = await db.prepare(`SELECT id, email, display_name, avatar_blob_id, created_at, updated_at FROM users WHERE id = ?`).get(uid);
   res.json({ ok: true, user: userToPublicJson(user) });
+});
+
+/** Permanently deletes the signed-in account and everything it owns (notes, audio, drafts, avatar, folders, tags). */
+app.post('/api/auth/delete-account', async (req, res) => {
+  const uid = currentUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in' });
+  const password = (req.body?.password ?? '').toString();
+  if (!password) {
+    return res.status(400).json({ error: 'Enter your password to confirm', code: 'missing_password', field: 'password' });
+  }
+  const user = await db.prepare(`SELECT id, password_hash, avatar_blob_id FROM users WHERE id = ?`).get(uid);
+  if (!user) {
+    req.session = null;
+    return res.status(401).json({ error: 'Session invalid' });
+  }
+  if (!bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: 'Incorrect password', code: 'wrong_password', field: 'password' });
+  }
+
+  try {
+    const noteRows = await db.prepare(`SELECT audio_filename, audio_blob_id FROM notes WHERE user_id = ?`).all(uid);
+    const draftRows = await db.prepare(`SELECT audio_blob_id FROM note_drafts WHERE user_id = ?`).all(uid);
+    const blobIds = new Set(
+      [user.avatar_blob_id, ...noteRows.map((r) => r.audio_blob_id), ...draftRows.map((r) => r.audio_blob_id)]
+        .map((b) => (b ?? '').toString().trim())
+        .filter(Boolean)
+    );
+
+    const userNotes = `SELECT id FROM notes WHERE user_id = ?`;
+    const userJobs = `SELECT id FROM ingestion_jobs WHERE user_id = ? OR note_id IN (${userNotes})`;
+    await db.tx(async (txDb) => {
+      await txDb.prepare(`DELETE FROM job_events WHERE user_id = ? OR job_id IN (${userJobs})`).run(uid, uid, uid);
+      await txDb.prepare(`DELETE FROM ingestion_jobs WHERE user_id = ? OR note_id IN (${userNotes})`).run(uid, uid);
+      await txDb.prepare(`DELETE FROM note_processing_state WHERE user_id = ? OR note_id IN (${userNotes})`).run(uid, uid);
+      await txDb.prepare(`DELETE FROM note_segments WHERE note_id IN (${userNotes})`).run(uid);
+      await txDb.prepare(`DELETE FROM note_chunks WHERE note_id IN (${userNotes})`).run(uid);
+      await txDb
+        .prepare(`DELETE FROM note_tags WHERE note_id IN (${userNotes}) OR tag_id IN (SELECT id FROM tags WHERE user_id = ?)`)
+        .run(uid, uid);
+      await txDb.prepare(`DELETE FROM notes WHERE user_id = ?`).run(uid);
+      await txDb.prepare(`DELETE FROM note_drafts WHERE user_id = ?`).run(uid);
+      await txDb.prepare(`DELETE FROM folders WHERE user_id = ?`).run(uid);
+      await txDb.prepare(`DELETE FROM tags WHERE user_id = ?`).run(uid);
+      await txDb.prepare(`DELETE FROM saved_searches WHERE user_id = ?`).run(uid);
+      await txDb.prepare(`DELETE FROM password_resets WHERE user_id = ?`).run(uid);
+      await txDb.prepare(`DELETE FROM users WHERE id = ?`).run(uid);
+    });
+    knownUserIds.delete(uid);
+
+    for (const bid of blobIds) {
+      try {
+        await maybeUnlinkBlob(db, blobsDir, bid);
+      } catch {
+        // disk cache only; Postgres rows are already gone
+      }
+    }
+    for (const r of noteRows) {
+      const fn = (r.audio_filename ?? '').toString().trim();
+      if (!fn) continue;
+      try {
+        const p = path.join(audioDir, fn);
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      } catch {
+        // ignore
+      }
+    }
+  } catch (e) {
+    return res.status(500).json({ error: 'Account deletion failed', details: e?.message ?? String(e) });
+  }
+
+  req.session = null;
+  res.json({ ok: true });
 });
 
 app.get('/api/auth/avatar', async (req, res) => {
@@ -2284,7 +2381,8 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
 
     try {
       const out = await transcribeWithLanguageHintFallback(tmpPath, {
-        language: safeLanguage
+        language: safeLanguage,
+        forNote: (req.body?.purpose ?? '').toString().trim() === 'note'
       });
       const transcript = formatTranscript(out?.transcript ?? '');
       const aiTitle = await generateOpenAiNoteTitle(transcript);
@@ -2613,7 +2711,7 @@ app.get('/api/notes/:id', async (req, res) => {
 
   const segRows = await db
     .prepare(
-      `SELECT seg_idx, start_sec, end_sec, text, words_json
+      `SELECT seg_idx, start_sec, end_sec, text, words_json, speaker
        FROM note_segments
        WHERE note_id = ?
        ORDER BY seg_idx ASC`
@@ -2626,6 +2724,7 @@ app.get('/api/notes/:id', async (req, res) => {
           start: Number(s.start_sec),
           end: Number(s.end_sec),
           text: (s.text ?? '').toString(),
+          speaker: (s.speaker ?? '').toString(),
           words: parseWordsJson(s.words_json)
         }))
       : parseSegmentsJson(row?.segments_json);
@@ -2884,8 +2983,60 @@ app.patch('/api/notes/:id', async (req, res) => {
   const run = await db.prepare(sql).run(runParams);
   if (!run.changes) return res.status(404).json({ error: 'Not found' });
 
+  const renames = parseSpeakerRenames(bodyIn.speakers);
+  if (renames.size) await renameNoteSpeakers(id, req.user_id, renames);
+
   res.json({ ok: true, id });
 });
+
+/** `{ "Speaker 1": "Anubhav" }` → Map of old → new names (both sanitized, unchanged pairs dropped). */
+function parseSpeakerRenames(raw) {
+  const out = new Map();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [from, to] of Object.entries(raw).slice(0, 64)) {
+    const a = sanitizeSpeakerName(from);
+    const b = sanitizeSpeakerName(to);
+    if (a && b && a !== b) out.set(a, b);
+  }
+  return out;
+}
+
+/** Applies all renames at once (so swapping two names works) to notes.segments_json and note_segments. */
+async function renameNoteSpeakers(noteId, userId, renames) {
+  const row = await db.prepare(`SELECT segments_json FROM notes WHERE id = ? AND user_id = ?`).get(noteId, userId);
+  if (!row) return;
+  await db.tx(async (txDb) => {
+    try {
+      const arr = JSON.parse((row.segments_json ?? '').toString() || '[]');
+      if (Array.isArray(arr) && arr.length) {
+        let changed = false;
+        for (const s of arr) {
+          const next = renames.get((s?.speaker ?? '').toString());
+          if (next) {
+            s.speaker = next;
+            changed = true;
+          }
+        }
+        if (changed) {
+          await txDb
+            .prepare(`UPDATE notes SET segments_json = ? WHERE id = ? AND user_id = ?`)
+            .run(JSON.stringify(arr), noteId, userId);
+        }
+      }
+    } catch {
+      // segments_json unreadable: leave it; note_segments below is what the UI reads.
+    }
+    const segRows = await txDb.prepare(`SELECT seg_idx, speaker FROM note_segments WHERE note_id = ?`).all(noteId);
+    for (const s of segRows) {
+      const next = renames.get((s.speaker ?? '').toString());
+      if (next) {
+        await txDb
+          .prepare(`UPDATE note_segments SET speaker = ? WHERE note_id = ? AND seg_idx = ?`)
+          .run(next, noteId, s.seg_idx);
+      }
+    }
+  });
+}
 
 /** Permanently removes note + dependent rows + on-disk audio file. Returns true if a row was deleted. */
 async function deleteNoteCascade(noteId, userId) {
@@ -3206,6 +3357,7 @@ function clampInt(value, min, max, fallback) {
 function mimeToExt(mime) {
   if (!mime) return null;
   if (mime.includes('webm')) return 'webm';
+  if (mime.includes('mp4') || mime.includes('m4a') || mime.includes('aac')) return 'm4a';
   if (mime.includes('ogg')) return 'ogg';
   if (mime.includes('wav')) return 'wav';
   if (mime.includes('mpeg')) return 'mp3';
@@ -3392,9 +3544,29 @@ function formatTranscript(text) {
     .replaceAll('"', '\n"\n')
     // Break lines after common punctuation for readability.
     // Use \s* because Whisper sometimes omits spaces after punctuation.
-    .replace(/([.!?;:,])(?=\s*[\p{L}\p{N}])/gu, '$1\n')
+    .replace(/([.!?;:,])(?=\s*[\p{L}\p{N}])/gu, (m, p, offset, str) =>
+      p === ':' && isSpeakerLabelBefore(str, offset) ? p : `${p}\n`
+    )
     .replaceAll('\r\n', '\n')
     .replaceAll(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Keep "Speaker 1: text" on one line. Mirrored in `public/main.js` (`vvIsSpeakerLabelBefore`). */
+function isSpeakerLabelBefore(str, colonIdx) {
+  const lineStart = str.lastIndexOf('\n', colonIdx - 1) + 1;
+  return /^[\p{L}\p{N}][\p{L}\p{N} '-]{0,39}$/u.test(str.slice(lineStart, colonIdx));
+}
+
+/** Speaker names may only use characters `isSpeakerLabelBefore` accepts, so renamed labels stay on their line. */
+function sanitizeSpeakerName(raw) {
+  return (raw ?? '')
+    .toString()
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N} '-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40)
     .trim();
 }
 
@@ -3408,7 +3580,8 @@ function sanitizePreviewSegmentsForSave(segments) {
     const end = Number(s?.end);
     const text = (s?.text ?? '').toString().trim();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) continue;
-    out.push({ start, end, text });
+    const speaker = sanitizeSpeakerName(s?.speaker);
+    out.push(speaker ? { start, end, text, speaker } : { start, end, text });
     if (out.length >= 8000) break;
   }
   return out;
@@ -3458,23 +3631,27 @@ function tryParseClientFinalTranscript(finalTranscriptRaw, durationMs) {
  * If the UI sent a language hint and STT returns no usable text (wrong locale for multilingual speech is common),
  * retry once with auto-detect (empty language string). Matches client-side live/full preview fallback.
  */
-async function transcribeWithLanguageHintFallback(tmpPath, { language }) {
+async function transcribeWithLanguageHintFallback(tmpPath, { language, forNote = false }) {
   const hint = (language ?? '').toString().trim();
+  // Notes get speaker labels + sound tags; search queries and live previews stay plain text.
+  const noteOpts = forNote ? { diarize: true, tagAudioEvents: true } : {};
   const first = await transcribeAudioFile(tmpPath, {
-    language: hint
+    language: hint,
+    ...noteOpts
   });
   const text = formatTranscript(first?.transcript ?? '').trim();
   const segs = Array.isArray(first?.segments) ? first.segments : [];
   const hasSegText = segs.some((s) => ((s?.text ?? '').toString().trim().length > 0));
   if (text || hasSegText || !hint) return first;
   return transcribeAudioFile(tmpPath, {
-    language: ''
+    language: '',
+    ...noteOpts
   });
 }
 
-/** Full-file authoritative STT via ElevenLabs (word timestamps + segments). */
+/** Full-file authoritative STT via ElevenLabs (word timestamps + segments + speakers). */
 async function transcribeAuthoritativeFullFile(tmpPath, { language }) {
-  return transcribeWithLanguageHintFallback(tmpPath, { language });
+  return transcribeWithLanguageHintFallback(tmpPath, { language, forNote: true });
 }
 
 function formatClock(sec) {
@@ -3649,11 +3826,14 @@ function safeStringifySegments(segments) {
     const end = Number(s?.end);
     const text = (s?.text ?? '').toString().trim();
     if (!Number.isFinite(start) || !Number.isFinite(end) || !text) continue;
-    safe.push({
+    const row = {
       start: Math.max(0, start),
       end: Math.max(0, end),
       text
-    });
+    };
+    const speaker = sanitizeSpeakerName(s?.speaker);
+    if (speaker) row.speaker = speaker;
+    safe.push(row);
   }
   if (safe.length === 0) return '';
   try {
@@ -3673,7 +3853,8 @@ function parseSegmentsJson(segmentsJson) {
       .map((s) => ({
         start: Number(s?.start),
         end: Number(s?.end),
-        text: (s?.text ?? '').toString()
+        text: (s?.text ?? '').toString(),
+        speaker: (s?.speaker ?? '').toString()
       }))
       .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.text.trim().length > 0);
   } catch {
