@@ -56,6 +56,8 @@ From `VoiceVault_blueprint.md`, the three pillars are Capture / Index / Retrieve
 - Forgot password: a reset code is emailed (SMTP).
 - Each user only sees their own notes; sessions are cookie-based and work from the website and the apps.
 - Delete account (Profile): after the password is confirmed, the account and all its notes, drafts, folders, tags, saved searches, audio and profile picture are removed. Sessions on other devices stop working.
+- Login limit: after 3 wrong passwords, login is blocked for 30 seconds (the form counts down), then 3 more tries are allowed. The reset code and the delete-account password have the same limit.
+- Export all notes (Profile, beside Edit): a `.zip` with each note's transcript (`.txt`) and audio, named after the note title.
 
 ### Notes
 
@@ -63,6 +65,11 @@ From `VoiceVault_blueprint.md`, the three pillars are Capture / Index / Retrieve
   - Record an audio note and save it.
   - Upload an existing audio file and save it as a note.
   - Recording uses WebM/Opus, or MP4/AAC on browsers without WebM (older iPhones, Safari).
+  - Without internet, Save keeps the recording on the device; it uploads and transcribes when the connection returns.
+- **Reminders and calendar**
+  - A note can have a reminder date and time (when creating it or in Edit mode).
+  - The note offers "Add to Google Calendar" and a downloadable `.ics` event; the Android and iOS apps show a phone notification at that time.
+- **Newest label**: the most recently created note is marked "Newest" at the bottom right of its card.
 - **Speaker labels and sound tags**
   - Note transcripts start each line with the speaker ("Speaker 1:", "Speaker 2:") and include tags such as "(laughter)" or "(music)".
   - Speakers can be renamed in the "Speakers" box after Full preview, and in Edit mode on saved notes; the name changes everywhere in the note.
@@ -96,7 +103,7 @@ From `VoiceVault_blueprint.md`, the three pillars are Capture / Index / Retrieve
   - Queries like "find me the note where I talked about recording" are rewritten into keyword-style queries.
 - **Date/time filters in search**
   - Supports filters like `today`, `yesterday`, `last 3 days`, `2026-04-22`, and `between 2026-04-20 and 2026-04-22`.
-- **Best-match segment highlighting** and **multi-clip results** (several matching segments per note).
+- **Best-match highlighting** (the searched words in the matching segment) and **multi-clip results** (several matching segments per note).
 - **Quick answer**: extractive answer from top matching segments, or an OpenAI answer grounded in those segments when configured.
 
 ### UI layout (current)
@@ -151,21 +158,22 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 ```mermaid
 flowchart LR
   subgraph Shared["Shared code"]
-    FE["Frontend: public/<br/>HTML + CSS + JavaScript"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js)"]
+    FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
   end
 
-  subgraph External["External services used by the backend"]
+  subgraph External["External services"]
     EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
+    CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -182,6 +190,7 @@ flowchart LR
   BE --> OAI
   BE --> SMTP
   BE --> FF
+  FE -.-> CAL
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I
@@ -257,6 +266,9 @@ Open `http://localhost:5177`.
 - Transcription depends on the ElevenLabs API (quota, availability); LLM answers are **optional** and need an OpenAI key.
 - Speaker labels are generic ("Speaker 1"); the app doesn't recognise who is speaking. Sound tags are general (laughter, music) and don't name instruments.
 - Recording uses WebM, with an MP4 fallback; neither is tested on a physical iPhone yet.
+- Offline recording on the website only works if the page is already open; the apps need one earlier online login.
+- Reminder notifications only appear in the Android and iOS apps and may arrive a few minutes late; the website and desktop apps offer the calendar link and `.ics` instead.
+- The login limit is kept in server memory, so a server restart clears it.
 
 ## 10) Cross-check vs original documents (what's still missing)
 
@@ -281,7 +293,7 @@ This section cross-checks the current product against the "semantic search / voi
 - **Cloud components (addressed)**:
   - PostgreSQL, accounts with password reset, background ingestion queue, hosted API. Audio is stored in the database rather than object storage (S3).
 - **Product surfaces**:
-  - No proactive reminders, integrations (calendar/reminders/contacts), collaboration, or ambient mode.
+  - Note reminders exist (calendar link, `.ics`, phone notifications in the apps). No two-way calendar sync, contacts, collaboration, or ambient mode.
 
 ### Items from `report1.md` (baseline) that are covered
 

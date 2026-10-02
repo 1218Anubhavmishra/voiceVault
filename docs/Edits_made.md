@@ -2,6 +2,17 @@
 title: voiceVault — Edits made
 ---
 
+## 2026-10-02, later (login limit, offline recording, reminders, export, search fix, tidy-up)
+
+- **Login limit**: an in-memory counter per key (`login:email`, `otp:email`, `delete:user`) allows 3 failures, then blocks for 30 s (HTTP 429 `too_many_attempts`, `retry_after`, `Retry-After` header). When the block ends a new round of 3 starts; counts expire after 15 minutes. Failed responses include `attempts_left`, and the login form shows a countdown.
+- **Offline recording**: when the browser is offline (or the upload fails with a network error), Save stores the audio and note details in IndexedDB (`voicevault-offline`). `flushOfflineQueue` uploads them through `POST /api/notes` on the `online` event, every 60 s and at login; failed items stay queued. The last session user is cached so the app can open offline.
+- **Reminders**: new column `notes.reminder_at` (UTC ISO, empty = none), accepted by `POST`/`PATCH /api/notes` and returned in note lists; `GET /api/reminders` lists upcoming ones. The client builds a Google Calendar link and an `.ics` file (with a `VALARM`), and in the Capacitor apps schedules local notifications (`@capacitor/local-notifications`, ids derived from note ids, stale ones cancelled).
+- **Export**: `GET /api/export/notes.zip` streams a zip (`archiver`) with `<title>.txt` and `<title>.<audio ext>` per note; file names are cleaned for Windows, and duplicates get "(2)". Profile has an "Export all notes" button.
+- **Search highlight**: `applySearchHitsByTime` used to trim each end of the matched segment's time window, which dropped edge words like "eyes". It now highlights the searched words (stopwords and date words removed, prefix match for 3+ letters), falling back to the segment.
+- **Newest label**: the note with the latest `created_at` gets a `.noteNewestBadge` at the bottom right.
+- **Job titles**: `suggestNoteTitle` also takes speaker names from line-start labels in the transcript when segments have none.
+- **Tidy-up**: blueprint renamed to `VoiceVault_blueprint.md` / `.docx`; documents in `docs/`, images in `images/`; `scripts/build-docs.cjs` reads from `docs/`. Error text colour fixed.
+
 ## 2026-10-02 (speaker labels, sound tags, account deletion, MP4 fallback)
 
 - **Speaker labels**: note transcription (Full preview with `purpose=note`, and the background job) sends `diarize=true` and `tag_audio_events=true` to ElevenLabs Scribe. Words carry a `speaker_id`, mapped to "Speaker 1", "Speaker 2" in order of appearance; a new segment starts when the speaker changes, and the transcript is written as "Speaker N: …" lines. Search and live previews are unchanged.
@@ -59,21 +70,22 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 ```mermaid
 flowchart LR
   subgraph Shared["Shared code"]
-    FE["Frontend: public/<br/>HTML + CSS + JavaScript"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js)"]
+    FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
   end
 
-  subgraph External["External services used by the backend"]
+  subgraph External["External services"]
     EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
+    CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -90,6 +102,7 @@ flowchart LR
   BE --> OAI
   BE --> SMTP
   BE --> FF
+  FE -.-> CAL
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

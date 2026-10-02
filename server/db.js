@@ -552,6 +552,11 @@ async function migrate(pool) {
   await pool.query(`
     ALTER TABLE note_segments ADD COLUMN IF NOT EXISTS speaker TEXT NOT NULL DEFAULT '';
   `);
+
+  // Optional reminder for a note (UTC ISO string, '' = none).
+  await pool.query(`
+    ALTER TABLE notes ADD COLUMN IF NOT EXISTS reminder_at TEXT NOT NULL DEFAULT '';
+  `);
 }
 
 /* ---------------------------------------------------------------------------

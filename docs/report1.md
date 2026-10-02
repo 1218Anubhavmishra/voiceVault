@@ -4,7 +4,11 @@
 `voiceVault` is an audio note app: users **record or upload audio notes**, the server **transcribes** them, and users **search across all notes** by text or voice. It is live at [voicevault.xyz](https://www.voicevault.xyz) (frontend on Vercel, API `api.voicevault.xyz` on Render, PostgreSQL). The same frontend ships as Android, iOS, Windows, macOS and Linux apps under the name NoteVault.
 
 ## Core Features
-- **Accounts**: register, log in, profile picture, password reset by emailed code, and account deletion (password required; removes all notes and audio); each user sees only their own notes.
+- **Accounts**: register, log in, profile picture, password reset by emailed code, and account deletion (password required; removes all notes and audio); each user sees only their own notes. After 3 wrong passwords, login waits 30 seconds (with a countdown) before the next 3 tries.
+- **Record without internet**: recordings saved offline wait on the device and upload when the connection returns.
+- **Reminders**: a note can have a reminder date and time, with "Add to Google Calendar" and an `.ics` file; the Android and iOS apps also show a phone notification.
+- **Export all notes**: one `.zip` with every note's transcript and audio, named after the note titles (Profile, beside Edit).
+- **Newest label**: the most recent note is marked "Newest" at the bottom right of its card.
 - **In-browser recording**: Uses the browser `MediaRecorder` API to capture audio (WebM/Opus, or MP4/AAC where WebM isn't supported), or upload an audio file.
 - **Server transcription**: **ElevenLabs Scribe** turns audio into text with word timestamps and language detection (local faster-whisper is an optional alternative).
 - **Speaker labels and sound tags**: note transcripts mark who spoke each line ("Speaker 1:", "Speaker 2:") and add tags such as "(laughter)" or "(music)". Speakers can be renamed before saving and later in Edit mode.
@@ -34,21 +38,22 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 ```mermaid
 flowchart LR
   subgraph Shared["Shared code"]
-    FE["Frontend: public/<br/>HTML + CSS + JavaScript"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js)"]
+    FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
   end
 
-  subgraph External["External services used by the backend"]
+  subgraph External["External services"]
     EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
+    CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -65,6 +70,7 @@ flowchart LR
   BE --> OAI
   BE --> SMTP
   BE --> FF
+  FE -.-> CAL
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I
@@ -82,6 +88,8 @@ flowchart LR
 ## Repository Structure (high-level)
 - `server/`: Node backend (API, auth, PostgreSQL access, ElevenLabs/Whisper transcription, semantic search)
 - `public/`: Browser UI (recording + search)
+- `docs/`: reports, `.docx` copies, the original blueprint (`VoiceVault_blueprint.md`) and notes
+- `images/`: screenshots and the technology chart image
 - `scripts/`: Setup and maintenance helpers (ffmpeg, optional Whisper setup, SQLite-to-PostgreSQL migration)
 - `Dockerfile`: the image Render runs (includes ffmpeg and the preloaded search model)
 

@@ -42,6 +42,7 @@
       <main class="grid mainGrid--dock" id="mainGrid">
         <div class="rightStack" id="rightStack">
           <section class="librarySurface" id="libraryCard">
+            <div id="offlineQueueBanner" class="offlineQueueBanner" role="status" hidden></div>
             <div id="results" class="results"></div>
           </section>
 
@@ -240,6 +241,14 @@
           </label>
           <div id="noteSpeakers" class="vvSpeakerEditor" hidden></div>
 
+          <label class="label">
+            Reminder <span class="newNoteTitleHint">( optional )</span>
+            <span class="noteReminderEditRow">
+              <input id="noteReminder" class="input noteReminderInput" type="datetime-local" />
+              <button id="btnNoteReminderClear" class="btn" type="button">Clear</button>
+            </span>
+          </label>
+
           <p class="newNoteTitleHint" style="margin: 0 0 8px">
             Transcription runs on the server with <strong>ElevenLabs STT</strong>.
           </p>
@@ -322,6 +331,7 @@
             </div>
           </div>
           <div class="row" style="justify-content: flex-end; gap: 10px; margin-top: 14px">
+            <button type="button" class="btn" id="btnProfileExport" title="Download a .zip with every note's transcript and audio, named by title">Export all notes</button>
             <button type="button" class="btn primary" id="btnProfileEdit">Edit</button>
           </div>
           <div class="profileDangerZone">

@@ -2,6 +2,19 @@
 title: voiceVault — Edits today (2026-09-28 to 2026-10-02)
 ---
 
+## 2026-10-02 (later): login limit, offline recording, reminders, export, search fix, tidy-up
+
+- **Login limit**: after 3 wrong passwords for an email, login is blocked for 30 seconds, then a fresh round of 3 attempts starts. The error says how many attempts are left, and the login form counts down while blocked (HTTP 429 `too_many_attempts` with `retry_after`). The same limit covers the password-reset code and the delete-account password. The count is kept in server memory, so a restart clears it.
+- **Record without internet**: with no connection, Save keeps the recording on the device (IndexedDB) and a banner shows how many are waiting. They upload and transcribe on their own when the connection returns (also checked every minute and at login). The app opens offline using the last signed-in user. On the website the page must already be open.
+- **Reminders and calendar**: a note can have a reminder date and time (new note form and Edit mode; stored in `notes.reminder_at`). The note shows a reminder chip plus "Add to Google Calendar" and "Download .ics" (a 30-minute event with an alarm at the start). In the Android and iOS apps the phone shows a notification at that time (Capacitor Local Notifications). `GET /api/reminders` lists upcoming reminders.
+- **Export all notes**: Profile has an "Export all notes" button beside Edit. It downloads one `.zip` with each note's transcript (`.txt`) and audio, named after the note title (`GET /api/export/notes.zip`, streamed).
+- **"Eyes" search fix**: search highlighted the middle of the matching segment but cut off words at its edges (such as "eyes" at the end of "look into my eyes"). It now highlights the searched words themselves.
+- **Newest label**: the most recently created note has a "Newest" label at the bottom right of its card ("Newest match" in search results). The order of notes is unchanged.
+- **Titles from the background job**: speaker labels are also read from the transcript lines, so a job-processed note is titled "Look Into My Eyes - Speaker 1", not "Speaker 1 Look Into My Eyes".
+- **Error text**: login and form errors are dark red on the light background (they were very faint pink).
+- **Blueprint and folders**: the original blueprint is now `VoiceVault_blueprint.md` / `.docx`. Reports, `.docx` and `.txt` files moved to `docs/`, and screenshots and the chart image to `images/`.
+- **Tested** on a local server: the 3-attempt lock and 30 s countdown, a reminder saved, listed and cleared, the export `.zip` (title-named `.txt` and `.wav`), the highlighted search words, the Newest label, and an offline save that uploaded when the connection came back.
+
 ## 2026-10-02: speaker labels, sound tags, account deletion, MP4 fallback
 
 - **Speaker labels**: note transcription now asks ElevenLabs Scribe to tell speakers apart (`diarize`). Each line of the transcript starts with "Speaker 1:", "Speaker 2:" and so on, and each saved segment remembers its speaker (`segments_json` and the new `note_segments.speaker` column). Search queries and the live preview are not labelled.
@@ -29,21 +42,22 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 ```mermaid
 flowchart LR
   subgraph Shared["Shared code"]
-    FE["Frontend: public/<br/>HTML + CSS + JavaScript"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js)"]
+    FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
   end
 
-  subgraph External["External services used by the backend"]
+  subgraph External["External services"]
     EL["ElevenLabs Scribe<br/>speech-to-text, speaker labels,<br/>sound tags (laughter, music)"]
     OAI["OpenAI<br/>AI note titles, quick answers"]
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
+    CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -60,6 +74,7 @@ flowchart LR
   BE --> OAI
   BE --> SMTP
   BE --> FF
+  FE -.-> CAL
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

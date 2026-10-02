@@ -11,6 +11,8 @@ const noteTimerEl = document.getElementById('noteTimer');
 const noteDetectedLangEl = document.getElementById('noteDetectedLang');
 const noteLanguageWrapEl = document.getElementById('noteLanguageWrap');
 const noteLanguageEl = document.getElementById('noteLanguage');
+const noteReminderEl = document.getElementById('noteReminder');
+const btnNoteReminderClearEl = document.getElementById('btnNoteReminderClear');
 const noteLangCountdownWrapEl = document.getElementById('noteLangCountdownWrap');
 const noteLangCountdownPillEl = document.getElementById('noteLangCountdownPill');
 const uploadNoteEl = document.getElementById('uploadNote');
@@ -103,6 +105,7 @@ const btnRecordQuery = document.getElementById('btnRecordQuery');
 const btnStopQuery = document.getElementById('btnStopQuery');
 const previewQuery = document.getElementById('previewQuery');
 const resultsEl = document.getElementById('results');
+const offlineQueueBannerEl = document.getElementById('offlineQueueBanner');
 const searchCardEl = document.getElementById('searchCard');
 const searchBodyEl = document.getElementById('searchBody');
 const btnSearchCloseEl = document.getElementById('btnSearchClose');
@@ -191,6 +194,7 @@ const profileViewNameEl = document.getElementById('profileViewName');
 const profileViewEmailEl = document.getElementById('profileViewEmail');
 const profileErrorEl = document.getElementById('profileError');
 const btnProfileEditEl = document.getElementById('btnProfileEdit');
+const btnProfileExportEl = document.getElementById('btnProfileExport');
 const btnProfileDeleteStartEl = document.getElementById('btnProfileDeleteStart');
 const profileDeleteConfirmEl = document.getElementById('profileDeleteConfirm');
 const profileDeletePassEl = document.getElementById('profileDeletePass');
@@ -367,6 +371,140 @@ function vvRenameSpeakerInTitle(title, from, to) {
   return (title ?? '')
     .toString()
     .replace(new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'giu'), to);
+}
+
+/** ISO → value for `<input type="datetime-local">` (local time), and back. */
+function vvIsoToLocalInput(iso) {
+  const t = Date.parse((iso ?? '').toString());
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function vvLocalInputToIso(value) {
+  const s = (value ?? '').toString().trim();
+  if (!s) return '';
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? new Date(t).toISOString() : '';
+}
+
+function vvFormatReminder(iso) {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+const VV_REMINDER_EVENT_MS = 30 * 60 * 1000;
+
+/** UTC calendar stamp: 20261003T043000Z */
+function vvCalStamp(ms) {
+  return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+function vvGoogleCalendarUrl(title, iso, details) {
+  const t = Date.parse(iso);
+  const p = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: title,
+    dates: `${vvCalStamp(t)}/${vvCalStamp(t + VV_REMINDER_EVENT_MS)}`,
+    details
+  });
+  return `https://calendar.google.com/calendar/render?${p}`;
+}
+
+/** iCalendar event with an alert at the reminder time (Apple Calendar, Outlook, Google import). */
+function vvIcsText(uid, title, iso, details) {
+  const esc = (s) => (s ?? '').toString().replace(/\\/g, '\\\\').replace(/[;,]/g, (m) => `\\${m}`).replace(/\r?\n/g, '\\n');
+  const t = Date.parse(iso);
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//voiceVault//Reminders//EN',
+    'BEGIN:VEVENT',
+    `UID:${uid}@voicevault.xyz`,
+    `DTSTAMP:${vvCalStamp(Date.now())}`,
+    `DTSTART:${vvCalStamp(t)}`,
+    `DTEND:${vvCalStamp(t + VV_REMINDER_EVENT_MS)}`,
+    `SUMMARY:${esc(title)}`,
+    `DESCRIPTION:${esc(details)}`,
+    'BEGIN:VALARM',
+    'ACTION:DISPLAY',
+    `DESCRIPTION:${esc(title)}`,
+    'TRIGGER:PT0M',
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR',
+    ''
+  ].join('\r\n');
+}
+
+function vvReminderDetails(body) {
+  const preview = (body ?? '').toString().replace(/\s+/g, ' ').trim().slice(0, 300);
+  return preview ? `${preview}\n\nSaved in voiceVault` : 'Saved in voiceVault';
+}
+
+function vvDownloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Capacitor Local Notifications plugin (Android/iOS apps only). */
+function vvLocalNotifications() {
+  const cap = window.Capacitor;
+  if (!cap?.isNativePlatform?.() || !cap.isPluginAvailable?.('LocalNotifications')) return null;
+  return cap.Plugins?.LocalNotifications ?? null;
+}
+
+function vvReminderNotificationId(noteId) {
+  let h = 0;
+  for (const c of noteId.toString()) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return Math.abs(h) || 1;
+}
+
+/** Schedule a phone notification for every upcoming reminder and cancel ones that were cleared. */
+let vvReminderSyncBusy = false;
+async function syncReminderNotifications() {
+  const LN = vvLocalNotifications();
+  if (!LN || vvReminderSyncBusy || !navigator.onLine || !sessionUser?.id) return;
+  vvReminderSyncBusy = true;
+  try {
+    const r = await fetch('/api/reminders');
+    if (!r.ok) return;
+    const list = ((await safeJson(r))?.reminders ?? []).filter((x) => Date.parse(x?.reminder_at ?? '') > Date.now() + 5000);
+    const wantedIds = new Set(list.map((x) => vvReminderNotificationId(x.id)));
+    const pending = (await LN.getPending())?.notifications ?? [];
+    const stale = pending.filter((n) => n?.extra?.vvReminder && !wantedIds.has(n.id));
+    if (stale.length) await LN.cancel({ notifications: stale.map((n) => ({ id: n.id })) });
+    if (!list.length) return;
+    let perm = (await LN.checkPermissions())?.display;
+    if (perm !== 'granted') perm = (await LN.requestPermissions())?.display;
+    if (perm !== 'granted') return;
+    await LN.schedule({
+      notifications: list.map((x) => ({
+        id: vvReminderNotificationId(x.id),
+        title: 'voiceVault reminder',
+        body: (x.display_title || x.title || 'Note reminder').toString(),
+        schedule: { at: new Date(x.reminder_at), allowWhileIdle: true },
+        extra: { vvReminder: 1, noteId: x.id }
+      }))
+    });
+  } catch (err) {
+    console.warn('[voiceVault] reminder notifications:', err?.message ?? err);
+  } finally {
+    vvReminderSyncBusy = false;
+  }
 }
 
 /** Mirror server `transcriptTextForTitle`: drop speaker line labels and sound tags. */
@@ -721,7 +859,12 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function setAuthUiLoggedIn(user) {
   sessionUser = user || null;
+  vvCacheSessionUser(sessionUser);
   const loggedIn = !!sessionUser;
+  if (loggedIn) {
+    void renderOfflineQueueBanner();
+    void flushOfflineQueue();
+  }
   if (mainGridEl) mainGridEl.hidden = !loggedIn;
   if (authOverlayEl) authOverlayEl.hidden = loggedIn;
   if (profileWrapEl) profileWrapEl.hidden = !loggedIn;
@@ -838,6 +981,11 @@ async function deleteAccount() {
     });
     const j = await safeJson(r);
     if (!r.ok) throw new Error((j?.error ?? '').toString().trim() || `Delete failed (${r.status})`);
+    try {
+      for (const it of await offlineQueueForUser()) await offlineQueueDelete(it.id);
+    } catch {
+      // ignore
+    }
     for (const k of ['vv_recent_searches', 'vv_last_note_language']) {
       try {
         localStorage.removeItem(k);
@@ -993,8 +1141,134 @@ function openLoginUi() {
   setAuthError('');
 }
 
+/** Last signed-in user, so the app can open and record without internet. Cleared on logout. */
+function vvCacheSessionUser(user) {
+  try {
+    if (user?.id) {
+      localStorage.setItem('vv_last_session_user', JSON.stringify({ id: user.id, email: user.email, display_name: user.display_name }));
+    } else {
+      localStorage.removeItem('vv_last_session_user');
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function vvCachedSessionUser() {
+  try {
+    const u = JSON.parse(localStorage.getItem('vv_last_session_user') || 'null');
+    return u?.id ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/* Recordings saved without internet wait in IndexedDB until they can be uploaded. */
+function vvOfflineDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('voicevault-offline', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('queue', { keyPath: 'id' });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function vvOfflineQueue(mode, fn) {
+  const db = await vvOfflineDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('queue', mode);
+      const req = fn(tx.objectStore('queue'));
+      tx.oncomplete = () => resolve(req?.result);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+const offlineQueueAdd = (item) => vvOfflineQueue('readwrite', (s) => s.put(item));
+const offlineQueueDelete = (id) => vvOfflineQueue('readwrite', (s) => s.delete(id));
+
+async function offlineQueueForUser(uid = sessionUser?.id) {
+  if (!uid) return [];
+  const all = (await vvOfflineQueue('readonly', (s) => s.getAll())) || [];
+  return all.filter((i) => i.user_id === uid).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+}
+
+async function renderOfflineQueueBanner() {
+  if (!offlineQueueBannerEl) return;
+  let n = 0;
+  try {
+    n = (await offlineQueueForUser()).length;
+  } catch {
+    n = 0;
+  }
+  offlineQueueBannerEl.hidden = n === 0;
+  const what = `${n} recording${n === 1 ? '' : 's'} saved on this device`;
+  offlineQueueBannerEl.textContent = !n
+    ? ''
+    : navigator.onLine
+      ? `Uploading ${what}…`
+      : `${what}. ${n === 1 ? 'It' : 'They'} will upload and transcribe when you're back online.`;
+}
+
+let offlineFlushBusy = false;
+async function flushOfflineQueue() {
+  if (offlineFlushBusy || !navigator.onLine || !sessionUser?.id) return;
+  offlineFlushBusy = true;
+  let uploaded = 0;
+  try {
+    const items = await offlineQueueForUser();
+    if (!items.length) return;
+    await renderOfflineQueueBanner();
+    for (const it of items) {
+      const fd = new FormData();
+      fd.append('display_title', it.title || '');
+      fd.append('title', it.title || '');
+      fd.append('duration_ms', String(it.duration_ms || 0));
+      fd.append('language', it.language || '');
+      fd.append('stt_provider', it.stt_provider || getNewNoteSttProvider());
+      fd.append('source_filename', it.source_filename || '');
+      fd.append('reminder_at', it.reminder_at || '');
+      fd.append('audio', it.blob, it.filename || guessFilename(it.blob?.type));
+      let resp;
+      try {
+        resp = await fetch('/api/notes', { method: 'POST', body: fd });
+      } catch {
+        break;
+      }
+      // Kept on the device on any failure; the next flush retries it.
+      if (!resp.ok) break;
+      await offlineQueueDelete(it.id);
+      uploaded++;
+      const data = await safeJson(resp);
+      const id = (data?.id ?? '').toString().trim();
+      if (id && (data?.status ?? '') === 'processing') pollNoteUntilDone(id);
+    }
+  } catch {
+    // ignore; retried on the next online event / interval
+  } finally {
+    offlineFlushBusy = false;
+    await renderOfflineQueueBanner();
+    if (uploaded) {
+      setStatus(`Uploaded ${uploaded} recording${uploaded === 1 ? '' : 's'} saved offline. Transcribing on the server…`);
+      refreshResults(qEl?.value ?? '').catch(() => {});
+    }
+  }
+}
+
 async function refreshSessionUser() {
-  const r = await fetch('/api/auth/me');
+  let r;
+  try {
+    r = await fetch('/api/auth/me');
+  } catch (err) {
+    const cached = vvCachedSessionUser();
+    if (!cached) throw err;
+    sessionUser = cached;
+    return cached;
+  }
   if (r.status === 401) {
     sessionUser = null;
     return null;
@@ -2166,11 +2440,23 @@ function beaconStopAllProcessing() {
     // ignore
   }
 }
+window.addEventListener('online', () => {
+  syncVisibility();
+  void flushOfflineQueue();
+});
+window.addEventListener('offline', () => {
+  syncVisibility();
+  void renderOfflineQueueBanner();
+});
+setInterval(() => void flushOfflineQueue(), 60_000);
 window.addEventListener('pagehide', beaconStopAllProcessing);
 window.addEventListener('beforeunload', beaconStopAllProcessing);
 
 function wire() {
   setAuthMode('login', { preserveErrors: false });
+  btnNoteReminderClearEl?.addEventListener('click', () => {
+    if (noteReminderEl) noteReminderEl.value = '';
+  });
 
   titleEl?.addEventListener('input', () => {
     noteTitleUserEdited = true;
@@ -2415,8 +2701,33 @@ function wire() {
     }
   });
 
+  let loginLockTimer = 0;
+  const startLoginLockCountdown = (sec) => {
+    clearInterval(loginLockTimer);
+    const until = Date.now() + sec * 1000;
+    const tick = () => {
+      const left = Math.ceil((until - Date.now()) / 1000);
+      if (left <= 0) {
+        clearInterval(loginLockTimer);
+        loginLockTimer = 0;
+        btnAuthLoginEl.disabled = false;
+        setAuthFormError('login', 'You can try again now.');
+        return;
+      }
+      btnAuthLoginEl.disabled = true;
+      setAuthFormError('login', `Too many attempts. Try again in ${left} s.`);
+    };
+    tick();
+    loginLockTimer = setInterval(tick, 1000);
+  };
+  const attemptsLeftNote = (j) => {
+    const n = Number(j?.attempts_left);
+    return Number.isFinite(n) && n > 0 ? ` ${n} attempt${n === 1 ? '' : 's'} left.` : '';
+  };
+
   btnAuthLoginEl?.addEventListener('click', async (e) => {
     e.preventDefault();
+    if (loginLockTimer) return;
     clearAuthFieldErrors('login');
     setAuthFormError('login', '');
     const email = (loginEmailEl?.value ?? '').toString().trim();
@@ -2448,10 +2759,12 @@ function wire() {
         const code = (j?.code ?? '').toString();
         const field = (j?.field ?? '').toString();
         const msg = (j?.error ?? '').toString().trim() || `Sign in failed (${r.status})`;
-        if (code === 'email_not_found') {
-          setAuthFieldError('login', 'email', 'No account exists with this email.');
+        if (code === 'too_many_attempts') {
+          startLoginLockCountdown(Number(j?.retry_after) || 30);
+        } else if (code === 'email_not_found') {
+          setAuthFieldError('login', 'email', `No account exists with this email.${attemptsLeftNote(j)}`);
         } else if (code === 'wrong_password') {
-          setAuthFieldError('login', 'password', 'Incorrect password — please try again.');
+          setAuthFieldError('login', 'password', `Incorrect password — please try again.${attemptsLeftNote(j)}`);
         } else if (field && setAuthFieldError('login', field, msg)) {
           // handled
         } else {
@@ -2467,7 +2780,7 @@ function wire() {
     } catch (err) {
       setAuthFormError('login', err?.message ?? String(err));
     } finally {
-      btnAuthLoginEl.disabled = false;
+      if (!loginLockTimer) btnAuthLoginEl.disabled = false;
     }
   });
 
@@ -2590,6 +2903,17 @@ function wire() {
     showProfileEditMode();
   });
 
+  btnProfileExportEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    // A plain link lets the browser stream the zip straight to disk instead of holding it in memory.
+    const a = document.createElement('a');
+    a.href = '/api/export/notes.zip';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setStatus('Preparing your export. The .zip download starts in a moment.');
+  });
   btnProfileDeleteStartEl?.addEventListener('click', (e) => {
     e.preventDefault();
     setProfileError('');
@@ -3393,6 +3717,10 @@ function previewBundleJsonForSave() {
 async function saveNote() {
   if (!note.audioBlob) return;
   btnSaveNote.disabled = true;
+  if (!navigator.onLine) {
+    await saveNoteOffline();
+    return;
+  }
   setStatus('Saving + transcribing…');
 
   const draftIdForSave = (note.serverDraftId ?? '').toString().trim();
@@ -3424,6 +3752,7 @@ async function saveNote() {
     fd.append('language', (noteLanguageEl?.value ?? '').toString());
     fd.append('stt_provider', getNewNoteSttProvider());
     fd.append('source_filename', (note.sourceFilename ?? '').toString());
+    fd.append('reminder_at', vvLocalInputToIso(noteReminderEl?.value));
     if (draftIdForSave) fd.append('draft_id', draftIdForSave);
     fd.append('audio', note.audioBlob, guessFilename(note.audioBlob.type));
     const unchangedFromBundle = !!(pb && editedFmt && editedFmt === bundleFmt);
@@ -3443,24 +3772,7 @@ async function saveNote() {
     }
     const data = await safeJson(resp);
 
-    titleEl.value = '';
-    note.serverDraftId = '';
-    try {
-      sessionStorage.removeItem('vv_active_note_draft_id');
-    } catch {
-      // ignore
-    }
-    resetRecorder(note);
-    previewNote.hidden = true;
-    previewNote.src = '';
-    if (noteLanguageEl) noteLanguageEl.value = '';
-    if (uploadNoteEl) uploadNoteEl.value = '';
-    if (uploadNoteNameEl) uploadNoteNameEl.textContent = 'No file selected';
-    if (noteDetectedLangEl) {
-      noteDetectedLangEl.hidden = true;
-      noteDetectedLangEl.textContent = 'Lang: —';
-    }
-    syncVisibility();
+    resetNewNoteFormAfterSave();
 
     const id = (data?.id ?? '').toString().trim();
     const savedStatus = (data?.status ?? '').toString();
@@ -3486,12 +3798,76 @@ async function saveNote() {
     titleEl.value = defaultNoteTitleFromState(note);
     lastFullPreviewBundle = null;
   } catch (err) {
+    if (!navigator.onLine || (err instanceof TypeError && /fetch|network|load failed/i.test(err.message))) {
+      await saveNoteOffline();
+      return;
+    }
     const backupHint = draftIdForSave
       ? ' Try Save again — a server-side backup of the audio may be available.'
       : '';
     setStatus(`Save/transcribe error: ${err?.message ?? err}${backupHint}`, true);
     btnSaveNote.disabled = false;
   }
+}
+
+function resetNewNoteFormAfterSave() {
+  titleEl.value = '';
+  note.serverDraftId = '';
+  try {
+    sessionStorage.removeItem('vv_active_note_draft_id');
+  } catch {
+    // ignore
+  }
+  resetRecorder(note);
+  previewNote.hidden = true;
+  previewNote.src = '';
+  if (noteLanguageEl) noteLanguageEl.value = '';
+  if (noteReminderEl) noteReminderEl.value = '';
+  if (uploadNoteEl) uploadNoteEl.value = '';
+  if (uploadNoteNameEl) uploadNoteNameEl.textContent = 'No file selected';
+  if (noteDetectedLangEl) {
+    noteDetectedLangEl.hidden = true;
+    noteDetectedLangEl.textContent = 'Lang: —';
+  }
+  syncVisibility();
+}
+
+/** No connection: keep the recording on this device; `flushOfflineQueue` uploads it later. */
+async function saveNoteOffline() {
+  const blob = note.audioBlob;
+  if (!blob) return;
+  if (!sessionUser?.id) {
+    setStatus('Log in once while online before saving recordings offline.', true);
+    btnSaveNote.disabled = false;
+    return;
+  }
+  try {
+    ensureAutoTitleFilled(note);
+    await offlineQueueAdd({
+      id: `off_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      user_id: sessionUser.id,
+      created_at: new Date().toISOString(),
+      title: titleEl.value || defaultNoteTitleFromState(note),
+      duration_ms: Math.round(note.durationMs || 0),
+      language: (noteLanguageEl?.value ?? '').toString(),
+      stt_provider: getNewNoteSttProvider(),
+      source_filename: (note.sourceFilename ?? '').toString(),
+      reminder_at: vvLocalInputToIso(noteReminderEl?.value),
+      blob,
+      filename: guessFilename(blob.type)
+    });
+  } catch (err) {
+    setStatus(`Could not save on this device: ${err?.message ?? err}`, true);
+    btnSaveNote.disabled = false;
+    return;
+  }
+  resetNewNoteFormAfterSave();
+  setNewNotePanelOpen(false);
+  noteTitleUserEdited = false;
+  titleEl.value = defaultNoteTitleFromState(note);
+  lastFullPreviewBundle = null;
+  setStatus("Saved on this device. It will upload and transcribe when you're back online.");
+  await renderOfflineQueueBanner();
 }
 
 async function refreshResults(q = '') {
@@ -3680,6 +4056,16 @@ async function refreshResults(q = '') {
     for (const id of processingIds) expandedNoteIds.add(id);
   }
 
+  let newestNoteId = '';
+  let newestNoteT = -Infinity;
+  for (const it of items) {
+    const t = Date.parse(it?.created_at ?? '');
+    if (Number.isFinite(t) && t > newestNoteT) {
+      newestNoteT = t;
+      newestNoteId = (it?.id ?? '').toString();
+    }
+  }
+
   const renderT0 = performance.now();
   for (let idx = 0; idx < items.length; idx += 1) {
     const item = items[idx];
@@ -3779,9 +4165,25 @@ async function refreshResults(q = '') {
     const metaParts = [];
     if (durationMs > 0) metaParts.push(formatMs(durationMs));
     if (lang) metaParts.push(lang);
-    const fileMetaHtml = metaParts.length
-      ? `<span class="noteFileMeta">${escapeHtml(metaParts.join(' · '))}</span>`
+    const reminderIso = (item.reminder_at ?? '').toString().trim();
+    const hasReminder = Number.isFinite(Date.parse(reminderIso));
+    const reminderTitle = (item.display_title || item.title || 'Note reminder').toString();
+    const reminderChipHtml = hasReminder
+      ? `<span class="noteReminderChip${Date.parse(reminderIso) < Date.now() ? ' isPast' : ''}" title="Reminder">Reminder ${escapeHtml(
+          vvFormatReminder(reminderIso)
+        )}</span>`
       : '';
+    const reminderRowHtml = hasReminder
+      ? `<div class="noteReminderRow">
+          <span class="noteReminderWhen">Reminder: ${escapeHtml(vvFormatReminder(reminderIso))}</span>
+          <a class="btn" href="${escapeHtml(
+            vvGoogleCalendarUrl(reminderTitle, reminderIso, vvReminderDetails(item.body))
+          )}" target="_blank" rel="noopener">Add to Google Calendar</a>
+          <button class="btn" data-ics="${item.id}" type="button" title="For Apple Calendar, Outlook and others">Download .ics</button>
+        </div>`
+      : '';
+    const fileMetaHtml =
+      (metaParts.length ? `<span class="noteFileMeta">${escapeHtml(metaParts.join(' · '))}</span>` : '') + reminderChipHtml;
 
     syncProcTimerFromServerPaused(item.id, processingSinceIso, procPaused, status, item);
     const timerAttrIso = timerAttrIsoForNote(item.id, processingSinceIso);
@@ -3836,6 +4238,7 @@ async function refreshResults(q = '') {
           }</div>
         </div>
 
+        ${reminderRowHtml}
         <div class="row notePlaybackRow">
           <span class="noteInlineAudioShell">
             <audio class="audio noteInlinePlayer" controls hidden></audio>
@@ -3847,6 +4250,13 @@ async function refreshResults(q = '') {
           <label class="label">
             Title
             <input class="input editTitle" />
+          </label>
+          <label class="label">
+            Reminder (optional)
+            <span class="noteReminderEditRow">
+              <input class="input noteReminderInput editReminder" type="datetime-local" />
+              <button class="btn editReminderClear" type="button">Clear</button>
+            </span>
           </label>
           <hr class="noteTitleBodyDivider editTitleBodySep" />
           <div class="vvSpeakerEditor editSpeakers" hidden></div>
@@ -4354,6 +4764,7 @@ async function refreshResults(q = '') {
     }
 
     const editTitle = note.querySelector('.editTitle');
+    const editReminder = note.querySelector('.editReminder');
     const editBtnsForId = () =>
       Array.from(note.querySelectorAll('button[data-edit]')).filter(
         (b) => (b.getAttribute('data-edit') ?? '').toString() === String(item.id)
@@ -4436,12 +4847,19 @@ async function refreshResults(q = '') {
             editBody.value = vvRenameSpeakerInText(editBody.value, from, to);
             editTitle.value = vvRenameSpeakerInTitle(editTitle.value, from, to);
           });
+          if (editReminder) editReminder.value = vvIsoToLocalInput(full?.reminder_at ?? item.reminder_at);
         } catch {
           editTitle.value = (item.display_title ?? item.title ?? '').toString();
           editBody.value = (item.body ?? '').toString();
+          if (editReminder) editReminder.value = vvIsoToLocalInput(item.reminder_at);
         }
         requestAnimationFrame(refreshEditScrollHint);
       }
+    });
+
+    editBox.querySelector('.editReminderClear')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (editReminder) editReminder.value = '';
     });
 
     btnCancel.addEventListener('click', (e) => {
@@ -4463,7 +4881,8 @@ async function refreshResults(q = '') {
           body: JSON.stringify({
             display_title: editTitle.value || '',
             body: editBody.value || '',
-            speakers: Object.fromEntries([...editSpeakerNames].filter(([orig, cur]) => orig !== cur))
+            speakers: Object.fromEntries([...editSpeakerNames].filter(([orig, cur]) => orig !== cur)),
+            ...(editReminder ? { reminder_at: vvLocalInputToIso(editReminder.value) } : {})
           })
         });
         if (!resp.ok) {
@@ -4611,18 +5030,29 @@ async function refreshResults(q = '') {
       b.addEventListener('click', (e) => {
         e.stopPropagation();
         const text = (item.body ?? '').toString();
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${sanitizeFilename((item.display_title || item.title || 'transcript').toString()) || 'transcript'}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        vvDownloadBlob(
+          new Blob([text], { type: 'text/plain;charset=utf-8' }),
+          `${sanitizeFilename((item.display_title || item.title || 'transcript').toString()) || 'transcript'}.txt`
+        );
       });
     }
 
+    for (const b of note.querySelectorAll('button[data-ics]')) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ics = vvIcsText(item.id, reminderTitle, reminderIso, vvReminderDetails(item.body));
+        vvDownloadBlob(new Blob([ics], { type: 'text/calendar;charset=utf-8' }), `${sanitizeFilename(reminderTitle) || 'reminder'}.ics`);
+      });
+    }
+    note.querySelector('.noteReminderRow a')?.addEventListener('click', (e) => e.stopPropagation());
+
+    if (newestNoteId && item.id === newestNoteId) {
+      note.classList.add('note--newest');
+      note.insertAdjacentHTML(
+        'beforeend',
+        `<span class="noteNewestBadge" title="Most recently created note">${isSearch ? 'Newest match' : 'Newest'}</span>`
+      );
+    }
     resultsEl.appendChild(note);
   }
   vvRenderMs = performance.now() - renderT0;
@@ -4632,7 +5062,10 @@ async function refreshResults(q = '') {
   });
 
   syncProcessingNotesPoll(items);
-  if (!isSearch) setStatus('Ready');
+  if (!isSearch) {
+    setStatus('Ready');
+    void syncReminderNotifications();
+  }
 
   // Perf breadcrumbs (check DevTools console): fetch vs render cost.
   try {
@@ -5561,10 +5994,62 @@ function syntheticWordsFromSegment(seg) {
   return out;
 }
 
-function applySearchHitsByTime(bodyEl, matchSegs) {
+const VV_SEARCH_FILLER_WORDS = new Set([
+  'find', 'show', 'search', 'note', 'notes', 'about', 'where', 'when', 'what', 'which', 'talked', 'said', 'mentioned',
+  'recording', 'today', 'yesterday', 'last', 'days', 'day', 'week', 'month', 'between'
+]);
+
+/** Words the user actually searched for (stopwords, filler and date words removed). */
+function vvSearchTerms(rawQuery) {
+  const words = (rawQuery ?? '').toString().toLowerCase().match(/[\p{L}\p{N}']+/gu) || [];
+  return [...new Set(words.map((w) => w.replace(/'s$/, '')))].filter(
+    (w) => w.length >= 2 && !/^\d+$/.test(w) && !NOTE_TITLE_STOPWORDS.has(w) && !VV_SEARCH_FILLER_WORDS.has(w)
+  );
+}
+
+function vvWordMatchesSearchTerms(word, terms) {
+  const w = (word ?? '').toString().toLowerCase().replace(/[^\p{L}\p{N}']/gu, '').replace(/'s$/, '');
+  return !!w && terms.some((t) => w === t || (t.length >= 3 && w.startsWith(t)));
+}
+
+function markSearchHitWord(wEl, segStart, segEnd) {
+  wEl.classList.add('vvSearchHit', 'search');
+  wEl.setAttribute('data-seg-start', String(segStart));
+  wEl.setAttribute('data-seg-end', String(segEnd));
+  wEl.setAttribute('title', 'Play matched segment');
+}
+
+/**
+ * Highlight the searched words inside the matched segments. Falls back to the searched words anywhere,
+ * then to the whole matched segment (semantic matches that share no words with the query).
+ */
+function applySearchHitsByTime(bodyEl, matchSegs, rawQuery = lastSearchQuery) {
   if (!bodyEl || !matchSegs?.length) return;
   const matches = normalizeMatchSegments(matchSegs, { limit: 20 });
   const words = Array.from(bodyEl.querySelectorAll('.word[data-ws][data-we]'));
+  const terms = vvSearchTerms(rawQuery);
+  if (terms.length) {
+    const termWords = words.filter((wEl) => vvWordMatchesSearchTerms(wEl.textContent, terms));
+    let hits = 0;
+    for (const wEl of termWords) {
+      const ws = Number(wEl.getAttribute('data-ws'));
+      const we = Number(wEl.getAttribute('data-we'));
+      const m = matches.find((x) => we > x.start && ws < x.end);
+      if (m) {
+        markSearchHitWord(wEl, m.start, m.end);
+        hits++;
+      }
+    }
+    if (!hits) {
+      for (const wEl of termWords) {
+        const ws = Number(wEl.getAttribute('data-ws'));
+        const we = Number(wEl.getAttribute('data-we'));
+        markSearchHitWord(wEl, Math.max(0, ws - 2), we + 2);
+        hits++;
+      }
+    }
+    if (hits) return;
+  }
   for (const m of matches) {
     const ms = Number(m.start);
     const me = Number(m.end);
@@ -5623,14 +6108,22 @@ function highlightTranscriptHtml(rawText, matchSegments, { mode = 'search' } = {
 
   const out = [];
   let cur = 0;
+  const cls = mode === 'playback' ? 'vvSearchHit playing' : 'vvSearchHit search';
+  const terms = mode === 'search' ? vvSearchTerms(lastSearchQuery) : [];
+  const hitSpan = (seg, text) =>
+    `<span class="${cls}" data-seg-start="${escapeHtml(String(seg.start))}" data-seg-end="${escapeHtml(
+      String(seg.end)
+    )}" title="Play matched segment">${escapeHtml(text)}</span>`;
   for (const r of ranges) {
     if (r.i0 > cur) out.push(escapeHtml(raw.slice(cur, r.i0)));
-    const cls = mode === 'playback' ? 'vvSearchHit playing' : 'vvSearchHit search';
-    out.push(
-      `<span class="${cls}" data-seg-start="${escapeHtml(String(r.seg.start))}" data-seg-end="${escapeHtml(
-        String(r.seg.end)
-      )}" title="Play matched segment">${escapeHtml(raw.slice(r.i0, r.i1))}</span>`
-    );
+    const piece = raw.slice(r.i0, r.i1);
+    // Only the searched words inside the matched segment; the whole segment when none of them occur.
+    const tokens = terms.length ? piece.split(/([\p{L}\p{N}']+)/u) : [];
+    if (tokens.some((tk, i) => i % 2 === 1 && vvWordMatchesSearchTerms(tk, terms))) {
+      out.push(tokens.map((tk, i) => (i % 2 === 1 && vvWordMatchesSearchTerms(tk, terms) ? hitSpan(r.seg, tk) : escapeHtml(tk))).join(''));
+    } else {
+      out.push(hitSpan(r.seg, piece));
+    }
     cur = r.i1;
   }
   if (cur < raw.length) out.push(escapeHtml(raw.slice(cur)));
@@ -7181,6 +7674,11 @@ function syncVisibility() {
   const saveAllowed = noteFullPreviewGateOk || noteAllowManualSaveFinal;
   btnSaveNote.disabled =
     !note.audioBlob || note.isRecording || !saveAllowed || !textOk || saveBusy;
+  if (!navigator.onLine && note.audioBlob && !note.isRecording) {
+    btnSaveNote.hidden = false;
+    btnSaveNote.disabled = false;
+  }
+  btnSaveNote.title = navigator.onLine ? '' : 'No internet: save on this device and upload later';
   updateGenerateFullPreviewButtonVisibility();
   if (noteDetectedLangEl) noteDetectedLangEl.hidden = !note.isRecording && !note.audioBlob;
 

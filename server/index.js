@@ -18,6 +18,7 @@ import { embedTexts, bufferToFloat32, cosineSim, warmupEmbedder } from './embedd
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
 import nodemailer from 'nodemailer';
+import archiver from 'archiver';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5177;
 
 const EMAIL_FROM = (process.env.EMAIL_FROM ?? 'no-reply@voicevault.local').toString().trim();
@@ -161,6 +162,17 @@ function speakersInSegments(segments) {
   return seen;
 }
 
+/** Speaker labels at line starts, trusted only if one is "Speaker N" or labels 2+ lines. */
+function speakersInTranscriptLabels(transcript) {
+  const counts = new Map();
+  for (const m of (transcript ?? '').toString().matchAll(/^[ \t]*([\p{L}\p{N}][\p{L}\p{N} '.-]{0,39}?):[ \t]/gmu)) {
+    const sp = sanitizeSpeakerName(m[1]);
+    if (sp) counts.set(sp, (counts.get(sp) || 0) + 1);
+  }
+  const labelled = [...counts].some(([sp, n]) => /^speaker \d+$/i.test(sp) || n >= 2);
+  return labelled ? [...counts.keys()] : [];
+}
+
 /** Transcript without "Speaker N:" line labels and "(laughter)"-style sound tags, for titling only. */
 function transcriptTextForTitle(transcript, speakers = []) {
   let t = (transcript ?? '').toString();
@@ -182,6 +194,7 @@ function titleWithSpeakers(title, speakers = []) {
 /** AI title (if configured) or heuristic, from the cleaned transcript, plus the note's speakers. */
 async function suggestNoteTitle(transcript, segments) {
   const speakers = speakersInSegments(segments);
+  for (const sp of speakersInTranscriptLabels(transcript)) if (!speakers.includes(sp)) speakers.push(sp);
   const text = transcriptTextForTitle(transcript, speakers);
   const aiTitle = await generateOpenAiNoteTitle(text);
   const topic = aiTitle || titleFromTranscriptContext(text) || text.replace(/\s+/g, ' ').slice(0, 64).trim();
@@ -796,6 +809,48 @@ app.post('/api/auth/register', async (req, res) => {
   res.status(201).json({ ok: true, user: userToPublicJson(user) });
 });
 
+/**
+ * Failed-attempt limiter: after AUTH_MAX_FAILS failures the key is locked for AUTH_LOCK_MS, then a fresh
+ * set of attempts starts. In memory, so a server restart clears it.
+ */
+const AUTH_MAX_FAILS = 3;
+const AUTH_LOCK_MS = 30_000;
+const AUTH_FAIL_TTL_MS = 15 * 60_000;
+const authFailures = new Map();
+
+function authLockRemainingMs(key) {
+  const e = authFailures.get(key);
+  if (!e) return 0;
+  const left = e.lockedUntil - Date.now();
+  if (left > 0) return left;
+  if (e.lockedUntil) authFailures.delete(key);
+  return 0;
+}
+
+function recordAuthFailure(key) {
+  const now = Date.now();
+  const e = authFailures.get(key) ?? { fails: 0, lockedUntil: 0, at: now };
+  e.fails = now - e.at > AUTH_FAIL_TTL_MS ? 1 : e.fails + 1;
+  e.at = now;
+  if (e.fails >= AUTH_MAX_FAILS) {
+    e.fails = 0;
+    e.lockedUntil = now + AUTH_LOCK_MS;
+  }
+  authFailures.set(key, e);
+  return { lockedMs: e.lockedUntil > now ? e.lockedUntil - now : 0, attemptsLeft: e.lockedUntil > now ? 0 : AUTH_MAX_FAILS - e.fails };
+}
+
+function sendAuthLocked(res, ms) {
+  const sec = Math.max(1, Math.ceil(ms / 1000));
+  res.set('Retry-After', String(sec));
+  return res.status(429).json({ error: `Too many attempts. Try again in ${sec} seconds.`, code: 'too_many_attempts', retry_after: sec });
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, e] of authFailures) if (e.lockedUntil < now && now - e.at > AUTH_FAIL_TTL_MS) authFailures.delete(k);
+}, 5 * 60_000).unref();
+
 app.post('/api/auth/login', async (req, res) => {
   const email = (req.body?.email ?? '').toString().trim().toLowerCase();
   const password = (req.body?.password ?? '').toString();
@@ -805,6 +860,9 @@ app.post('/api/auth/login', async (req, res) => {
   if (!password) {
     return res.status(400).json({ error: 'Password is required', code: 'missing_password', field: 'password' });
   }
+  const limitKey = `login:${email}`;
+  const lockedMs = authLockRemainingMs(limitKey);
+  if (lockedMs) return sendAuthLocked(res, lockedMs);
 
   const row = await db
     .prepare(`SELECT id, email, password_hash, display_name, avatar_blob_id, created_at, updated_at FROM users WHERE email = ?`)
@@ -812,16 +870,21 @@ app.post('/api/auth/login', async (req, res) => {
   // Tell the user explicitly when no profile exists for that email so the UI can
   // highlight the email field instead of generically saying "invalid credentials".
   if (!row || !row.password_hash || row.password_hash === '!') {
+    const f = recordAuthFailure(limitKey);
+    if (f.lockedMs) return sendAuthLocked(res, f.lockedMs);
     return res
       .status(404)
-      .json({ error: 'No account found with that email', code: 'email_not_found', field: 'email' });
+      .json({ error: 'No account found with that email', code: 'email_not_found', field: 'email', attempts_left: f.attemptsLeft });
   }
   const ok = bcrypt.compareSync(password, row.password_hash);
   if (!ok) {
+    const f = recordAuthFailure(limitKey);
+    if (f.lockedMs) return sendAuthLocked(res, f.lockedMs);
     return res
       .status(401)
-      .json({ error: 'Incorrect password', code: 'wrong_password', field: 'password' });
+      .json({ error: 'Incorrect password', code: 'wrong_password', field: 'password', attempts_left: f.attemptsLeft });
   }
+  authFailures.delete(limitKey);
 
   try {
     req.session.user_id = row.id;
@@ -915,12 +978,18 @@ app.post('/api/auth/reset-password', async (req, res) => {
     return res.status(404).json({ error: 'No account found with that email', code: 'email_not_found', field: 'email' });
   }
 
+  const otpKey = `otp:${email}`;
+  const otpLockedMs = authLockRemainingMs(otpKey);
+  if (otpLockedMs) return sendAuthLocked(res, otpLockedMs);
   const reset = await db
     .prepare(`SELECT id, otp, expires_at, used_at FROM password_resets WHERE user_id = ? AND otp = ? ORDER BY created_at DESC LIMIT 1`)
     .get(user.id, otp);
   if (!reset) {
-    return res.status(400).json({ error: 'Invalid code', code: 'invalid_otp', field: 'otp' });
+    const f = recordAuthFailure(otpKey);
+    if (f.lockedMs) return sendAuthLocked(res, f.lockedMs);
+    return res.status(400).json({ error: 'Invalid code', code: 'invalid_otp', field: 'otp', attempts_left: f.attemptsLeft });
   }
+  authFailures.delete(otpKey);
   if (reset.used_at) {
     return res.status(400).json({ error: 'This code has already been used', code: 'otp_used', field: 'otp' });
   }
@@ -1017,9 +1086,15 @@ app.post('/api/auth/delete-account', async (req, res) => {
     req.session = null;
     return res.status(401).json({ error: 'Session invalid' });
   }
+  const delKey = `delete:${uid}`;
+  const delLockedMs = authLockRemainingMs(delKey);
+  if (delLockedMs) return sendAuthLocked(res, delLockedMs);
   if (!bcrypt.compareSync(password, user.password_hash)) {
-    return res.status(401).json({ error: 'Incorrect password', code: 'wrong_password', field: 'password' });
+    const f = recordAuthFailure(delKey);
+    if (f.lockedMs) return sendAuthLocked(res, f.lockedMs);
+    return res.status(401).json({ error: 'Incorrect password', code: 'wrong_password', field: 'password', attempts_left: f.attemptsLeft });
   }
+  authFailures.delete(delKey);
 
   try {
     const noteRows = await db.prepare(`SELECT audio_filename, audio_blob_id FROM notes WHERE user_id = ?`).all(uid);
@@ -2252,7 +2327,7 @@ app.delete('/api/note-drafts/:id', async (req, res) => {
 
 app.post('/api/notes', upload.single('audio'), async (req, res) => {
   try {
-    const { title, display_title, duration_ms, language, stt_provider, source_filename, draft_id } = req.body ?? {};
+    const { title, display_title, duration_ms, language, stt_provider, source_filename, draft_id, reminder_at } = req.body ?? {};
     const audio = req.file;
     const draftId = (draft_id ?? '').toString().trim();
 
@@ -2321,8 +2396,8 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
 
     const createdAt = new Date().toISOString();
     await db.prepare(
-      `INSERT INTO notes (id, user_id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, language, stt_provider, created_at, updated_at, status, error)
-       VALUES (@id, @user_id, @title, @display_title, @body, @segments_json, @audio_filename, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @language, @stt_provider, @created_at, @updated_at, @status, @error)`
+      `INSERT INTO notes (id, user_id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, audio_blob, duration_ms, language, stt_provider, reminder_at, created_at, updated_at, status, error)
+       VALUES (@id, @user_id, @title, @display_title, @body, @segments_json, @audio_filename, @audio_blob_id, @audio_mime, @audio_bytes, @audio_blob, @duration_ms, @language, @stt_provider, @reminder_at, @created_at, @updated_at, @status, @error)`
     ).run({
       id,
       user_id: req.user_id,
@@ -2338,6 +2413,7 @@ app.post('/api/notes', upload.single('audio'), async (req, res) => {
       duration_ms: safeDurationMs,
       language: safeLanguage,
       stt_provider: safeStt,
+      reminder_at: normalizeReminderAt(reminder_at),
       created_at: createdAt,
       updated_at: createdAt,
       status: 'processing',
@@ -2632,7 +2708,7 @@ app.get('/api/notes', async (req, res) => {
   if ((!qText || !ftsQ) && !hasTimeFilter) {
     rows = await db
       .prepare(
-        `SELECT n.id, n.title, n.display_title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+        `SELECT n.id, n.title, n.display_title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite, n.reminder_at,
                 n.transcribe_mode,
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
@@ -2645,7 +2721,7 @@ app.get('/api/notes', async (req, res) => {
   } else if ((!qText || !ftsQ) && hasTimeFilter) {
     rows = await db
       .prepare(
-        `SELECT n.id, n.title, n.display_title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+        `SELECT n.id, n.title, n.display_title, n.body, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite, n.reminder_at,
                 n.transcribe_mode,
                 COALESCE(nps.paused, 0) AS processing_paused
          FROM notes n
@@ -2666,7 +2742,7 @@ app.get('/api/notes', async (req, res) => {
       if (!pgTsQuery) throw new Error('empty_tsquery');
       rows = await db
         .prepare(
-          `SELECT n.id, n.title, n.display_title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+          `SELECT n.id, n.title, n.display_title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite, n.reminder_at,
                  n.transcribe_mode,
                  COALESCE(nps.paused, 0) AS processing_paused,
                  ts_rank_cd(n.tsv, to_tsquery('english', ?)) AS rank
@@ -2692,7 +2768,7 @@ app.get('/api/notes', async (req, res) => {
       const like = `%${effectiveQuery.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
       rows = await db
         .prepare(
-          `SELECT n.id, n.title, n.display_title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite,
+          `SELECT n.id, n.title, n.display_title, n.body, n.segments_json, n.created_at, n.updated_at, n.status, n.error, n.duration_ms, n.audio_bytes, n.language, n.stt_provider, n.audio_filename, n.folder_id, n.is_favorite, n.reminder_at,
                   n.transcribe_mode,
                   COALESCE(nps.paused, 0) AS processing_paused
            FROM notes n
@@ -2738,7 +2814,7 @@ app.get('/api/notes/:id', async (req, res) => {
   const { id } = req.params;
   const row = await db
     .prepare(
-      `SELECT id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider, created_at, updated_at, status, error, folder_id, is_favorite, transcribe_mode
+      `SELECT id, title, display_title, body, segments_json, audio_filename, audio_blob_id, audio_mime, audio_bytes, duration_ms, language, stt_provider, created_at, updated_at, status, error, folder_id, is_favorite, reminder_at, transcribe_mode
        FROM notes
        WHERE id = ? AND user_id = ?`
     )
@@ -2966,6 +3042,7 @@ app.patch('/api/notes/:id', async (req, res) => {
   const hasBodyKey = Object.prototype.hasOwnProperty.call(bodyIn, 'body');
   const hasLanguageKey = Object.prototype.hasOwnProperty.call(bodyIn, 'language');
   const hasSttKey = Object.prototype.hasOwnProperty.call(bodyIn, 'stt_provider');
+  const hasReminderKey = Object.prototype.hasOwnProperty.call(bodyIn, 'reminder_at');
   const folderId = (req.body?.folder_id ?? '').toString().trim();
   const favoriteRaw = req.body?.is_favorite;
   const hasFavorite = typeof favoriteRaw !== 'undefined';
@@ -3002,6 +3079,7 @@ app.patch('/api/notes/:id', async (req, res) => {
   if (folderId) parts.push(`folder_id = @folder_id`);
   if (hasFavorite) parts.push(`is_favorite = @is_favorite`);
   if (hasSttKey) parts.push(`stt_provider = @stt_provider`);
+  if (hasReminderKey) parts.push(`reminder_at = @reminder_at`);
   const sql = `UPDATE notes SET ${parts.join(', ')} WHERE id = @id AND user_id = @user_id`;
   const runParams = {
     id,
@@ -3017,6 +3095,7 @@ app.patch('/api/notes/:id', async (req, res) => {
     updated_at: updatedAt
   };
   if (hasSttKey) runParams.stt_provider = normalizeSttProvider(bodyIn.stt_provider);
+  if (hasReminderKey) runParams.reminder_at = normalizeReminderAt(bodyIn.reminder_at);
   const run = await db.prepare(sql).run(runParams);
   if (!run.changes) return res.status(404).json({ error: 'Not found' });
 
@@ -3025,6 +3104,28 @@ app.patch('/api/notes/:id', async (req, res) => {
 
   res.json({ ok: true, id });
 });
+
+/** Upcoming reminders for the signed-in user (the apps schedule phone notifications from this). */
+app.get('/api/reminders', async (req, res) => {
+  const rows = await db
+    .prepare(
+      `SELECT id, display_title, title, reminder_at FROM notes
+       WHERE user_id = ? AND reminder_at <> '' AND reminder_at > ?
+       ORDER BY reminder_at ASC LIMIT 200`
+    )
+    .all(req.user_id, new Date().toISOString());
+  res.json({ reminders: rows });
+});
+
+/** Reminder time as a UTC ISO string, or '' (none / unparseable). */
+function normalizeReminderAt(raw) {
+  const s = (raw ?? '').toString().trim();
+  if (!s) return '';
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return '';
+  const year = new Date(t).getUTCFullYear();
+  return year >= 2000 && year <= 2200 ? new Date(t).toISOString() : '';
+}
 
 /** `{ "Speaker 1": "Anubhav" }` → Map of old → new names (both sanitized, unchanged pairs dropped). */
 function parseSpeakerRenames(raw) {
@@ -3111,6 +3212,86 @@ app.delete('/api/notes/:id', async (req, res) => {
   if (!await deleteNoteCascade(nid, req.user_id)) return res.status(404).json({ error: 'Not found' });
 
   res.json({ ok: true, id: nid });
+});
+
+/** File name from a note title (no path or reserved characters), unique within one export. */
+function exportBaseName(row, used) {
+  const raw = (row.display_title || row.title || 'Untitled').toString();
+  let base =
+    raw
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/[. ]+$/, '')
+      .trim()
+      .slice(0, 80)
+      .trim() || 'Untitled';
+  if (/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(base)) base = `${base}_`;
+  let name = base;
+  for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base} (${n})`;
+  used.add(name.toLowerCase());
+  return name;
+}
+
+/** Disk blob as a stream when present, else the Postgres copy, else the legacy audio file. */
+async function noteAudioForExport(row, userId) {
+  const bid = (row.audio_blob_id ?? '').toString().trim();
+  if (bid && /^[a-f0-9]{16,128}$/i.test(bid)) {
+    const p = path.join(blobsDir, bid);
+    if (fs.existsSync(p)) return fs.createReadStream(p);
+  }
+  const r = await db.prepare(`SELECT audio_blob FROM notes WHERE id = ? AND user_id = ?`).get(row.id, userId);
+  if (r?.audio_blob && Buffer.isBuffer(r.audio_blob) && r.audio_blob.length) return r.audio_blob;
+  const legacy = row.audio_filename ? path.join(audioDir, path.basename(row.audio_filename)) : '';
+  if (legacy && fs.existsSync(legacy)) return fs.createReadStream(legacy);
+  return null;
+}
+
+/** Every note of the signed-in user as "<title>.txt" (transcript) + "<title>.<ext>" (audio) in one zip. */
+app.get('/api/export/notes.zip', async (req, res) => {
+  const uid = req.user_id;
+  const rows = await db
+    .prepare(
+      `SELECT id, display_title, title, body, created_at, audio_filename, audio_blob_id, audio_mime
+       FROM notes WHERE user_id = ? ORDER BY created_at ASC`
+    )
+    .all(uid);
+  const day = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="voicevault-notes-${day}.zip"`);
+
+  const zip = archiver('zip', { zlib: { level: 6 } });
+  zip.on('warning', (err) => console.warn('[export] zip warning:', err?.message ?? err));
+  zip.on('error', (err) => {
+    console.warn('[export] zip failed:', err?.message ?? err);
+    res.destroy(err);
+  });
+  zip.pipe(res);
+  // One entry at a time, so a large library is never held in memory at once.
+  const add = (source, opts) =>
+    new Promise((resolve) => {
+      zip.once('entry', resolve);
+      zip.append(source, opts);
+    });
+
+  const used = new Set();
+  try {
+    for (const row of rows) {
+      if (res.destroyed) return;
+      const base = exportBaseName(row, used);
+      const date = new Date(row.created_at || Date.now());
+      const body = (row.body ?? '').toString();
+      if (body.trim()) await add(body, { name: `${base}.txt`, date });
+      const audio = await noteAudioForExport(row, uid);
+      if (audio) {
+        const ext = mimeToExt(row.audio_mime) || path.extname(row.audio_filename || '').slice(1) || 'webm';
+        await add(audio, { name: `${base}.${ext}`, date, store: true });
+      }
+    }
+    await zip.finalize();
+  } catch (err) {
+    console.warn('[export] failed:', err?.message ?? err);
+    res.destroy(err);
+  }
 });
 
 app.get('/api/notes/:id/audio', async (req, res) => {
