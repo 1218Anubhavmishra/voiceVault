@@ -171,12 +171,12 @@ function transcriptTextForTitle(transcript, speakers = []) {
   return t.replace(/\([^()\n]{1,40}\)|\[[^[\]\n]{1,40}\]/g, ' ').replace(/[ \t]+/g, ' ').trim();
 }
 
-/** "Topic — Speaker 1, Speaker 2"; the client renames names after the last " — ". */
+/** "Topic - Speaker 1, Speaker 2". */
 function titleWithSpeakers(title, speakers = []) {
   const t = (title ?? '').toString().trim();
   if (!speakers.length) return t;
   const list = speakers.join(', ');
-  return t ? `${t} — ${list}` : list;
+  return t ? `${t} - ${list}` : list;
 }
 
 /** AI title (if configured) or heuristic, from the cleaned transcript, plus the note's speakers. */

@@ -7460,7 +7460,7 @@ function applyTranscriptTitleIfAutomatic(transcript) {
   const speakers = vvSpeakersInSegments(lastFullPreviewBundle?.segments);
   const topic = titleFromTranscriptContext(transcript, speakers);
   if (!topic && !speakers.length) return false;
-  titleEl.value = topic && speakers.length ? `${topic} — ${speakers.join(', ')}` : topic || speakers.join(', ');
+  titleEl.value = topic && speakers.length ? `${topic} - ${speakers.join(', ')}` : topic || speakers.join(', ');
   noteTitleUserEdited = false;
   return true;
 }
