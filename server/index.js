@@ -151,6 +151,43 @@ function sanitizeAiTitle(value) {
   return s.length > 72 ? `${s.slice(0, 69).trim()}...` : s;
 }
 
+/** Distinct segment speakers in order of first appearance. */
+function speakersInSegments(segments) {
+  const seen = [];
+  for (const s of Array.isArray(segments) ? segments : []) {
+    const sp = sanitizeSpeakerName(s?.speaker);
+    if (sp && !seen.includes(sp)) seen.push(sp);
+  }
+  return seen;
+}
+
+/** Transcript without "Speaker N:" line labels and "(laughter)"-style sound tags, for titling only. */
+function transcriptTextForTitle(transcript, speakers = []) {
+  let t = (transcript ?? '').toString();
+  for (const sp of speakers) {
+    const esc = sp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t = t.replace(new RegExp(`^(\\s*)${esc}:[ \\t]*`, 'gmu'), '$1');
+  }
+  return t.replace(/\([^()\n]{1,40}\)|\[[^[\]\n]{1,40}\]/g, ' ').replace(/[ \t]+/g, ' ').trim();
+}
+
+/** "Topic — Speaker 1, Speaker 2"; the client renames names after the last " — ". */
+function titleWithSpeakers(title, speakers = []) {
+  const t = (title ?? '').toString().trim();
+  if (!speakers.length) return t;
+  const list = speakers.join(', ');
+  return t ? `${t} — ${list}` : list;
+}
+
+/** AI title (if configured) or heuristic, from the cleaned transcript, plus the note's speakers. */
+async function suggestNoteTitle(transcript, segments) {
+  const speakers = speakersInSegments(segments);
+  const text = transcriptTextForTitle(transcript, speakers);
+  const aiTitle = await generateOpenAiNoteTitle(text);
+  const topic = aiTitle || titleFromTranscriptContext(text) || text.replace(/\s+/g, ' ').slice(0, 64).trim();
+  return { title: titleWithSpeakers(topic, speakers), source: aiTitle ? 'openai' : 'heuristic' };
+}
+
 /**
  * Notes list: expose pending ingestion work so the UI can recompute "time left" from queue state
  * (instead of extending a blind +45s budget when the first audio-based guess hits zero).
@@ -2385,11 +2422,11 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
         forNote: (req.body?.purpose ?? '').toString().trim() === 'note'
       });
       const transcript = formatTranscript(out?.transcript ?? '');
-      const aiTitle = await generateOpenAiNoteTitle(transcript);
+      const suggested = await suggestNoteTitle(transcript, out?.segments);
       res.json({
         transcript,
-        suggested_title: aiTitle || titleFromTranscriptContext(transcript),
-        title_source: aiTitle ? 'openai' : 'heuristic',
+        suggested_title: suggested.title,
+        title_source: suggested.source,
         language: out?.language ?? '',
         segments: Array.isArray(out?.segments) ? out.segments : []
       });
@@ -3880,12 +3917,10 @@ async function finalizeNoteFromSttOutput(
 
   const updatedAt = new Date().toISOString();
   const priorDisplay = (row.display_title ?? '').toString().trim();
-  const aiDisplay = await generateOpenAiNoteTitle(transcript);
-  const generatedDisplay = aiDisplay || titleFromTranscriptContext(transcript);
   const finalDisplayTitle =
     priorDisplay && !isAutomaticNoteTitle(priorDisplay)
       ? priorDisplay
-      : generatedDisplay || (transcript ? transcript.slice(0, 64).trim() : '') || '';
+      : (await suggestNoteTitle(transcript, segArr)).title || (transcript ? transcript.slice(0, 64).trim() : '') || '';
   const ftsTitle = computeFtsTitle(finalDisplayTitle, transcript);
 
   const hintLang = (row.language ?? '').toString().trim();

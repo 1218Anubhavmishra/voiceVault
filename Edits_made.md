@@ -8,6 +8,7 @@ title: voiceVault — Edits made
 - **Storage**: each segment keeps a `speaker` (in `notes.segments_json` and the new `note_segments.speaker` column, added by a migration on start).
 - **Renaming**: a "Speakers" box (after Full preview, and in Edit mode on saved notes) renames a speaker in the text and segments. Saved notes send `speakers: {old: new}` with `PATCH /api/notes/:id`; all renames are applied together, so swapping two names works. Saved transcripts show the speaker name in bold where it changes.
 - **Sound tags**: tags like "(laughter)" and "(music)" appear in note transcripts.
+- **Titles**: `suggestNoteTitle` removes speaker labels and sound tags before the AI or heuristic title is made, then appends the speakers ("Topic — Speaker 1, Speaker 2"). Used by `/api/transcribe` and when a job finishes. Speaker renames in the app also update the title.
 - **Account deletion**: `POST /api/auth/delete-account` with the password deletes the user and every row that belongs to them (notes, segments, chunks, tags, folders, drafts, saved searches, jobs, password resets) in one transaction, then removes audio files and the profile picture and clears the session. `requireUser` now checks the account still exists (cached for 5 minutes), so other devices are signed out. Profile has a "Delete account" section with a password field.
 - **MP4 fallback**: `MediaRecorder` tries WebM/Opus first, then MP4/AAC; MP4 recordings are uploaded and downloaded as `.m4a`, and the server maps mp4/m4a/aac to `m4a`.
 

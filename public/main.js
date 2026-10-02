@@ -361,6 +361,26 @@ function vvRenameSpeakerInText(text, from, to) {
   return (text ?? '').toString().replace(new RegExp(`^(\\s*)${esc}:`, 'gmu'), `$1${to}:`);
 }
 
+/** Rename a speaker in the "Topic — Speaker 1, Speaker 2" list at the end of a title. */
+function vvRenameSpeakerInTitle(title, from, to) {
+  const s = (title ?? '').toString();
+  const cut = s.lastIndexOf(' — ');
+  const head = cut >= 0 ? s.slice(0, cut + 3) : '';
+  const names = (cut >= 0 ? s.slice(cut + 3) : s).split(', ');
+  if (!names.includes(from)) return s;
+  return head + names.map((n) => (n === from ? to : n)).join(', ');
+}
+
+/** Mirror server `transcriptTextForTitle`: drop speaker line labels and sound tags. */
+function vvTranscriptTextForTitle(transcript, speakers = []) {
+  let t = (transcript ?? '').toString();
+  for (const sp of speakers) {
+    const esc = sp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t = t.replace(new RegExp(`^(\\s*)${esc}:[ \\t]*`, 'gmu'), '$1');
+  }
+  return t.replace(/\([^()\n]{1,40}\)|\[[^[\]\n]{1,40}\]/g, ' ').replace(/[ \t]+/g, ' ').trim();
+}
+
 /**
  * One name field per speaker. `onRename(from, to)` runs after a valid change; the field reverts on an empty name.
  * @param {HTMLElement | null} hostEl
@@ -4416,6 +4436,7 @@ async function refreshResults(q = '') {
           renderSpeakerEditor(editSpeakers, speakers, (from, to) => {
             for (const [orig, cur] of editSpeakerNames) if (cur === from) editSpeakerNames.set(orig, to);
             editBody.value = vvRenameSpeakerInText(editBody.value, from, to);
+            editTitle.value = vvRenameSpeakerInTitle(editTitle.value, from, to);
           });
         } catch {
           editTitle.value = (item.display_title ?? item.title ?? '').toString();
@@ -6296,6 +6317,7 @@ async function transcribeFullPreviewImpl(signal) {
           b.transcript = vvRenameSpeakerInText(b.transcript, from, to);
         }
         liveTranscriptEl.value = vvRenameSpeakerInText(liveTranscriptEl.value, from, to);
+        if (titleEl) titleEl.value = vvRenameSpeakerInTitle(titleEl.value, from, to);
       });
       applySuggestedTitleIfAutomatic((data?.suggested_title ?? '').toString(), transcriptForBundle);
       noteFullPreviewGateOk = true;
@@ -7415,9 +7437,8 @@ function candidateTitleFromSentence(sentence) {
   return titled.length > 72 ? `${titled.slice(0, 69).trim()}...` : titled;
 }
 
-function titleFromTranscriptContext(transcript) {
-  const text = vvFormatTranscript(transcript ?? '')
-    .replace(/\[[^\]]{1,40}\]/g, ' ')
+function titleFromTranscriptContext(transcript, speakers = []) {
+  const text = vvTranscriptTextForTitle(vvFormatTranscript(transcript ?? ''), speakers)
     .replace(/\s+/g, ' ')
     .trim();
   if (!text) return '';
@@ -7438,9 +7459,10 @@ function titleFromTranscriptContext(transcript) {
 
 function applyTranscriptTitleIfAutomatic(transcript) {
   if (!titleEl || noteTitleUserEdited || !isAutomaticNoteTitle(titleEl.value)) return false;
-  const generated = titleFromTranscriptContext(transcript);
-  if (!generated) return false;
-  titleEl.value = generated;
+  const speakers = vvSpeakersInSegments(lastFullPreviewBundle?.segments);
+  const topic = titleFromTranscriptContext(transcript, speakers);
+  if (!topic && !speakers.length) return false;
+  titleEl.value = topic && speakers.length ? `${topic} — ${speakers.join(', ')}` : topic || speakers.join(', ');
   noteTitleUserEdited = false;
   return true;
 }
