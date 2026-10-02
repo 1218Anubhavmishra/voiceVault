@@ -361,14 +361,12 @@ function vvRenameSpeakerInText(text, from, to) {
   return (text ?? '').toString().replace(new RegExp(`^(\\s*)${esc}:`, 'gmu'), `$1${to}:`);
 }
 
-/** Rename a speaker in the "Topic — Speaker 1, Speaker 2" list at the end of a title. */
+/** Rename a speaker wherever the whole name appears in a title ("Speaker 1" never matches inside "Speaker 10"). */
 function vvRenameSpeakerInTitle(title, from, to) {
-  const s = (title ?? '').toString();
-  const cut = s.lastIndexOf(' — ');
-  const head = cut >= 0 ? s.slice(0, cut + 3) : '';
-  const names = (cut >= 0 ? s.slice(cut + 3) : s).split(', ');
-  if (!names.includes(from)) return s;
-  return head + names.map((n) => (n === from ? to : n)).join(', ');
+  const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (title ?? '')
+    .toString()
+    .replace(new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'giu'), to);
 }
 
 /** Mirror server `transcriptTextForTitle`: drop speaker line labels and sound tags. */
