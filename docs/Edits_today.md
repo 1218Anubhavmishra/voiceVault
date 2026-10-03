@@ -2,6 +2,10 @@
 title: voiceVault — Edits today (2026-09-28 to 2026-10-02)
 ---
 
+## 2026-10-03: Newest label position
+
+- **Newest label**: moved to its own line under the note's download, transcript and delete buttons, so it no longer covers the delete button.
+
 ## 2026-10-02 (later): login limit, offline recording, reminders, export, search fix, tidy-up
 
 - **Login limit**: after 3 wrong passwords for an email, login is blocked for 30 seconds, then a fresh round of 3 attempts starts. The error says how many attempts are left, and the login form counts down while blocked (HTTP 429 `too_many_attempts` with `retry_after`). The same limit covers the password-reset code and the delete-account password. The count is kept in server memory, so a restart clears it.

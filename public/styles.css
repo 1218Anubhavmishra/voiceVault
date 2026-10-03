@@ -383,15 +383,10 @@ input[type='file'] {
   color: var(--muted);
 }
 
-.note.note--newest {
-  position: relative;
-  padding-bottom: 30px;
-}
-
 .noteNewestBadge {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
+  display: block;
+  width: fit-content;
+  margin: 8px 0 0 auto;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.03em;

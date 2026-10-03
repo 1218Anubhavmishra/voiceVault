@@ -9,7 +9,7 @@ title: voiceVault — Edits made
 - **Reminders**: new column `notes.reminder_at` (UTC ISO, empty = none), accepted by `POST`/`PATCH /api/notes` and returned in note lists; `GET /api/reminders` lists upcoming ones. The client builds a Google Calendar link and an `.ics` file (with a `VALARM`), and in the Capacitor apps schedules local notifications (`@capacitor/local-notifications`, ids derived from note ids, stale ones cancelled).
 - **Export**: `GET /api/export/notes.zip` streams a zip (`archiver`) with `<title>.txt` and `<title>.<audio ext>` per note; file names are cleaned for Windows, and duplicates get "(2)". Profile has an "Export all notes" button.
 - **Search highlight**: `applySearchHitsByTime` used to trim each end of the matched segment's time window, which dropped edge words like "eyes". It now highlights the searched words (stopwords and date words removed, prefix match for 3+ letters), falling back to the segment.
-- **Newest label**: the note with the latest `created_at` gets a `.noteNewestBadge` at the bottom right.
+- **Newest label**: the note with the latest `created_at` gets a `.noteNewestBadge`, right-aligned on its own line at the bottom of the card (moved below the action buttons on 2026-10-03 so it doesn't cover them).
 - **Job titles**: `suggestNoteTitle` also takes speaker names from line-start labels in the transcript when segments have none.
 - **Tidy-up**: blueprint renamed to `VoiceVault_blueprint.md` / `.docx`; documents in `docs/`, images in `images/`; `scripts/build-docs.cjs` reads from `docs/`. Error text colour fixed.
 
