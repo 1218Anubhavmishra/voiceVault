@@ -5,7 +5,7 @@ title: voiceVault — Edits today (2026-09-28 to 2026-10-02)
 ## 2026-10-03: Newest label position, profile icon buttons
 
 - **Newest label**: moved to its own line under the note's download, transcript and delete buttons, so it no longer covers the delete button.
-- **Profile buttons**: Delete account, Export all notes and Edit profile are now one row of icon buttons (bin, download arrow, person with pencil). The delete confirmation (password and "Delete permanently") opens below them. Edit Profile uses icons too: camera (change photo), × (cancel) and save. Each button keeps its name as a tooltip and for screen readers.
+- **Profile buttons**: Delete account, Export all notes and Edit profile are now one row of icon buttons (bin, download arrow, person with pencil). All three share the plain button background (the bin is tinted red). The delete confirmation (password, × to cancel and a red bin to delete permanently) opens below them. Edit Profile uses icons too: camera (change photo), × (cancel) and save. Each button keeps its name as a tooltip and for screen readers.
 
 ## 2026-10-02 (later): login limit, offline recording, reminders, export, search fix, tidy-up
 
