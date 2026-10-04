@@ -2,6 +2,11 @@
 title: voiceVault — Edits today (2026-09-28 to 2026-10-02)
 ---
 
+## 2026-10-04: project moved, attempts and countdown on every limited screen
+
+- **Project folder**: voiceVault now lives at `D:\Projects\voiceVault`, beside NoteVault (the old folder is kept as a backup). Tested from the new place; `docs/handover.txt` summarises where things are and what's left.
+- **Attempts and countdown**: the reset-password screen (wrong emailed code) and the delete-account panel now behave like login. A wrong try says how many attempts are left; after the third, that message is replaced by a live "Try again in N s" countdown and the button is greyed out; then "You can try again now." appears and a new round of 3 starts. Sign up has no limit (there is nothing to guess).
+
 ## 2026-10-03: Newest label position, profile icon buttons
 
 - **Newest label**: moved to its own line under the note's download, transcript and delete buttons, so it no longer covers the delete button.

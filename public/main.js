@@ -967,7 +967,39 @@ function setProfileDeleteConfirmOpen(open) {
   if (open) profileDeletePassEl?.focus();
 }
 
+const vvLockTimers = new Map();
+
+function vvAttemptsLeftNote(j) {
+  const n = Number(j?.attempts_left);
+  return Number.isFinite(n) && n > 0 ? ` ${n} attempt${n === 1 ? '' : 's'} left.` : '';
+}
+
+function vvIsLocked(key) {
+  return vvLockTimers.has(key);
+}
+
+/** While the server's lock lasts, keeps `button` disabled and shows a live countdown through `show`. */
+function vvStartLockCountdown(key, sec, button, show) {
+  clearInterval(vvLockTimers.get(key));
+  const until = Date.now() + Math.max(1, Number(sec) || 30) * 1000;
+  const tick = () => {
+    const left = Math.ceil((until - Date.now()) / 1000);
+    if (left <= 0) {
+      clearInterval(vvLockTimers.get(key));
+      vvLockTimers.delete(key);
+      if (button) button.disabled = false;
+      show('You can try again now.');
+      return;
+    }
+    if (button) button.disabled = true;
+    show(`Too many attempts. Try again in ${left} s.`);
+  };
+  vvLockTimers.set(key, setInterval(tick, 1000));
+  tick();
+}
+
 async function deleteAccount() {
+  if (vvIsLocked('delete')) return;
   setProfileError('');
   const password = (profileDeletePassEl?.value ?? '').toString();
   if (!password) {
@@ -982,7 +1014,18 @@ async function deleteAccount() {
       body: JSON.stringify({ password })
     });
     const j = await safeJson(r);
-    if (!r.ok) throw new Error((j?.error ?? '').toString().trim() || `Delete failed (${r.status})`);
+    if (!r.ok) {
+      const code = (j?.code ?? '').toString();
+      if (code === 'too_many_attempts') {
+        vvStartLockCountdown('delete', j?.retry_after, btnProfileDeleteConfirmEl, setProfileError);
+        return;
+      }
+      if (code === 'wrong_password') {
+        setProfileError(`Incorrect password — please try again.${vvAttemptsLeftNote(j)}`);
+        return;
+      }
+      throw new Error((j?.error ?? '').toString().trim() || `Delete failed (${r.status})`);
+    }
     try {
       for (const it of await offlineQueueForUser()) await offlineQueueDelete(it.id);
     } catch {
@@ -1010,7 +1053,7 @@ async function deleteAccount() {
   } catch (err) {
     setProfileError(err?.message ?? String(err));
   } finally {
-    if (btnProfileDeleteConfirmEl) btnProfileDeleteConfirmEl.disabled = false;
+    if (btnProfileDeleteConfirmEl && !vvIsLocked('delete')) btnProfileDeleteConfirmEl.disabled = false;
   }
 }
 
@@ -2585,6 +2628,7 @@ function wire() {
 
   btnForgotPasswordResetEl?.addEventListener('click', async (e) => {
     e.preventDefault();
+    if (vvIsLocked('reset')) return;
     clearAuthFieldErrors('changePassword');
     setAuthFormError('changePassword', '');
     const email = pendingPasswordResetEmail || (forgotPasswordEmailEl?.value ?? '').toString().trim().toLowerCase();
@@ -2627,6 +2671,15 @@ function wire() {
         const code = (j?.code ?? '').toString();
         const field = (j?.field ?? '').toString();
         const msg = (j?.error ?? '').toString().trim() || `Request failed (${r.status})`;
+        if (code === 'too_many_attempts') {
+          clearAuthFieldErrors('changePassword');
+          vvStartLockCountdown('reset', j?.retry_after, btnForgotPasswordResetEl, (m) => setAuthFormError('changePassword', m));
+          return;
+        }
+        if (code === 'invalid_otp') {
+          setAuthFieldError('changePassword', 'otp', `Invalid code — please check the email and try again.${vvAttemptsLeftNote(j)}`);
+          return;
+        }
         if (field === 'email') {
           setAuthFormError('changePassword', msg);
           return;
@@ -2643,7 +2696,7 @@ function wire() {
     } catch (err) {
       setAuthFormError('changePassword', err?.message ?? String(err));
     } finally {
-      btnForgotPasswordResetEl.disabled = false;
+      if (!vvIsLocked('reset')) btnForgotPasswordResetEl.disabled = false;
     }
   });
 
@@ -2703,33 +2756,9 @@ function wire() {
     }
   });
 
-  let loginLockTimer = 0;
-  const startLoginLockCountdown = (sec) => {
-    clearInterval(loginLockTimer);
-    const until = Date.now() + sec * 1000;
-    const tick = () => {
-      const left = Math.ceil((until - Date.now()) / 1000);
-      if (left <= 0) {
-        clearInterval(loginLockTimer);
-        loginLockTimer = 0;
-        btnAuthLoginEl.disabled = false;
-        setAuthFormError('login', 'You can try again now.');
-        return;
-      }
-      btnAuthLoginEl.disabled = true;
-      setAuthFormError('login', `Too many attempts. Try again in ${left} s.`);
-    };
-    tick();
-    loginLockTimer = setInterval(tick, 1000);
-  };
-  const attemptsLeftNote = (j) => {
-    const n = Number(j?.attempts_left);
-    return Number.isFinite(n) && n > 0 ? ` ${n} attempt${n === 1 ? '' : 's'} left.` : '';
-  };
-
   btnAuthLoginEl?.addEventListener('click', async (e) => {
     e.preventDefault();
-    if (loginLockTimer) return;
+    if (vvIsLocked('login')) return;
     clearAuthFieldErrors('login');
     setAuthFormError('login', '');
     const email = (loginEmailEl?.value ?? '').toString().trim();
@@ -2762,11 +2791,12 @@ function wire() {
         const field = (j?.field ?? '').toString();
         const msg = (j?.error ?? '').toString().trim() || `Sign in failed (${r.status})`;
         if (code === 'too_many_attempts') {
-          startLoginLockCountdown(Number(j?.retry_after) || 30);
+          clearAuthFieldErrors('login');
+          vvStartLockCountdown('login', j?.retry_after, btnAuthLoginEl, (m) => setAuthFormError('login', m));
         } else if (code === 'email_not_found') {
-          setAuthFieldError('login', 'email', `No account exists with this email.${attemptsLeftNote(j)}`);
+          setAuthFieldError('login', 'email', `No account exists with this email.${vvAttemptsLeftNote(j)}`);
         } else if (code === 'wrong_password') {
-          setAuthFieldError('login', 'password', `Incorrect password — please try again.${attemptsLeftNote(j)}`);
+          setAuthFieldError('login', 'password', `Incorrect password — please try again.${vvAttemptsLeftNote(j)}`);
         } else if (field && setAuthFieldError('login', field, msg)) {
           // handled
         } else {
@@ -2782,7 +2812,7 @@ function wire() {
     } catch (err) {
       setAuthFormError('login', err?.message ?? String(err));
     } finally {
-      if (!loginLockTimer) btnAuthLoginEl.disabled = false;
+      if (!vvIsLocked('login')) btnAuthLoginEl.disabled = false;
     }
   });
 
