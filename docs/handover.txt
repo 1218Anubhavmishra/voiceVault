@@ -1,0 +1,35 @@
+voiceVault handover (2026-10-04)
+
+Where things are
+  Website (this repo):  D:\Projects\voiceVault  ->  github.com/1218Anubhavmishra/voiceVault
+  Apps:                 D:\Projects\NoteVault   ->  github.com/1218Anubhavmishra/NoteVault
+  Old copy (backup):    C:\Users\anubh\.cursor\projects\empty-window\voiceVault
+                        One commit behind GitHub. Don't edit or push from it; the
+                        earlier Cursor chats for this project are attached to it.
+  Live:  www.voicevault.xyz (Vercel, frontend)  +  api.voicevault.xyz (Render, Docker + Postgres)
+         Both deploy automatically from GitHub on every push.
+
+How to work on it
+  Run locally:   npm install, then npm run dev  ->  http://localhost:5177
+                 (.env holds the keys and DATABASE_URL; it points at the live database)
+  Rules:         .cursor/rules/docs-chart-builds-sync.mdc (docs, chart, builds, where files go,
+                 what never to commit). Both repos share one frontend and backend: copy web
+                 changes into NoteVault (public/main.js as a patch; NoteVault uses vvApiUrl()).
+  Docs:          docs/ (reports, change logs, VoiceVault_blueprint.md). Rebuild the .docx copies
+                 with node scripts/build-docs.cjs. Images live in images/.
+
+State on 2026-10-04
+  The move to D:\Projects was tested: server start, login and 3-try limit, upload and
+  transcription, keyword/semantic/voice search, reminders, audio download, edit, export zip,
+  delete note and account (19/19 checks), plus the website in a browser.
+  Latest features: login limit, offline recording, note reminders (calendar link, .ics,
+  phone notifications in the apps), export all notes, search highlight fix, Newest label,
+  icon buttons in Profile.
+
+Still to do
+  - Run the Codemagic workflows (iOS, macOS .dmg, Linux AppImage); the current .dmg and
+    AppImage predate the 2026-10-02 features.
+  - Add OpenAI credits (the API refuses requests); until then titles use the built-in method.
+  - Test on real phones: reminder notifications, iPhone recording and voice search,
+    .ics and export downloads in the Android app, the panel close (x) buttons.
+  - Take the app login screenshot for the NoteVault report (section 1.1).
