@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Docs, chart and builds stay in sync
 
-This applies to both projects: voiceVault (`c:\Users\anubh\.cursor\projects\empty-window\voiceVault`, website) and NoteVault (`D:\Projects\NoteVault`, apps). They share one frontend and one backend, so a change in one usually needs doc updates in both.
+This applies to both projects: voiceVault (`D:\Projects\voiceVault`, website) and NoteVault (`D:\Projects\NoteVault`, apps). They share one frontend and one backend, so a change in one usually needs doc updates in both.
 
 ## Whenever a report `.md` changes, in this order
 
