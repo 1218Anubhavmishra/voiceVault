@@ -515,6 +515,16 @@ async function migrate(pool) {
       updated_at      TEXT NOT NULL DEFAULT ${NOW_ISO_DEFAULT}
     );
     CREATE INDEX IF NOT EXISTS idx_note_drafts_updated_at ON note_drafts(updated_at);
+
+    -- Public "anyone with the link" shares; mode is 'audio' or 'both' (audio + transcript).
+    CREATE TABLE IF NOT EXISTS note_shares (
+      token       TEXT PRIMARY KEY,
+      note_id     TEXT NOT NULL,
+      user_id     TEXT NOT NULL,
+      mode        TEXT NOT NULL,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_note_shares_note ON note_shares(note_id);
   `);
 
   // FTS replacement: notes.tsv (generated tsvector) + GIN index.

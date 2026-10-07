@@ -236,6 +236,7 @@ const btnJobsUnlockNowEl = document.getElementById('btnJobsUnlockNow');
 
 /** Shared inline SVGs for icon toolbar buttons (`currentColor`, 24×24). */
 const VV_ICON_SVG = {
+  share: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14.19l7.12 4.16c-.05.21-.08.43-.08.65A2.92 2.92 0 1 0 18 16.08Z"/></svg>`,
   save: `<svg class="vvIcon vvIcon--save" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4ZM5 19V9h14v10H5Zm8-4h4v-4h-4v4ZM7 7h8v6H7V7Z"/></svg>`,
   stop: `<svg class="vvIcon vvIcon--stop" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>`,
   play: `<svg class="vvIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5v14l11-7-11-7z"/></svg>`,
@@ -460,6 +461,294 @@ function vvDownloadBlob(blob, filename) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/* ---------- Share a note (transcript, audio link, or both) ---------- */
+const shareOverlayEl = document.getElementById('shareOverlay');
+const shareNoteNameEl = document.getElementById('shareNoteName');
+const shareModeHintEl = document.getElementById('shareModeHint');
+const shareStatusEl = document.getElementById('shareStatus');
+const shareLinkRowEl = document.getElementById('shareLinkRow');
+const btnShareMoreEl = document.getElementById('btnShareMore');
+const btnShareStopEl = document.getElementById('btnShareStop');
+const shareModeBtnEls = Array.from(document.querySelectorAll('[data-share-mode]'));
+const shareTargetBtnEls = Array.from(document.querySelectorAll('.shareTargetBtn'));
+
+/** Public share pages live on the website; the apps run from a local origin. */
+const VV_SHARE_ORIGIN = window.VV_API_BASE ? 'https://www.voicevault.xyz' : window.location.origin;
+/** Gmail and WhatsApp take the message in the URL, so very long transcripts are shortened there. */
+const VV_SHARE_URL_TEXT_MAX = 1800;
+
+let shareCtx = null;
+
+function vvNoteHasAudio(item) {
+  return Number(item?.audio_bytes) > 0 || !!item?.audio_filename;
+}
+
+function vvSharePlugin() {
+  const cap = window.Capacitor;
+  if (!cap?.isNativePlatform?.() || !cap.isPluginAvailable?.('Share')) return null;
+  return cap.Plugins?.Share ?? null;
+}
+
+function vvOpenExternal(url) {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    window.location.href = url;
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
+}
+
+async function vvCopyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    return ok;
+  }
+}
+
+function vvClip(text, max) {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max)).trimEnd()}…`;
+}
+
+function setShareStatus(msg, isError = false) {
+  if (!shareStatusEl) return;
+  shareStatusEl.textContent = msg || '';
+  shareStatusEl.classList.toggle('err', !!isError);
+}
+
+function shareNoteTitle() {
+  const item = shareCtx?.item;
+  return ((item?.display_title || item?.title || 'voiceVault note') ?? '').toString().trim() || 'voiceVault note';
+}
+
+function shareLinkUrl(token) {
+  return new URL(`/api/share/${encodeURIComponent(token)}`, VV_SHARE_ORIGIN).toString();
+}
+
+async function ensureShareLink(mode) {
+  const ctx = shareCtx;
+  if (!ctx) throw new Error('closed');
+  if (ctx.links[mode]) return ctx.links[mode];
+  if (!ctx.pending[mode]) {
+    ctx.pending[mode] = (async () => {
+      const r = await fetch(`/api/notes/${encodeURIComponent(ctx.item.id)}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.token) {
+        throw new Error(j?.error === 'no_audio' ? 'This note has no audio to share.' : 'Could not create a share link.');
+      }
+      ctx.links[mode] = shareLinkUrl(j.token);
+      return ctx.links[mode];
+    })().finally(() => {
+      ctx.pending[mode] = null;
+    });
+  }
+  return ctx.pending[mode];
+}
+
+/** Audio file for the system share sheet, fetched ahead so the click can share it straight away. */
+async function prefetchShareAudioFile() {
+  const ctx = shareCtx;
+  if (!ctx || ctx.audioFile || ctx.audioFilePending) return;
+  if (vvSharePlugin() || !navigator.canShare) return;
+  ctx.audioFilePending = (async () => {
+    try {
+      const r = await fetch(`/api/notes/${encodeURIComponent(ctx.item.id)}/audio`);
+      if (!r.ok) return;
+      const blob = await r.blob();
+      const type = blob.type || 'audio/webm';
+      const ext = (type.split('/')[1] || 'webm').split(';')[0];
+      const file = new File([blob], `${sanitizeFilename(shareNoteTitle()) || 'recording'}.${ext}`, { type });
+      if (navigator.canShare({ files: [file] })) ctx.audioFile = file;
+    } catch {
+      // the share sheet falls back to the link
+    }
+  })();
+}
+
+function shareMessage(target) {
+  const ctx = shareCtx;
+  const title = shareNoteTitle();
+  const body = (ctx.item.body ?? '').toString().trim();
+  const forUrl = target === 'gmail' || target === 'whatsapp';
+  if (ctx.mode === 'transcript') {
+    const full = body ? `${title}\n\n${body}` : title;
+    if (!forUrl || full.length <= VV_SHARE_URL_TEXT_MAX) return { title, text: full, shortened: false };
+    const note = '\n\n(Shortened. Use Copy in voiceVault for the full transcript.)';
+    return { title, text: vvClip(full, VV_SHARE_URL_TEXT_MAX - note.length) + note, shortened: true };
+  }
+  const url = ctx.links[ctx.mode];
+  if (ctx.mode === 'audio') return { title, text: `${title}\n\nListen: ${url}`, url, shortened: false };
+  const head = `${title}\n\n`;
+  const tail = `\n\nListen and read: ${url}`;
+  if (!body) return { title, text: `${title}${tail}`, url, shortened: false };
+  if (!forUrl) return { title, text: `${head}${body}${tail}`, url, shortened: false };
+  const clipped = vvClip(body, VV_SHARE_URL_TEXT_MAX - head.length - tail.length);
+  return { title, text: `${head}${clipped}${tail}`, url, shortened: clipped !== body };
+}
+
+function renderShareMode() {
+  const ctx = shareCtx;
+  if (!ctx) return;
+  for (const b of shareModeBtnEls) {
+    const on = b.dataset.shareMode === ctx.mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+  const hints = {
+    transcript: 'Sends the transcript text.',
+    audio: 'Sends a link where anyone can play or download the recording.',
+    both: 'Sends the transcript text with a link to the recording.'
+  };
+  let hint = hints[ctx.mode];
+  if (!ctx.hasAudio) hint += ' This note has no audio, so only the transcript can be shared.';
+  if (shareModeHintEl) shareModeHintEl.textContent = hint;
+  const needsLink = ctx.mode !== 'transcript';
+  const ready = !needsLink || !!ctx.links[ctx.mode];
+  for (const b of shareTargetBtnEls) b.disabled = !ready;
+  if (shareLinkRowEl) shareLinkRowEl.hidden = !(ctx.shared || Object.keys(ctx.links).some((m) => ctx.links[m]));
+}
+
+async function selectShareMode(mode) {
+  const ctx = shareCtx;
+  if (!ctx) return;
+  if (mode !== 'transcript' && !ctx.hasAudio) return;
+  ctx.mode = mode;
+  setShareStatus('');
+  renderShareMode();
+  if (mode === 'transcript') return;
+  prefetchShareAudioFile();
+  if (ctx.links[mode]) return;
+  setShareStatus('Creating link…');
+  try {
+    await ensureShareLink(mode);
+    if (shareCtx !== ctx) return;
+    setShareStatus('');
+  } catch (e) {
+    if (shareCtx === ctx) setShareStatus(e?.message || 'Could not create a share link.', true);
+  }
+  if (shareCtx === ctx) renderShareMode();
+}
+
+function openShareDialog(item) {
+  if (!shareOverlayEl || !item?.id) return;
+  const hasAudio = vvNoteHasAudio(item);
+  const hasText = !!(item.body ?? '').toString().trim();
+  shareCtx = { item, hasAudio, mode: 'transcript', links: {}, pending: {}, shared: false, audioFile: null, audioFilePending: null };
+  if (shareNoteNameEl) shareNoteNameEl.textContent = shareNoteTitle();
+  for (const b of shareModeBtnEls) b.disabled = b.dataset.shareMode !== 'transcript' && !hasAudio;
+  if (btnShareMoreEl) btnShareMoreEl.hidden = !(vvSharePlugin() || navigator.share);
+  setShareStatus('');
+  shareOverlayEl.hidden = false;
+  const ctx = shareCtx;
+  if (!hasText && hasAudio) selectShareMode('audio');
+  else renderShareMode();
+  if (hasAudio) {
+    fetch(`/api/notes/${encodeURIComponent(item.id)}/share`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (shareCtx !== ctx || !Array.isArray(j?.modes)) return;
+        ctx.shared = j.modes.length > 0;
+        renderShareMode();
+      })
+      .catch(() => {});
+  }
+}
+
+function closeShareDialog() {
+  shareCtx = null;
+  if (shareOverlayEl) shareOverlayEl.hidden = true;
+}
+
+async function shareTo(target) {
+  const ctx = shareCtx;
+  if (!ctx) return;
+  if (ctx.mode !== 'transcript' && !ctx.links[ctx.mode]) return;
+  const msg = shareMessage(target);
+  if (target === 'copy') {
+    const ok = await vvCopyText(msg.text);
+    const what = { transcript: 'Transcript', audio: 'Link', both: 'Transcript and link' }[ctx.mode];
+    setShareStatus(ok ? `${what} copied.` : 'Could not copy. Your browser blocked the clipboard.', !ok);
+    return;
+  }
+  if (target === 'gmail') {
+    vvOpenExternal(`https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(msg.title)}&body=${encodeURIComponent(msg.text)}`);
+    setShareStatus(msg.shortened ? 'Opened Gmail. The transcript was shortened to fit.' : 'Opened Gmail.');
+    return;
+  }
+  if (target === 'whatsapp') {
+    vvOpenExternal(`https://wa.me/?text=${encodeURIComponent(msg.text)}`);
+    setShareStatus(msg.shortened ? 'Opened WhatsApp. The transcript was shortened to fit.' : 'Opened WhatsApp.');
+    return;
+  }
+  try {
+    const plugin = vvSharePlugin();
+    if (plugin) {
+      await plugin.share({ title: msg.title, text: msg.text, dialogTitle: 'Share note' });
+    } else if (ctx.mode !== 'transcript' && ctx.audioFile) {
+      await navigator.share({ title: msg.title, text: msg.text, files: [ctx.audioFile] });
+    } else {
+      await navigator.share({ title: msg.title, text: msg.text });
+    }
+    setShareStatus('');
+  } catch (e) {
+    const cancelled = e?.name === 'AbortError' || /cancel/i.test(e?.message || '');
+    if (!cancelled) setShareStatus('Could not open the share sheet.', true);
+  }
+}
+
+async function stopSharingNote() {
+  const ctx = shareCtx;
+  if (!ctx) return;
+  if (btnShareStopEl) btnShareStopEl.disabled = true;
+  try {
+    const r = await fetch(`/api/notes/${encodeURIComponent(ctx.item.id)}/share`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('failed');
+    if (shareCtx !== ctx) return;
+    ctx.links = {};
+    ctx.shared = false;
+    ctx.mode = 'transcript';
+    setShareStatus('Sharing stopped. Old links no longer work.');
+    renderShareMode();
+  } catch {
+    if (shareCtx === ctx) setShareStatus('Could not stop sharing. Try again.', true);
+  } finally {
+    if (btnShareStopEl) btnShareStopEl.disabled = false;
+  }
+}
+
+for (const b of shareModeBtnEls) b.addEventListener('click', () => selectShareMode(b.dataset.shareMode));
+document.getElementById('btnShareCopy')?.addEventListener('click', () => shareTo('copy'));
+document.getElementById('btnShareGmail')?.addEventListener('click', () => shareTo('gmail'));
+document.getElementById('btnShareWhatsApp')?.addEventListener('click', () => shareTo('whatsapp'));
+btnShareMoreEl?.addEventListener('click', () => shareTo('more'));
+btnShareStopEl?.addEventListener('click', () => stopSharingNote());
+document.getElementById('btnShareClose')?.addEventListener('click', () => closeShareDialog());
+shareOverlayEl?.addEventListener('click', (e) => {
+  if (e.target === shareOverlayEl) closeShareDialog();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && shareOverlayEl && !shareOverlayEl.hidden) closeShareDialog();
+});
 
 /** Capacitor Local Notifications plugin (Android/iOS apps only). */
 function vvLocalNotifications() {
@@ -4149,6 +4438,7 @@ async function refreshResults(q = '') {
         ? `<span class="notePlaybackSecondary">
             <button class="btn vvIconBtn" data-dl-audio="${item.id}" type="button" aria-label="Download audio" title="Download audio">${VV_ICON_SVG.download}</button>
             ${playbackRowDlTranscriptHtml}
+            <button class="btn vvIconBtn" data-share="${item.id}" type="button" aria-label="Share note" title="Share">${VV_ICON_SVG.share}</button>
             <button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>
           </span>`
         : '';
@@ -4252,6 +4542,7 @@ async function refreshResults(q = '') {
              <button class="btn vvIconBtn" data-play="${item.id}" type="button" aria-label="Play audio" title="Play audio">${VV_ICON_SVG.play}</button>
              <button class="btn vvIconBtn err" data-delete="${item.id}" type="button" aria-label="Delete note" title="Delete note">${VV_ICON_SVG.delete}</button>
              <button class="btn vvIconBtn" data-dl-text="${item.id}" type="button" aria-label="Download transcript" title="Download transcript">${VV_ICON_SVG.doc}</button>
+             <button class="btn vvIconBtn" data-share="${item.id}" type="button" aria-label="Share note" title="Share">${VV_ICON_SVG.share}</button>
              <button class="btn vvIconBtn" data-edit="${item.id}" type="button" aria-label="Edit note" title="Edit">${VV_ICON_SVG.edit}</button>
            </span>`
         : '';
@@ -5066,6 +5357,13 @@ async function refreshResults(q = '') {
           new Blob([text], { type: 'text/plain;charset=utf-8' }),
           `${sanitizeFilename((item.display_title || item.title || 'transcript').toString()) || 'transcript'}.txt`
         );
+      });
+    }
+
+    for (const b of note.querySelectorAll('button[data-share]')) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openShareDialog(item);
       });
     }
 

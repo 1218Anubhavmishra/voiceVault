@@ -2,6 +2,12 @@
 title: voiceVault — Edits made
 ---
 
+## 2026-10-07 (share a note)
+
+- **Share links**: new table `note_shares (token, note_id, user_id, mode, created_at)`. `POST /api/notes/:id/share {mode: 'audio'|'both'}` returns a random 24-character token (reused if one already exists for that note and mode; 400 `no_audio` without audio). `GET` lists active modes; `DELETE` revokes all of a note's links. Rows are removed when the note or the account is deleted.
+- **Public page**: `GET /api/share/:token` (no login; exempt from the auth middleware) renders a small HTML page with the title, date, an audio player, a download link and, for `both`, the transcript. Headers: `no-store`, `noindex`, `no-referrer` and a strict CSP. `GET /api/share/:token/audio` streams the audio with Range support; `?download=1` adds a `Content-Disposition` named after the note title. It works at `www.voicevault.xyz/api/share/...` through the Vercel `/api` forward.
+- **Client**: `data-share` buttons open `#shareOverlay` (modes Transcript / Audio / Both). Copy uses the Clipboard API (textarea fallback); Gmail opens `mail.google.com/mail/?view=cm`; WhatsApp opens `wa.me/?text=`; messages in those links are capped at 1800 characters. More… uses `@capacitor/share` in the phone apps, otherwise `navigator.share` (with the audio file when `navigator.canShare` allows it). Links open with `window.open` (Electron passes them to the system browser) or, in the Capacitor apps, by navigating so the system opens WhatsApp or Gmail. The link is created when Audio or Both is picked, so the click itself opens the app without being blocked as a pop-up.
+
 ## 2026-10-02, later (login limit, offline recording, reminders, export, search fix, tidy-up)
 
 - **Login limit**: an in-memory counter per key (`login:email`, `otp:email`, `delete:user`) allows 3 failures, then blocks for 30 s (HTTP 429 `too_many_attempts`, `retry_after`, `Retry-After` header). When the block ends a new round of 3 starts; counts expire after 15 minutes. Failed responses include `attempts_left`. The login form, the reset-password form and the delete-account panel show the attempts left, then a live countdown (shared `vvStartLockCountdown`, added to the last two on 2026-10-04).
@@ -71,7 +77,7 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver),<br/>public share links (/api/share)"]
   end
 
   subgraph External["External services"]
@@ -80,12 +86,13 @@ flowchart LR
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
     CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
+    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(opened from a note's Share button)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications + Share<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications + Share<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -103,6 +110,7 @@ flowchart LR
   BE --> SMTP
   BE --> FF
   FE -.-> CAL
+  FE -.-> SHR
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

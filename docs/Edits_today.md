@@ -2,6 +2,13 @@
 title: voiceVault — Edits today (2026-09-28 to 2026-10-02)
 ---
 
+## 2026-10-07: share a note
+
+- **Share button**: each note has a Share button (next to the transcript download, and in the open note's header). It opens a small window with three choices: **Transcript**, **Audio** or **Both**, and buttons to send it: **Copy**, **Gmail**, **WhatsApp**, and **More…** (the phone's or browser's own share menu, where available).
+- **Transcript** sends the title and transcript as text. Gmail and WhatsApp take the text inside a link, so very long transcripts are shortened there (with a note to use Copy for the full text).
+- **Audio** and **Both** send a private link to a simple page where anyone with the link can play or download the recording; Both also shows the transcript on that page and in the message. On a phone, More… can attach the audio file itself. Audio and Both are greyed out for notes without audio.
+- **Stop sharing** (shown once a link exists) switches off every link for that note. Links also stop working when the note or the account is deleted.
+
 ## 2026-10-04: project moved, attempts and countdown on every limited screen
 
 - **Project folder**: voiceVault now lives at `D:\Projects\voiceVault`, beside NoteVault (the old folder is kept as a backup). Tested from the new place; `docs/handover.txt` summarises where things are and what's left.
@@ -53,7 +60,7 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver),<br/>public share links (/api/share)"]
   end
 
   subgraph External["External services"]
@@ -62,12 +69,13 @@ flowchart LR
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
     CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
+    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(opened from a note's Share button)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications + Share<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications + Share<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -85,6 +93,7 @@ flowchart LR
   BE --> SMTP
   BE --> FF
   FE -.-> CAL
+  FE -.-> SHR
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

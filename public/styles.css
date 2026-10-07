@@ -281,6 +281,84 @@ input[type='file'] {
   gap: 12px;
 }
 
+.shareDialog {
+  max-width: 440px;
+  display: grid;
+  gap: 12px;
+}
+
+.shareNoteName {
+  font-weight: 650;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.shareModes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.shareModeBtn {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 9px 6px;
+  border-radius: 9px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.shareModeBtn.on {
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.95), rgba(124, 58, 237, 0.85));
+  color: #fff;
+}
+
+.shareModeBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.shareHint {
+  font-size: 13px;
+}
+
+.shareTargets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.shareTargetBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.shareStatus:empty {
+  display: none;
+}
+
+.shareStatus.err {
+  color: #b91c1c;
+}
+
+.shareLinkRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
 .profileBody {
   margin-top: 12px;
   display: grid;

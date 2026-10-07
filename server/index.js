@@ -450,7 +450,8 @@ app.use('/api', (req, res, next) => {
     p.startsWith('/auth/') ||
     p === '/auth' ||
     p.startsWith('/health') ||
-    p === '/client-config'
+    p === '/client-config' ||
+    p.startsWith('/share/')
   ) {
     return next();
   }
@@ -1116,6 +1117,7 @@ app.post('/api/auth/delete-account', async (req, res) => {
       await txDb
         .prepare(`DELETE FROM note_tags WHERE note_id IN (${userNotes}) OR tag_id IN (SELECT id FROM tags WHERE user_id = ?)`)
         .run(uid, uid);
+      await txDb.prepare(`DELETE FROM note_shares WHERE user_id = ?`).run(uid);
       await txDb.prepare(`DELETE FROM notes WHERE user_id = ?`).run(uid);
       await txDb.prepare(`DELETE FROM note_drafts WHERE user_id = ?`).run(uid);
       await txDb.prepare(`DELETE FROM folders WHERE user_id = ?`).run(uid);
@@ -3192,6 +3194,7 @@ async function deleteNoteCascade(noteId, userId) {
     await txDb.prepare(`DELETE FROM note_segments WHERE note_id = ?`).run(nid);
     await txDb.prepare(`DELETE FROM note_chunks WHERE note_id = ?`).run(nid);
     await txDb.prepare(`DELETE FROM note_tags WHERE note_id = ?`).run(nid);
+    await txDb.prepare(`DELETE FROM note_shares WHERE note_id = ?`).run(nid);
     await txDb.prepare(`DELETE FROM notes WHERE id = ? AND user_id = ?`).run(nid, uid);
   });
 
@@ -3292,6 +3295,178 @@ app.get('/api/export/notes.zip', async (req, res) => {
     console.warn('[export] failed:', err?.message ?? err);
     res.destroy(err);
   }
+});
+
+const SHARE_MODES = new Set(['audio', 'both']);
+const SHARE_TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
+
+/** Creates (or reuses) the note's public link for one mode; the client builds the URL from the token. */
+app.post('/api/notes/:id/share', async (req, res) => {
+  const nid = (req.params.id ?? '').toString().trim();
+  const mode = (req.body?.mode ?? '').toString();
+  if (!SHARE_MODES.has(mode)) return res.status(400).json({ error: 'Choose audio or both', code: 'bad_mode' });
+  const note = await db
+    .prepare(`SELECT id, audio_filename, audio_blob_id, audio_bytes FROM notes WHERE id = ? AND user_id = ?`)
+    .get(nid, req.user_id);
+  if (!note) return res.status(404).json({ error: 'Not found' });
+  if (!note.audio_blob_id && !note.audio_filename && !(Number(note.audio_bytes) > 0)) {
+    return res.status(400).json({ error: 'This note has no audio', code: 'no_audio' });
+  }
+  const existing = await db
+    .prepare(`SELECT token FROM note_shares WHERE note_id = ? AND user_id = ? AND mode = ?`)
+    .get(nid, req.user_id, mode);
+  if (existing) return res.json({ token: existing.token, mode });
+  const token = crypto.randomBytes(18).toString('base64url');
+  await db
+    .prepare(`INSERT INTO note_shares (token, note_id, user_id, mode, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .run(token, nid, req.user_id, mode, new Date().toISOString());
+  res.status(201).json({ token, mode });
+});
+
+app.get('/api/notes/:id/share', async (req, res) => {
+  const rows = await db
+    .prepare(`SELECT mode FROM note_shares WHERE note_id = ? AND user_id = ?`)
+    .all((req.params.id ?? '').toString(), req.user_id);
+  res.json({ modes: rows.map((r) => r.mode) });
+});
+
+/** Stop sharing: every link to this note stops working. */
+app.delete('/api/notes/:id/share', async (req, res) => {
+  const r = await db
+    .prepare(`DELETE FROM note_shares WHERE note_id = ? AND user_id = ?`)
+    .run((req.params.id ?? '').toString(), req.user_id);
+  res.json({ ok: true, removed: Number(r?.changes ?? 0) });
+});
+
+async function loadSharedNote(token) {
+  const t = (token ?? '').toString();
+  if (!SHARE_TOKEN_RE.test(t)) return null;
+  return db
+    .prepare(
+      `SELECT s.mode, n.id, n.user_id, n.title, n.display_title, n.body, n.created_at,
+              n.audio_filename, n.audio_blob_id, n.audio_mime
+       FROM note_shares s JOIN notes n ON n.id = s.note_id AND n.user_id = s.user_id
+       WHERE s.token = ?`
+    )
+    .get(t);
+}
+
+function shareEscape(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function sendSharePage(res, status, title, inner) {
+  res.status(status);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  );
+  res.end(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<meta property="og:title" content="${shareEscape(title)}" />
+<meta property="og:description" content="A voice note shared from voiceVault" />
+<title>${shareEscape(title)} · voiceVault</title>
+<style>
+  body { margin: 0; background: #f4efe4; color: #1f2937; font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 28px 18px 48px; }
+  .card { background: #fffdf8; border: 1px solid #e7dfcf; border-radius: 16px; padding: 22px; box-shadow: 0 6px 24px rgba(60, 40, 10, 0.06); }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .meta { color: #6b7280; font-size: 13px; margin-bottom: 16px; }
+  audio { width: 100%; margin: 6px 0 10px; }
+  .dl { display: inline-block; font-size: 14px; color: #6d28d9; }
+  .transcript { white-space: pre-wrap; margin-top: 18px; padding-top: 16px; border-top: 1px solid #e7dfcf; }
+  footer { text-align: center; color: #6b7280; font-size: 13px; margin-top: 18px; }
+  footer a { color: #6d28d9; }
+</style>
+</head>
+<body><main>${inner}<footer>Shared with <a href="https://www.voicevault.xyz">voiceVault</a></footer></main></body>
+</html>`);
+}
+
+/** Public page for a shared note: audio player, plus the transcript when shared as "both". */
+app.get('/api/share/:token', async (req, res) => {
+  const row = await loadSharedNote(req.params.token);
+  if (!row) {
+    return sendSharePage(
+      res,
+      404,
+      'Link not available',
+      `<div class="card"><h1>This link isn't available</h1><div class="meta">The owner may have stopped sharing it, or the note was deleted.</div></div>`
+    );
+  }
+  const title = (row.display_title || row.title || 'Untitled').toString();
+  const audioSrc = `/api/share/${encodeURIComponent(req.params.token)}/audio`;
+  const when = row.created_at ? new Date(row.created_at).toUTCString().replace(' GMT', ' UTC') : '';
+  const transcript = row.mode === 'both' && (row.body ?? '').toString().trim()
+    ? `<div class="transcript">${shareEscape(row.body)}</div>`
+    : '';
+  sendSharePage(
+    res,
+    200,
+    title,
+    `<div class="card">
+  <h1>${shareEscape(title)}</h1>
+  <div class="meta">${shareEscape(when)}</div>
+  <audio controls preload="metadata" src="${audioSrc}"></audio>
+  <a class="dl" href="${audioSrc}?download=1">Download audio</a>
+  ${transcript}
+</div>`
+  );
+});
+
+app.get('/api/share/:token/audio', async (req, res) => {
+  const row = await loadSharedNote(req.params.token);
+  if (!row) return res.status(404).end();
+  let bytes = null;
+  let mime = (row.audio_mime ?? '').toString();
+  const bid = (row.audio_blob_id ?? '').toString().trim();
+  if (bid) {
+    const loaded = await loadBlobBytesForUser(bid, row.user_id);
+    bytes = loaded.bytes;
+    if (!mime && loaded.mime) mime = loaded.mime;
+  }
+  if (!bytes) {
+    const r = await db.prepare(`SELECT audio_blob FROM notes WHERE id = ? AND user_id = ?`).get(row.id, row.user_id);
+    if (r?.audio_blob && Buffer.isBuffer(r.audio_blob) && r.audio_blob.length) bytes = r.audio_blob;
+  }
+  if (!bytes && row.audio_filename) {
+    const legacy = path.join(audioDir, path.basename(row.audio_filename));
+    if (fs.existsSync(legacy)) bytes = await fs.promises.readFile(legacy);
+  }
+  if (!bytes) return res.status(404).end();
+
+  res.setHeader('Content-Type', mime || 'application/octet-stream');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  if (req.query.download) {
+    const ext = mimeToExt(mime) || path.extname(row.audio_filename || '').slice(1) || 'webm';
+    const base = exportBaseName(row, new Set());
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${base.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}.${ext}"; filename*=UTF-8''${encodeURIComponent(`${base}.${ext}`)}`
+    );
+  }
+  const size = bytes.length;
+  const range = (req.headers.range ?? '').toString();
+  if (range.startsWith('bytes=')) {
+    const { start, end } = parseRange(range, size);
+    if (start === null) return res.status(416).end();
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+    res.setHeader('Content-Length', String(end - start + 1));
+    return res.end(bytes.subarray(start, end + 1));
+  }
+  res.setHeader('Content-Length', String(size));
+  res.end(bytes);
 });
 
 app.get('/api/notes/:id/audio', async (req, res) => {

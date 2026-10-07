@@ -69,6 +69,10 @@ From `VoiceVault_blueprint.md`, the three pillars are Capture / Index / Retrieve
 - **Reminders and calendar**
   - A note can have a reminder date and time (when creating it or in Edit mode).
   - The note offers "Add to Google Calendar" and a downloadable `.ics` event; the Android and iOS apps show a phone notification at that time.
+- **Share a note**
+  - The Share button offers Transcript, Audio or Both, sent by Copy, Gmail, WhatsApp or More… (the device's share menu).
+  - Transcript is sent as text; long transcripts are shortened in Gmail and WhatsApp messages (Copy keeps the full text).
+  - Audio and Both send a private link to a page where anyone with the link can play or download the recording (Both adds the transcript). "Stop sharing" switches the links off; deleting the note or account does too.
 - **Newest label**: the most recently created note is marked "Newest" at the bottom right of its card.
 - **Speaker labels and sound tags**
   - Note transcripts start each line with the speaker ("Speaker 1:", "Speaker 2:") and include tags such as "(laughter)" or "(music)".
@@ -159,7 +163,7 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver),<br/>public share links (/api/share)"]
   end
 
   subgraph External["External services"]
@@ -168,12 +172,13 @@ flowchart LR
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
     CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
+    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(opened from a note's Share button)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7 + Local Notifications<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7 + Local Notifications<br/>+ Xcode, Swift Package Manager"]
+    CAPA["Capacitor 7 + Local Notifications + Share<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications + Share<br/>+ Xcode, Swift Package Manager"]
     ELE["Electron 44<br/>+ electron-builder"]
   end
 
@@ -191,6 +196,7 @@ flowchart LR
   BE --> SMTP
   BE --> FF
   FE -.-> CAL
+  FE -.-> SHR
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I
