@@ -2,11 +2,13 @@
 title: voiceVault — Edits made
 ---
 
-## 2026-10-07 (share a note)
+## 2026-10-07 (share a note, app icon)
 
-- **Share links**: new table `note_shares (token, note_id, user_id, mode, created_at)`. `POST /api/notes/:id/share {mode: 'audio'|'both'}` returns a random 24-character token (reused if one already exists for that note and mode; 400 `no_audio` without audio). `GET` lists active modes; `DELETE` revokes all of a note's links. Rows are removed when the note or the account is deleted.
-- **Public page**: `GET /api/share/:token` (no login; exempt from the auth middleware) renders a small HTML page with the title, date, an audio player, a download link and, for `both`, the transcript. Headers: `no-store`, `noindex`, `no-referrer` and a strict CSP. `GET /api/share/:token/audio` streams the audio with Range support; `?download=1` adds a `Content-Disposition` named after the note title. It works at `www.voicevault.xyz/api/share/...` through the Vercel `/api` forward.
-- **Client**: `data-share` buttons open `#shareOverlay` (modes Transcript / Audio / Both). Copy uses the Clipboard API (textarea fallback); Gmail opens `mail.google.com/mail/?view=cm`; WhatsApp opens `wa.me/?text=`; messages in those links are capped at 1800 characters. More… uses `@capacitor/share` in the phone apps, otherwise `navigator.share` (with the audio file when `navigator.canShare` allows it). Links open with `window.open` (Electron passes them to the system browser) or, in the Capacitor apps, by navigating so the system opens WhatsApp or Gmail. The link is created when Audio or Both is picked, so the click itself opens the app without being blocked as a pop-up.
+- **Client only**: `data-share` buttons open `#shareOverlay` (modes Transcript / Audio / Both). Copy uses the Clipboard API (textarea fallback); Gmail opens `mail.google.com/mail/?view=cm`; WhatsApp opens `wa.me/?text=`; messages in those links are capped at 1800 characters.
+- **Audio file**: picking Audio or Both fetches `/api/notes/:id/audio` once (`prepareShareAudio`) and names it after the note title (extension from the MIME type). In the Capacitor apps it is written to the cache folder with `@capacitor/filesystem` and shared with `@capacitor/share` (`files: [uri]`; Android's FileProvider already covers `cache-path`). In the NoteVault desktop app the bytes go to `window.vvDesktop.share` (`electron/preload.cjs`); the main process writes the file to a temp folder and opens the Windows share sheet (`electron-native-share`, WinRT `DataTransferManager`) or the macOS `ShareMenu`. In browsers it becomes a `File` for `navigator.share` when `navigator.canShare({files})` allows it. It is prepared before the click because share sheets need a fresh tap. Gmail/WhatsApp open the share sheet with the file when possible; otherwise they download the file (`vvDownloadBlob`) and open the compose link. Download saves the file (hidden in the phone apps, where the share sheet has "Save").
+- **Website: transcript only**: `vvCanShareAudio()` is true only in the Capacitor apps or when `window.vvDesktop` exists (Electron). Otherwise the dialog hides the Transcript/Audio/Both row and the audio is never fetched.
+- **Removed**: the first version's public links (`note_shares` table, `/api/notes/:id/share`, `/api/share/:token` page and audio route, the auth exemption). `db.js` drops `note_shares` on start.
+- **App icon**: `images/notevault-icon.svg` (full icon, white) and `images/notevault-icon-logo.svg` (artwork only). NoteVault's `npm run icons` (`scripts/build-icons.cjs`, `sharp` + `@capacitor/assets`) writes `public/favicon.svg`, `public/icons/icon-{32,192,512}.png`, `public/apple-touch-icon.png`, `build/icon.png` (electron-builder) and every Android/iOS icon and splash; the artwork gets a 12% margin so iOS corners and Android masks don't clip it. `index.html` links the favicon and apple-touch icon; the Electron window uses `icon-512.png`.
 
 ## 2026-10-02, later (login limit, offline recording, reminders, export, search fix, tidy-up)
 
@@ -77,7 +79,8 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver),<br/>public share links (/api/share)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
+    ICON["App icon: images/notevault-icon.svg<br/>npm run icons (@capacitor/assets, sharp)<br/>icons, splash screens, favicon"]
   end
 
   subgraph External["External services"]
@@ -86,14 +89,14 @@ flowchart LR
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
     CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
-    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(opened from a note's Share button)"]
+    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(transcript; the audio file itself in the apps only)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7 + Local Notifications + Share<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7 + Local Notifications + Share<br/>+ Xcode, Swift Package Manager"]
-    ELE["Electron 44<br/>+ electron-builder"]
+    CAPA["Capacitor 7 + Local Notifications + Share + Filesystem<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications + Share + Filesystem<br/>+ Xcode, Swift Package Manager"]
+    ELE["Electron 44 + electron-builder<br/>share menu: electron-native-share (Windows),<br/>ShareMenu (macOS)"]
   end
 
   subgraph Builds["Build output, and where it's built"]
@@ -111,6 +114,10 @@ flowchart LR
   BE --> FF
   FE -.-> CAL
   FE -.-> SHR
+  ICON -.-> WEB
+  ICON -.-> CAPA
+  ICON -.-> CAPI
+  ICON -.-> ELE
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

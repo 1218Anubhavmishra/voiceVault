@@ -348,17 +348,6 @@ input[type='file'] {
   color: #b91c1c;
 }
 
-.shareLinkRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 13px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-}
-
 .profileBody {
   margin-top: 12px;
   display: grid;

@@ -1,0 +1,43 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#4c1d95" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="#ffffff"/>
+
+  <g filter="url(#sh)">
+    <path d="M320 176H624L752 304V800a48 48 0 0 1-48 48H320a48 48 0 0 1-48-48V224a48 48 0 0 1 48-48Z" fill="#fffaf0" stroke="#6d28d9" stroke-width="16" stroke-linejoin="round"/>
+  </g>
+  <path d="M624 176V264a40 40 0 0 0 40 40H752Z" fill="#ddd6fe" stroke="#6d28d9" stroke-width="16" stroke-linejoin="round"/>
+
+  <g stroke="#6d28d9" stroke-width="30" stroke-linecap="round" fill="none">
+    <line x1="344" y1="400" x2="344" y2="460"/>
+    <line x1="396" y1="350" x2="396" y2="510"/>
+    <line x1="448" y1="300" x2="448" y2="560"/>
+    <line x1="500" y1="355" x2="500" y2="505"/>
+    <path d="M552 430C568 365 606 360 616 412C626 465 658 470 670 420C680 380 718 385 712 442C706 505 652 530 642 584"/>
+  </g>
+
+  <g transform="translate(642 600) rotate(-45)">
+    <rect x="-34" y="150" width="68" height="150" rx="16" fill="#f59e0b" stroke="#4c1d95" stroke-width="10"/>
+    <rect x="-42" y="128" width="84" height="34" rx="10" fill="#fde68a" stroke="#4c1d95" stroke-width="10"/>
+    <path d="M0 0L-46 104Q-50 124-32 132H32Q50 124 46 104Z" fill="#fffaf0" stroke="#4c1d95" stroke-width="10" stroke-linejoin="round"/>
+    <line x1="0" y1="16" x2="0" y2="76" stroke="#4c1d95" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="0" cy="88" r="11" fill="#4c1d95"/>
+  </g>
+
+  <g transform="translate(330 770)">
+    <circle r="112" fill="#4c1d95" stroke="#fffaf0" stroke-width="14"/>
+    <circle r="78" fill="none" stroke="#c4b5fd" stroke-width="10"/>
+    <g fill="#c4b5fd">
+      <rect x="-8" y="-104" width="16" height="22" rx="4"/>
+      <rect x="-8" y="82" width="16" height="22" rx="4"/>
+      <rect x="-104" y="-8" width="22" height="16" rx="4"/>
+      <rect x="82" y="-8" width="22" height="16" rx="4"/>
+    </g>
+    <circle cy="-14" r="22" fill="#fffaf0"/>
+    <path d="M-12 -4L-20 40H20L12 -4Z" fill="#fffaf0"/>
+  </g>
+</svg>
+

@@ -2,12 +2,14 @@
 title: voiceVault — Edits today (2026-09-28 to 2026-10-02)
 ---
 
-## 2026-10-07: share a note
+## 2026-10-07: share a note, app icon
 
 - **Share button**: each note has a Share button (next to the transcript download, and in the open note's header). It opens a small window with three choices: **Transcript**, **Audio** or **Both**, and buttons to send it: **Copy**, **Gmail**, **WhatsApp**, and **More…** (the phone's or browser's own share menu, where available).
 - **Transcript** sends the title and transcript as text. Gmail and WhatsApp take the text inside a link, so very long transcripts are shortened there (with a note to use Copy for the full text).
-- **Audio** and **Both** send a private link to a simple page where anyone with the link can play or download the recording; Both also shows the transcript on that page and in the message. On a phone, More… can attach the audio file itself. Audio and Both are greyed out for notes without audio.
-- **Stop sharing** (shown once a link exists) switches off every link for that note. Links also stop working when the note or the account is deleted.
+- **Audio** and **Both** (in the NoteVault apps only) send the audio file itself (Both adds the transcript as the message). On phones and the Windows and Mac desktop apps, Gmail and WhatsApp open the system share menu with the file attached and you pick the app there (on a computer, Gmail isn't listed because it's a website, so you pick a mail app such as Outlook). The Linux app has no share menu, so it downloads the file and opens Gmail or WhatsApp so you can attach it. A **Download** button saves the file directly. Audio and Both are greyed out for notes without audio.
+- **Website**: only the transcript can be shared. A website can't hand a file to WhatsApp Web or Gmail, so it could only download the file, which wasn't useful.
+- The first version (earlier the same day) sent a link to a public play-and-download page instead; that is removed, and so is its database table.
+- **App icon**: NoteVault and voiceVault have their own icon: a note page where a sound wave turns into handwriting, an amber pen and a vault badge, on white. It replaces the default Capacitor icon and splash on Android and iOS, and is the desktop app icon and the website's tab icon.
 
 ## 2026-10-04: project moved, attempts and countdown on every limited screen
 
@@ -60,7 +62,8 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver),<br/>public share links (/api/share)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
+    ICON["App icon: images/notevault-icon.svg<br/>npm run icons (@capacitor/assets, sharp)<br/>icons, splash screens, favicon"]
   end
 
   subgraph External["External services"]
@@ -69,14 +72,14 @@ flowchart LR
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
     CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
-    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(opened from a note's Share button)"]
+    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(transcript; the audio file itself in the apps only)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7 + Local Notifications + Share<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7 + Local Notifications + Share<br/>+ Xcode, Swift Package Manager"]
-    ELE["Electron 44<br/>+ electron-builder"]
+    CAPA["Capacitor 7 + Local Notifications + Share + Filesystem<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications + Share + Filesystem<br/>+ Xcode, Swift Package Manager"]
+    ELE["Electron 44 + electron-builder<br/>share menu: electron-native-share (Windows),<br/>ShareMenu (macOS)"]
   end
 
   subgraph Builds["Build output, and where it's built"]
@@ -94,6 +97,10 @@ flowchart LR
   BE --> FF
   FE -.-> CAL
   FE -.-> SHR
+  ICON -.-> WEB
+  ICON -.-> CAPA
+  ICON -.-> CAPI
+  ICON -.-> ELE
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

@@ -72,7 +72,9 @@ From `VoiceVault_blueprint.md`, the three pillars are Capture / Index / Retrieve
 - **Share a note**
   - The Share button offers Transcript, Audio or Both, sent by Copy, Gmail, WhatsApp or More… (the device's share menu).
   - Transcript is sent as text; long transcripts are shortened in Gmail and WhatsApp messages (Copy keeps the full text).
-  - Audio and Both send a private link to a page where anyone with the link can play or download the recording (Both adds the transcript). "Stop sharing" switches the links off; deleting the note or account does too.
+  - Audio and Both (NoteVault apps only) send the audio file itself (Both adds the transcript as the message). On phones and the Windows and Mac desktop apps, Gmail and WhatsApp open the system share menu with the file attached (on a computer, pick a mail app such as Outlook, since Gmail is a website); the Linux app downloads the file and opens Gmail or WhatsApp to attach it. Download saves the file directly.
+  - On the website only the transcript can be shared, because a browser can't hand a file to WhatsApp Web or Gmail.
+- **App icon**: a note page where a sound wave turns into handwriting, with an amber pen and a vault badge on white. Used for the Android/iOS icon and splash, the desktop apps and the website's tab icon (source: `images/notevault-icon.svg`).
 - **Newest label**: the most recently created note is marked "Newest" at the bottom right of its card.
 - **Speaker labels and sound tags**
   - Note transcripts start each line with the speaker ("Speaker 1:", "Speaker 2:") and include tags such as "(laughter)" or "(music)".
@@ -163,7 +165,8 @@ The voiceVault website and the NoteVault apps share one frontend (`public/`) and
 flowchart LR
   subgraph Shared["Shared code"]
     FE["Frontend: public/<br/>HTML + CSS + JavaScript<br/>offline recording queue (IndexedDB)"]
-    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver),<br/>public share links (/api/share)"]
+    BE["Backend: server/<br/>Node.js + Express<br/>PostgreSQL, search embeddings<br/>(transformers.js), zip export (archiver)"]
+    ICON["App icon: images/notevault-icon.svg<br/>npm run icons (@capacitor/assets, sharp)<br/>icons, splash screens, favicon"]
   end
 
   subgraph External["External services"]
@@ -172,14 +175,14 @@ flowchart LR
     SMTP["Email (SMTP)<br/>password-reset codes"]
     FF["ffmpeg<br/>audio preprocessing"]
     CAL["Calendars<br/>Google Calendar link, .ics file<br/>(opened from a note's reminder)"]
-    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(opened from a note's Share button)"]
+    SHR["Sharing<br/>Gmail, WhatsApp, copy, system share sheet<br/>(transcript text and the audio file itself)"]
   end
 
   subgraph Wrappers["Wrapper technology"]
     WEB["Browser<br/>(no wrapper)"]
-    CAPA["Capacitor 7 + Local Notifications + Share<br/>+ Gradle, Android SDK 36, JDK 22"]
-    CAPI["Capacitor 7 + Local Notifications + Share<br/>+ Xcode, Swift Package Manager"]
-    ELE["Electron 44<br/>+ electron-builder"]
+    CAPA["Capacitor 7 + Local Notifications + Share + Filesystem<br/>+ Gradle, Android SDK 36, JDK 22"]
+    CAPI["Capacitor 7 + Local Notifications + Share + Filesystem<br/>+ Xcode, Swift Package Manager"]
+    ELE["Electron 44 + electron-builder<br/>share menu: electron-native-share (Windows),<br/>ShareMenu (macOS)"]
   end
 
   subgraph Builds["Build output, and where it's built"]
@@ -197,6 +200,10 @@ flowchart LR
   BE --> FF
   FE -.-> CAL
   FE -.-> SHR
+  ICON -.-> WEB
+  ICON -.-> CAPA
+  ICON -.-> CAPI
+  ICON -.-> ELE
   FE --> WEB --> W
   FE --> CAPA --> A
   FE --> CAPI --> I

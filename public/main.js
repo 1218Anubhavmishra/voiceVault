@@ -462,26 +462,41 @@ function vvDownloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/* ---------- Share a note (transcript, audio link, or both) ---------- */
+/* ---------- Share a note (transcript, audio file, or both) ---------- */
 const shareOverlayEl = document.getElementById('shareOverlay');
 const shareNoteNameEl = document.getElementById('shareNoteName');
 const shareModeHintEl = document.getElementById('shareModeHint');
 const shareStatusEl = document.getElementById('shareStatus');
-const shareLinkRowEl = document.getElementById('shareLinkRow');
+const btnShareCopyEl = document.getElementById('btnShareCopy');
+const btnShareDownloadEl = document.getElementById('btnShareDownload');
 const btnShareMoreEl = document.getElementById('btnShareMore');
-const btnShareStopEl = document.getElementById('btnShareStop');
 const shareModeBtnEls = Array.from(document.querySelectorAll('[data-share-mode]'));
 const shareTargetBtnEls = Array.from(document.querySelectorAll('.shareTargetBtn'));
 
-/** Public share pages live on the website; the apps run from a local origin. */
-const VV_SHARE_ORIGIN = window.VV_API_BASE ? 'https://www.voicevault.xyz' : window.location.origin;
 /** Gmail and WhatsApp take the message in the URL, so very long transcripts are shortened there. */
 const VV_SHARE_URL_TEXT_MAX = 1800;
+const VV_AUDIO_EXT_BY_MIME = {
+  'audio/webm': 'webm',
+  'audio/ogg': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'audio/aac': 'aac',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/flac': 'flac'
+};
+const VV_AUDIO_MIME_BY_EXT = { webm: 'audio/webm', ogg: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', flac: 'audio/flac' };
 
 let shareCtx = null;
 
 function vvNoteHasAudio(item) {
   return Number(item?.audio_bytes) > 0 || !!item?.audio_filename;
+}
+
+function vvIsNativeApp() {
+  return !!window.Capacitor?.isNativePlatform?.();
 }
 
 function vvSharePlugin() {
@@ -490,8 +505,24 @@ function vvSharePlugin() {
   return cap.Plugins?.Share ?? null;
 }
 
+function vvFilesystemPlugin() {
+  const cap = window.Capacitor;
+  if (!cap?.isNativePlatform?.() || !cap.isPluginAvailable?.('Filesystem')) return null;
+  return cap.Plugins?.Filesystem ?? null;
+}
+
+/** Share menu of the NoteVault desktop app (electron/preload.cjs); absent on the website and phones. */
+function vvDesktopShare() {
+  return window.vvDesktop?.canShareFiles ? window.vvDesktop : null;
+}
+
+/** Audio is shared from the apps only; a website can't hand a file to WhatsApp Web or Gmail. */
+function vvCanShareAudio() {
+  return vvIsNativeApp() || !!window.vvDesktop;
+}
+
 function vvOpenExternal(url) {
-  if (window.Capacitor?.isNativePlatform?.()) {
+  if (vvIsNativeApp()) {
     window.location.href = url;
     return;
   }
@@ -526,6 +557,15 @@ function vvClip(text, max) {
   return `${text.slice(0, Math.max(0, max)).trimEnd()}…`;
 }
 
+function vvBlobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
 function setShareStatus(msg, isError = false) {
   if (!shareStatusEl) return;
   shareStatusEl.textContent = msg || '';
@@ -537,73 +577,59 @@ function shareNoteTitle() {
   return ((item?.display_title || item?.title || 'voiceVault note') ?? '').toString().trim() || 'voiceVault note';
 }
 
-function shareLinkUrl(token) {
-  return new URL(`/api/share/${encodeURIComponent(token)}`, VV_SHARE_ORIGIN).toString();
-}
-
-async function ensureShareLink(mode) {
+/**
+ * Loads the note's audio once per dialog. The phone apps write it to the cache folder for the Share plugin,
+ * the desktop app keeps the bytes for its share menu, and browsers keep a File for navigator.share. Done ahead of the click because share sheets need a fresh tap.
+ */
+function prepareShareAudio() {
   const ctx = shareCtx;
-  if (!ctx) throw new Error('closed');
-  if (ctx.links[mode]) return ctx.links[mode];
-  if (!ctx.pending[mode]) {
-    ctx.pending[mode] = (async () => {
-      const r = await fetch(`/api/notes/${encodeURIComponent(ctx.item.id)}/share`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j?.token) {
-        throw new Error(j?.error === 'no_audio' ? 'This note has no audio to share.' : 'Could not create a share link.');
-      }
-      ctx.links[mode] = shareLinkUrl(j.token);
-      return ctx.links[mode];
-    })().finally(() => {
-      ctx.pending[mode] = null;
-    });
-  }
-  return ctx.pending[mode];
-}
-
-/** Audio file for the system share sheet, fetched ahead so the click can share it straight away. */
-async function prefetchShareAudioFile() {
-  const ctx = shareCtx;
-  if (!ctx || ctx.audioFile || ctx.audioFilePending) return;
-  if (vvSharePlugin() || !navigator.canShare) return;
-  ctx.audioFilePending = (async () => {
-    try {
+  if (!ctx) return Promise.resolve(null);
+  if (!ctx.audioPending) {
+    ctx.audioPending = (async () => {
       const r = await fetch(`/api/notes/${encodeURIComponent(ctx.item.id)}/audio`);
-      if (!r.ok) return;
+      if (!r.ok) throw new Error('Could not load the audio file.');
       const blob = await r.blob();
-      const type = blob.type || 'audio/webm';
-      const ext = (type.split('/')[1] || 'webm').split(';')[0];
-      const file = new File([blob], `${sanitizeFilename(shareNoteTitle()) || 'recording'}.${ext}`, { type });
-      if (navigator.canShare({ files: [file] })) ctx.audioFile = file;
-    } catch {
-      // the share sheet falls back to the link
-    }
-  })();
+      const savedExt = ((ctx.item.audio_filename ?? '').toString().match(/\.([a-z0-9]{2,4})$/i)?.[1] ?? '').toLowerCase();
+      const mime = (blob.type || '').split(';')[0].toLowerCase();
+      const ext = VV_AUDIO_EXT_BY_MIME[mime] || savedExt || 'webm';
+      const type = VV_AUDIO_EXT_BY_MIME[mime] ? mime : VV_AUDIO_MIME_BY_EXT[ext] || 'audio/webm';
+      const name = `${sanitizeFilename(shareNoteTitle()) || 'recording'}.${ext}`;
+      const audio = { blob, name, type, file: null, bytes: null, nativeUri: '', canShareFile: false };
+      const fsPlugin = vvFilesystemPlugin();
+      if (vvSharePlugin() && fsPlugin) {
+        const written = await fsPlugin.writeFile({
+          path: `share/${name}`,
+          data: await vvBlobToBase64(blob),
+          directory: 'CACHE',
+          recursive: true
+        });
+        audio.nativeUri = written?.uri || '';
+        audio.canShareFile = !!audio.nativeUri;
+      } else if (vvDesktopShare()) {
+        audio.bytes = await blob.arrayBuffer();
+        audio.canShareFile = true;
+      } else if (!vvIsNativeApp()) {
+        const file = new File([blob], name, { type });
+        audio.file = file;
+        audio.canShareFile = !!navigator.canShare?.({ files: [file] });
+      }
+      ctx.audio = audio;
+      return audio;
+    })();
+  }
+  return ctx.audioPending;
 }
 
-function shareMessage(target) {
+function shareText(target) {
   const ctx = shareCtx;
   const title = shareNoteTitle();
   const body = (ctx.item.body ?? '').toString().trim();
   const forUrl = target === 'gmail' || target === 'whatsapp';
-  if (ctx.mode === 'transcript') {
-    const full = body ? `${title}\n\n${body}` : title;
-    if (!forUrl || full.length <= VV_SHARE_URL_TEXT_MAX) return { title, text: full, shortened: false };
-    const note = '\n\n(Shortened. Use Copy in voiceVault for the full transcript.)';
-    return { title, text: vvClip(full, VV_SHARE_URL_TEXT_MAX - note.length) + note, shortened: true };
-  }
-  const url = ctx.links[ctx.mode];
-  if (ctx.mode === 'audio') return { title, text: `${title}\n\nListen: ${url}`, url, shortened: false };
-  const head = `${title}\n\n`;
-  const tail = `\n\nListen and read: ${url}`;
-  if (!body) return { title, text: `${title}${tail}`, url, shortened: false };
-  if (!forUrl) return { title, text: `${head}${body}${tail}`, url, shortened: false };
-  const clipped = vvClip(body, VV_SHARE_URL_TEXT_MAX - head.length - tail.length);
-  return { title, text: `${head}${clipped}${tail}`, url, shortened: clipped !== body };
+  const withText = ctx.mode !== 'audio';
+  const full = withText && body ? `${title}\n\n${body}` : title;
+  if (!forUrl || full.length <= VV_SHARE_URL_TEXT_MAX) return { title, text: full, shortened: false };
+  const note = '\n\n(Shortened. Use Copy in voiceVault for the full transcript.)';
+  return { title, text: vvClip(full, VV_SHARE_URL_TEXT_MAX - note.length) + note, shortened: true };
 }
 
 function renderShareMode() {
@@ -614,18 +640,30 @@ function renderShareMode() {
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', on ? 'true' : 'false');
   }
-  const hints = {
+  const withAudio = ctx.mode !== 'transcript';
+  const audio = ctx.audio;
+  const fileSheet = !!audio?.canShareFile;
+  const hasSheet = !!(vvSharePlugin() || vvDesktopShare() || navigator.share);
+
+  let hint = {
     transcript: 'Sends the transcript text.',
-    audio: 'Sends a link where anyone can play or download the recording.',
-    both: 'Sends the transcript text with a link to the recording.'
-  };
-  let hint = hints[ctx.mode];
-  if (!ctx.hasAudio) hint += ' This note has no audio, so only the transcript can be shared.';
+    audio: 'Sends the recording as an audio file.',
+    both: 'Sends the transcript text with the audio file.'
+  }[ctx.mode];
+  if (withAudio && audio) {
+    hint += fileSheet
+      ? ' Gmail and WhatsApp open your share menu with the file attached; pick the app there.'
+      : ' Gmail and WhatsApp open with the file downloaded, ready to attach.';
+  }
+  if (!ctx.hasAudio && vvCanShareAudio()) hint += ' This note has no audio, so only the transcript can be shared.';
   if (shareModeHintEl) shareModeHintEl.textContent = hint;
-  const needsLink = ctx.mode !== 'transcript';
-  const ready = !needsLink || !!ctx.links[ctx.mode];
-  for (const b of shareTargetBtnEls) b.disabled = !ready;
-  if (shareLinkRowEl) shareLinkRowEl.hidden = !(ctx.shared || Object.keys(ctx.links).some((m) => ctx.links[m]));
+
+  if (btnShareCopyEl) btnShareCopyEl.hidden = ctx.mode === 'audio';
+  if (btnShareDownloadEl) btnShareDownloadEl.hidden = !withAudio || vvIsNativeApp();
+  if (btnShareMoreEl) btnShareMoreEl.hidden = withAudio ? fileSheet || !hasSheet : !hasSheet;
+
+  const busy = withAudio && !audio;
+  for (const b of shareTargetBtnEls) b.disabled = busy && b !== btnShareCopyEl;
 }
 
 async function selectShareMode(mode) {
@@ -635,43 +673,33 @@ async function selectShareMode(mode) {
   ctx.mode = mode;
   setShareStatus('');
   renderShareMode();
-  if (mode === 'transcript') return;
-  prefetchShareAudioFile();
-  if (ctx.links[mode]) return;
-  setShareStatus('Creating link…');
+  if (mode === 'transcript' || ctx.audio) return;
+  setShareStatus('Preparing the audio file…');
   try {
-    await ensureShareLink(mode);
+    await prepareShareAudio();
     if (shareCtx !== ctx) return;
     setShareStatus('');
   } catch (e) {
-    if (shareCtx === ctx) setShareStatus(e?.message || 'Could not create a share link.', true);
+    ctx.audioPending = null;
+    if (shareCtx === ctx) setShareStatus(e?.message || 'Could not load the audio file.', true);
   }
   if (shareCtx === ctx) renderShareMode();
 }
 
 function openShareDialog(item) {
   if (!shareOverlayEl || !item?.id) return;
-  const hasAudio = vvNoteHasAudio(item);
+  const audioShare = vvCanShareAudio();
+  const hasAudio = audioShare && vvNoteHasAudio(item);
   const hasText = !!(item.body ?? '').toString().trim();
-  shareCtx = { item, hasAudio, mode: 'transcript', links: {}, pending: {}, shared: false, audioFile: null, audioFilePending: null };
+  shareCtx = { item, hasAudio, mode: 'transcript', audio: null, audioPending: null };
   if (shareNoteNameEl) shareNoteNameEl.textContent = shareNoteTitle();
   for (const b of shareModeBtnEls) b.disabled = b.dataset.shareMode !== 'transcript' && !hasAudio;
-  if (btnShareMoreEl) btnShareMoreEl.hidden = !(vvSharePlugin() || navigator.share);
+  const modesEl = shareOverlayEl.querySelector('.shareModes');
+  if (modesEl) modesEl.hidden = !audioShare;
   setShareStatus('');
   shareOverlayEl.hidden = false;
-  const ctx = shareCtx;
   if (!hasText && hasAudio) selectShareMode('audio');
   else renderShareMode();
-  if (hasAudio) {
-    fetch(`/api/notes/${encodeURIComponent(item.id)}/share`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (shareCtx !== ctx || !Array.isArray(j?.modes)) return;
-        ctx.shared = j.modes.length > 0;
-        renderShareMode();
-      })
-      .catch(() => {});
-  }
 }
 
 function closeShareDialog() {
@@ -679,69 +707,86 @@ function closeShareDialog() {
   if (shareOverlayEl) shareOverlayEl.hidden = true;
 }
 
+function downloadShareAudio() {
+  const audio = shareCtx?.audio;
+  if (!audio) return false;
+  vvDownloadBlob(audio.blob, audio.name);
+  return true;
+}
+
+async function openShareSheet(msg, withFile) {
+  const audio = shareCtx?.audio;
+  const plugin = vvSharePlugin();
+  if (plugin) {
+    const opts = { title: msg.title, text: msg.text, dialogTitle: 'Share note' };
+    if (withFile && audio?.nativeUri) opts.files = [audio.nativeUri];
+    await plugin.share(opts);
+    return;
+  }
+  const desktop = vvDesktopShare();
+  if (desktop) {
+    const file = withFile && audio?.bytes ? { name: audio.name, data: audio.bytes } : null;
+    const res = await desktop.share({ title: msg.title, text: msg.text, file });
+    if (res === 'cancelled') throw new DOMException('Share cancelled', 'AbortError');
+    return;
+  }
+  const data = { title: msg.title, text: msg.text };
+  if (withFile && audio?.file) data.files = [audio.file];
+  await navigator.share(data);
+}
+
 async function shareTo(target) {
   const ctx = shareCtx;
   if (!ctx) return;
-  if (ctx.mode !== 'transcript' && !ctx.links[ctx.mode]) return;
-  const msg = shareMessage(target);
+  const withAudio = ctx.mode !== 'transcript';
+  if (withAudio && !ctx.audio) return;
+  const audio = ctx.audio;
+  const appName = { gmail: 'Gmail', whatsapp: 'WhatsApp' }[target];
+
   if (target === 'copy') {
-    const ok = await vvCopyText(msg.text);
-    const what = { transcript: 'Transcript', audio: 'Link', both: 'Transcript and link' }[ctx.mode];
-    setShareStatus(ok ? `${what} copied.` : 'Could not copy. Your browser blocked the clipboard.', !ok);
+    const ok = await vvCopyText(shareText('copy').text);
+    const extra = withAudio ? ' Audio files cannot be copied; use Download or the share menu.' : '';
+    setShareStatus(ok ? `Transcript copied.${extra}` : 'Could not copy. Your browser blocked the clipboard.', !ok);
     return;
   }
-  if (target === 'gmail') {
-    vvOpenExternal(`https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(msg.title)}&body=${encodeURIComponent(msg.text)}`);
-    setShareStatus(msg.shortened ? 'Opened Gmail. The transcript was shortened to fit.' : 'Opened Gmail.');
+  if (target === 'download') {
+    if (downloadShareAudio()) setShareStatus(`Downloaded ${audio.name}.`);
     return;
   }
-  if (target === 'whatsapp') {
-    vvOpenExternal(`https://wa.me/?text=${encodeURIComponent(msg.text)}`);
-    setShareStatus(msg.shortened ? 'Opened WhatsApp. The transcript was shortened to fit.' : 'Opened WhatsApp.');
-    return;
-  }
+
   try {
-    const plugin = vvSharePlugin();
-    if (plugin) {
-      await plugin.share({ title: msg.title, text: msg.text, dialogTitle: 'Share note' });
-    } else if (ctx.mode !== 'transcript' && ctx.audioFile) {
-      await navigator.share({ title: msg.title, text: msg.text, files: [ctx.audioFile] });
-    } else {
-      await navigator.share({ title: msg.title, text: msg.text });
+    if (target === 'more' || (withAudio && audio.canShareFile)) {
+      await openShareSheet(shareText('more'), withAudio);
+      if (target === 'gmail' && vvDesktopShare()) {
+        setShareStatus('Gmail is a website, so it is not in the share menu. Pick your mail app (such as Outlook or Mail) there.');
+      } else {
+        setShareStatus(appName ? `Pick ${appName} in the share menu to send the file.` : '');
+      }
+      return;
     }
-    setShareStatus('');
   } catch (e) {
     const cancelled = e?.name === 'AbortError' || /cancel/i.test(e?.message || '');
-    if (!cancelled) setShareStatus('Could not open the share sheet.', true);
+    if (!cancelled) setShareStatus('Could not open the share menu.', true);
+    return;
   }
-}
 
-async function stopSharingNote() {
-  const ctx = shareCtx;
-  if (!ctx) return;
-  if (btnShareStopEl) btnShareStopEl.disabled = true;
-  try {
-    const r = await fetch(`/api/notes/${encodeURIComponent(ctx.item.id)}/share`, { method: 'DELETE' });
-    if (!r.ok) throw new Error('failed');
-    if (shareCtx !== ctx) return;
-    ctx.links = {};
-    ctx.shared = false;
-    ctx.mode = 'transcript';
-    setShareStatus('Sharing stopped. Old links no longer work.');
-    renderShareMode();
-  } catch {
-    if (shareCtx === ctx) setShareStatus('Could not stop sharing. Try again.', true);
-  } finally {
-    if (btnShareStopEl) btnShareStopEl.disabled = false;
+  const msg = shareText(target);
+  if (withAudio) downloadShareAudio();
+  if (target === 'gmail') {
+    vvOpenExternal(`https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(msg.title)}&body=${encodeURIComponent(msg.text)}`);
+  } else {
+    vvOpenExternal(`https://wa.me/?text=${encodeURIComponent(msg.text)}`);
   }
+  if (withAudio) setShareStatus(`Opened ${appName} and downloaded ${audio.name}. Attach the file there.`);
+  else setShareStatus(msg.shortened ? `Opened ${appName}. The transcript was shortened to fit.` : `Opened ${appName}.`);
 }
 
 for (const b of shareModeBtnEls) b.addEventListener('click', () => selectShareMode(b.dataset.shareMode));
-document.getElementById('btnShareCopy')?.addEventListener('click', () => shareTo('copy'));
+btnShareCopyEl?.addEventListener('click', () => shareTo('copy'));
+btnShareDownloadEl?.addEventListener('click', () => shareTo('download'));
 document.getElementById('btnShareGmail')?.addEventListener('click', () => shareTo('gmail'));
 document.getElementById('btnShareWhatsApp')?.addEventListener('click', () => shareTo('whatsapp'));
 btnShareMoreEl?.addEventListener('click', () => shareTo('more'));
-btnShareStopEl?.addEventListener('click', () => stopSharingNote());
 document.getElementById('btnShareClose')?.addEventListener('click', () => closeShareDialog());
 shareOverlayEl?.addEventListener('click', (e) => {
   if (e.target === shareOverlayEl) closeShareDialog();
